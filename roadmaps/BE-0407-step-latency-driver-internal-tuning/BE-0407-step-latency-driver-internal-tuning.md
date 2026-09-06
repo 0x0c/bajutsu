@@ -265,19 +265,19 @@ half alone; *Progress* below records the measurement behind dropping its `elemen
   `elements.json` half. That write costs 0.36ms on a real device tree, and 0.9–8.7ms across
   100–1200 synthetic elements. Under 2 percent of a step does not pay for a thread pool on the
   path that scrubs secrets. The other half, `after.png`, turned out to be a *device round trip*
-  rather than a write. So the run loop overlaps that shot instead of deferring a write. The
+  rather than a write, so the run loop overlaps that shot instead of deferring a write. The
   backend's own channel has to admit a second call in flight. Where it does not, the shot stays
   synchronous. The new `base.BackgroundScreenshotProvider` declares that property: adb has it,
-  XCUITest does not. `APIHandler` funnels every XCUITest operation onto the runner's main thread.
-  BE-0323 records the non-re-entrancy behind that. The shot never outlives its own step. That
-  answers the three design questions this unit sat parked over. A `finally` joins the shot before
-  the step returns. Nothing then waits at a scenario boundary, and nothing waits before the report.
+  XCUITest does not, because `APIHandler` funnels every XCUITest operation onto the runner's main
+  thread — the non-re-entrancy BE-0323 records. The shot never outlives its own step, which
+  answers the three design questions this unit sat parked over: a `finally` joins the shot before
+  the step returns, so nothing waits at a scenario boundary and nothing waits before the report.
 - [x] Group 1, unit 6 — fold iOS's `drain_interruptions` into `/tap`'s own reply. The design named
   "`/tap` or `/elements`". This covers `/tap` alone, the higher-frequency of the pair, rather than
-  every actuation. The driver accumulates whatever a tap's own fold already carried. Another driver
-  call can happen first, such as a query or a stale retry's re-resolve. The driver then merges that
-  accumulation with an explicit `/interruptionPolicy/drain`. So a tap's reply loses nothing even
-  where the fast path does not apply.
+  every actuation. The driver accumulates whatever a tap's own fold already carried. When another
+  driver call — a query or a stale retry's re-resolve — intervenes in the meantime, the driver
+  merges that accumulation with an explicit `/interruptionPolicy/drain`, so a tap's reply loses
+  nothing even where the fast path does not apply.
 - [x] Group 2, unit 7 — batch the tap-path attribute reads into one `el.snapshot()` call; cache
   `app.frame` for the life of a resident lease (guarded against caching a transient `.zero` read).
 - [ ] Group 2, unit 8 — generalize BE-0396's coordinate tap beyond Safari. Attempted, then
