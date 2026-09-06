@@ -378,7 +378,7 @@ def test_deliver_success(monkeypatch: Any) -> None:
     resp.__enter__ = lambda self: self
     resp.__exit__ = MagicMock(return_value=False)
     monkeypatch.setattr(urllib.request, "urlopen", lambda req, timeout=None: resp)
-    assert _deliver("https://hook", {"text": "hi"}) is True
+    assert _deliver("https://hook", {"text": "hi"}, masked="https://hook/***") is True
 
 
 def test_deliver_retry_on_error(monkeypatch: Any) -> None:
@@ -397,7 +397,7 @@ def test_deliver_retry_on_error(monkeypatch: Any) -> None:
 
     monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
     monkeypatch.setattr("bajutsu.run.notify._RETRY_DELAY", 0.0)
-    assert _deliver("https://hook", {"text": "hi"}) is True
+    assert _deliver("https://hook", {"text": "hi"}, masked="https://hook/***") is True
     assert call_count == 2
 
 
@@ -407,7 +407,7 @@ def test_deliver_never_raises(monkeypatch: Any) -> None:
 
     monkeypatch.setattr(urllib.request, "urlopen", explode)
     monkeypatch.setattr("bajutsu.run.notify._RETRY_DELAY", 0.0)
-    assert _deliver("https://hook", {"text": "hi"}) is False
+    assert _deliver("https://hook", {"text": "hi"}, masked="https://hook/***") is False
 
 
 # --- emit (integration) ---
@@ -615,7 +615,7 @@ def test_deliver_exhausts_all_retries(monkeypatch: Any) -> None:
 
     monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
     monkeypatch.setattr("bajutsu.run.notify._RETRY_DELAY", 0.0)
-    assert _deliver("https://hook", {"text": "hi"}) is False
+    assert _deliver("https://hook", {"text": "hi"}, masked="https://hook/***") is False
     assert call_count == 3  # initial + 2 retries
 
 

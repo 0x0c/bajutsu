@@ -243,9 +243,15 @@ def _mask_url(url: str) -> str:
         return "***"
 
 
-def _deliver(url: str, payload: dict[str, Any]) -> bool:
-    """POST JSON to *url* with bounded timeout and retry. Returns success."""
-    masked = _mask_url(url)
+def _deliver(url: str, payload: dict[str, Any], *, masked: str) -> bool:
+    """POST JSON to *url* with bounded timeout and retry. Returns success.
+
+    *masked* is precomputed by the caller from the endpoint's un-interpolated URL
+    template, not from *url* itself: *url* has secret bindings resolved into it, and
+    deriving the log label from it would keep that secret-tainted value on the path to
+    every log call below (even through `_mask_url`), which static analysis flags as
+    clear-text logging of sensitive data (CWE-312/532).
+    """
     body = json.dumps(payload).encode("utf-8")
     for attempt in range(_MAX_RETRIES + 1):
         try:
@@ -327,6 +333,7 @@ def emit(
             if not _should_fire(ep, ep_summary, prior_ok):
                 continue
 
+            masked = _mask_url(ep.url)
             url = str(interp.interpolate(ep.url, bindings))
             if "${" in url:
                 logger.warning(
@@ -342,7 +349,7 @@ def emit(
                 continue
 
             payload = renderer(ep_summary)
-            if _deliver(url, payload):
+            if _deliver(url, payload, masked=masked):
                 any_fired = True
         except Exception:
             logger.warning(
@@ -373,6 +380,7 @@ def emit_start(
             if "start" not in ep.on:
                 continue
 
+            masked = _mask_url(ep.url)
             url = str(interp.interpolate(ep.url, bindings))
             if "${" in url:
                 logger.warning(
@@ -394,7 +402,7 @@ def emit_start(
                 target=target,
                 scenario_count=scenario_count,
             )
-            if _deliver(url, payload):
+            if _deliver(url, payload, masked=masked):
                 any_fired = True
         except Exception:
             logger.warning(
