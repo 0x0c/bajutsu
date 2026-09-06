@@ -83,6 +83,9 @@ is a redundant call removed or a fixed-cost internal reordered, verified against
 conformance suite ([BE-0114](../BE-0114-driver-conformance-suite/BE-0114-driver-conformance-suite.md))
 and a rerun of the tracer.
 
+**Group 1 is complete.** Units 1 and 3–6 landed as described. Unit 2 landed as its `after.png`
+half alone; *Progress* below records the measurement behind dropping its `elements.json` half.
+
 ### Group 1 — common to both backends (orchestrator)
 
 1. **Reuse the previous step's `after.png` as the next step's `before.png`.** No actuation happens
@@ -257,15 +260,24 @@ and a rerun of the tracer.
   `before.png` (Unit 1), stop writing `elements.json` before a step acts (Units 3–4), and stop
   polling the device during the BE-0310 settle quiescence window when no guard or interrupt
   handler is registered (Unit 5).
-- [ ] Group 1, unit 2 — move `after.png` and the `elements.json` write off the critical path
-  (async). Deferred: needs its own design pass for error propagation and cancellation, and for
-  joining pending writes before a scenario's report is generated — see the item's own Log.
-- [x] Group 1, unit 6 — fold iOS's `drain_interruptions` into `/tap`'s own reply. Scoped to `/tap`
-  alone (the higher-frequency of the "`/tap` or `/elements`" the design named) rather than every
-  actuation: the driver accumulates whatever a tap's own fold already carried and merges it with
-  an explicit `/interruptionPolicy/drain` whenever any other driver call happened in between (a
-  alone — the higher-frequency of the pair the design named, "`/tap` or `/elements`" — rather than every
-  dropped even when the fast path can't be taken.
+- [x] Group 1, unit 2 — overlap the step's mandatory `after.png` with the post-step tree read.
+  Two deviations from the literal design, both settled by measurement. We dropped the
+  `elements.json` half. That write costs 0.36ms on a real device tree, and 0.9–8.7ms across
+  100–1200 synthetic elements. Under 2 percent of a step does not pay for a thread pool on the
+  path that scrubs secrets. The other half, `after.png`, turned out to be a *device round trip*
+  rather than a write. So the run loop overlaps that shot instead of deferring a write. The
+  backend's own channel has to admit a second call in flight. Where it does not, the shot stays
+  synchronous. The new `base.BackgroundScreenshotProvider` declares that property: adb has it,
+  XCUITest does not. `APIHandler` funnels every XCUITest operation onto the runner's main thread.
+  BE-0323 records the non-re-entrancy behind that. The shot never outlives its own step. That
+  answers the three design questions this unit sat parked over. A `finally` joins the shot before
+  the step returns. Nothing then waits at a scenario boundary, and nothing waits before the report.
+- [x] Group 1, unit 6 — fold iOS's `drain_interruptions` into `/tap`'s own reply. The design named
+  "`/tap` or `/elements`". This covers `/tap` alone, the higher-frequency of the pair, rather than
+  every actuation. The driver accumulates whatever a tap's own fold already carried. Another driver
+  call can happen first, such as a query or a stale retry's re-resolve. The driver then merges that
+  accumulation with an explicit `/interruptionPolicy/drain`. So a tap's reply loses nothing even
+  where the fast path does not apply.
 - [x] Group 2, unit 7 — batch the tap-path attribute reads into one `el.snapshot()` call; cache
   `app.frame` for the life of a resident lease (guarded against caching a transient `.zero` read).
 - [ ] Group 2, unit 8 — generalize BE-0396's coordinate tap beyond Safari. Attempted, then

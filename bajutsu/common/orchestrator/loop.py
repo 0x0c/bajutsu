@@ -27,7 +27,13 @@ from bajutsu.common.cancellation import (
 from bajutsu.common.drivers import base
 from bajutsu.common.drivers.actuation import Actuation
 from bajutsu.common.drivers.webview import DomSource, WebContextDriver
-from bajutsu.common.evidence import Artifact, EvidenceSink, NullSink, intervals
+from bajutsu.common.evidence import (
+    Artifact,
+    EvidenceSink,
+    NullSink,
+    intervals,
+    start_after_screenshot,
+)
 from bajutsu.common.evidence.network import (
     Collector,
     InAppCapability,
@@ -1910,7 +1916,144 @@ class _StepRunner:
         # mid-transition with pixels a moment later. Dropping the seed here would swap that for the
         # opposite skew and a full tree read per `assert`/`wait` step, so the reuse stays and the
         # guarantee is stated for what it is: the shutter leads every consumer downstream of it.
-        after_shot = self.cfg.sink.capture(self.cfg.driver, step_id, ["screenshot.after"])
+        # Started here and joined at the end of this step, so the post-step tree read below runs
+        # inside the shot rather than after it (BE-0407 Unit 2). Only a backend that says its channel
+        # admits a second call in flight actually defers — adb does, XCUITest does not (see
+        # `base.BackgroundScreenshotProvider`) — so every other backend still shoots synchronously,
+        # right here, exactly as the paragraph above describes.
+        finish_after_shot = start_after_screenshot(self.cfg.sink, self.cfg.driver, step_id)
+        try:
+            # The post-step read is lazy (BE-0234 Unit 2): `.get()` reads (once) only where a
+            # consumer needs the tree, so a step with no consumer under a NullSink never reads. A
+            # non-mutating step (`assert`/`wait`) hands back the tree it already settled on, so the
+            # read reuses that snapshot rather than issuing a second identical query (BE-0259);
+            # `snapshot` is None for mutating/tree-less steps, restoring the fresh post-step read.
+            #
+            # An `extract` on this step consumes the read, so it must observe a value that has stopped
+            # propagating, not whichever one the single read caught (BE-0299 Unit 3). Gated on
+            # `outcome.ok`, matching where the extract actually runs (below), so a failed step never
+            # pays the poll for a value it will not read. A mutating step (or `wait until: request`,
+            # which hands back no tree) has no seed, so the property-aware read is deferred into
+            # `_ScreenRead` and fires only when a consumer needs the tree; `partial` binds this step's
+            # driver/extracts now, not a later iteration's. A seeded non-mutating step cannot poll
+            # there — the seed short-circuits `.get()` — so it is refined here, at that earlier read
+            # site, before `_ScreenRead` reuses it (keeping `queried` False for it).
+            read: Callable[[], list[base.Element]] | None = None
+            if outcome.ok and interp_step.extract:
+                if snapshot is None:
+                    # A mutating step: the extract read must postdate this step's actuation by the
+                    # backend's read lag (BE-0332 Unit 1). Nothing actuates between the step body
+                    # returning and here, so `now` is that actuation's completion; bound into the deferred
+                    # read so the barrier is measured from the action, not from whenever `_ScreenRead`
+                    # later fires.
+                    actuated_at = self.cfg.clock.now()
+                    read = partial(
+                        _settle_extract_read,
+                        active_driver,
+                        interp_step.extract,
+                        self.cfg.clock,
+                        actuated_at=actuated_at,
+                    )
+                else:
+                    # A seeded (non-mutating) step did not actuate, so it has no actuation to postdate.
+                    snapshot = _settle_extract_read(
+                        active_driver, interp_step.extract, self.cfg.clock, initial=snapshot
+                    )
+            screen = _ScreenRead(active_driver, seed=snapshot, read=read)
+            screen_changed = before is not None and screen.get() != before
+
+            # An unconditional first-wait diagnostic on a `for`-wait timeout: capturePolicy may not
+            # request an element dump on failure, so without this the timeout leaves no evidence to
+            # decide which cause fired (BE-0231 Unit 1). Deterministic, no LLM (prime directive 1).
+            # `polls > 0` fires only after a `for`-wait ran (only that branch records the trace), so
+            # the trigger is a structural fact, not the wording of the timeout message.
+            if wait_trace is not None and not ok and wait_trace.polls > 0:
+                try:
+                    art = self.cfg.sink.wait_diagnostic(
+                        step_id, trace=wait_trace, elements=screen.get()
+                    )
+                except OSError as exc:
+                    # Best-effort evidence: a disk/permission failure writing the diagnostic must not
+                    # mask the real timeout with an I/O traceback — keep the timeout as the failure and
+                    # disclose the lost evidence loudly. A genuine bug (e.g. a redaction error) still
+                    # surfaces rather than being swallowed here.
+                    _logger.warning("dropping wait-timeout diagnostic: write failed: %s", exc)
+                else:
+                    if art is not None:
+                        outcome.artifacts.append(art)
+
+            if outcome.ok and interp_step.extract:
+                ext_ok, ext_reason = _run_extract(
+                    screen.get(), interp_step.extract, self.state.bindings
+                )
+                if not ext_ok:
+                    outcome.ok, outcome.reason = False, ext_reason
+
+            # Read the produced value back out of the bindings the handler just wrote, so the run's
+            # record shows which value this step actually used (BE-0377). Evidence only — the verdict is
+            # unchanged either way.
+            if outcome.ok and interp_step.generate is not None:
+                outcome.generated = self.state.bindings.get(f"vars.{interp_step.generate.into.var}")
+
+            # This call records the post-action *tree*: `_collect_captures` always leads with
+            # `elements`, so every step keeps one whatever the scenario asked for. The screenshot
+            # half is not on that list — `_handle_action` shot `screenshot.after` right after the
+            # action, and the `instant` filter below drops the token. `elements.json` has one fixed
+            # name, so this write replaces the pre-step baseline's pre-action tree.
+            # `screenshot.before` is excluded for the mirror-image reason (BE-0341): the baseline
+            # above wrote that file from the true pre-action state, so re-taking it here would
+            # silently mislabel a post-action pixel as `before.png`.
+            fired = _collect_captures(
+                self.cfg.scenario, step, kind, outcome.ok, screen_changed, self.cfg.capture
+            )
+            # Interval kinds are recorded scenario-wide (run_scenario), so only the
+            # instant kinds are captured per step here. A `web` block captures against the native
+            # `driver`, so it must read the active (web) tree here rather than let the native writer
+            # fall back to a mismatched tree (BE-0234 Unit 2).
+            instant = [t for t in fired if _kind_of(t) not in intervals.INTERVAL_KINDS]
+            if active_driver is not self.cfg.driver:
+                # A `web` block's capture call below always targets the native `self.cfg.driver` (a
+                # `WebContextDriver` cannot screenshot), but `write_raw_tree` would then ask that native
+                # driver for `last_raw_source()` — whatever adb/XCUITest read before this block began,
+                # an unrelated backend entirely, next to this step's *web* `elements.json`. Drop the
+                # request rather than pair the two: no artifact beats a mismatched one.
+                instant = [t for t in instant if _kind_of(t) != "rawTree"]
+            # `screenshot.after` was already shot above, right after the action; re-taking it here would
+            # overwrite that pixel with a later one and leave a duplicate entry in the manifest. This
+            # also swallows a scenario's own request for it (a bare `screenshot`, normalized in
+            # `_collect_captures`, or a `capturePolicy` rule's `screenshot.after`) — the shutter above
+            # already satisfied it, from a moment closer to the action than this call could manage.
+            instant = [t for t in instant if t != "screenshot.after"]
+            # The tree read goes through `screen.get()` rather than being left to the sink's own writer
+            # (`write_elements`, when `elements=None`): a read issued inside the sink is invisible to
+            # `_ScreenRead`, so it is neither counted in `total_reads` nor carried into `prev_after` —
+            # and the next step's pre-step baseline, finding `prev_after` unset, pays a second read for
+            # the same screen. Routing it here costs one read per step instead of two, the reuse
+            # BE-0234 Unit 2 is built on (~2.4s per read on adb). A sink that writes nothing must still
+            # pay nothing, hence the `NullSink` guard the pre-step baseline uses too.
+            writes_elements = any(_kind_of(t) == "elements" for t in instant) and not isinstance(
+                self.cfg.sink, NullSink
+            )
+            els = (
+                screen.get()
+                if active_driver is not self.cfg.driver or writes_elements
+                else screen.cached
+            )
+            outcome.artifacts.extend(
+                self.cfg.sink.capture(
+                    self.cfg.driver,
+                    step_id,
+                    instant,
+                    elements=els,
+                    elements_source=active_driver.name,
+                )
+            )
+        finally:
+            # In a `finally` so a pending shot can never outlive the step that took it and land while
+            # the *next* step is actuating — the artifact would then show a screen this step never
+            # saw. It is also what keeps `after.png` on the path where the step body raises, which
+            # the synchronous shutter got for free by running before any of it.
+            after_shot = finish_after_shot()
         outcome.artifacts.extend(after_shot)
         # Remembered for the *next* step's pre-step baseline to reuse as its `before.png` (BE-0407
         # Unit 1) instead of a fresh screenshot — `None` when nothing was actually written (a
@@ -1919,128 +2062,6 @@ class _StepRunner:
         # request could never feed the wrong artifact into the next step's reuse.
         self.state.prev_after_screenshot = next(
             (a for a in after_shot if a.kind == "screenshot"), None
-        )
-
-        # The post-step read is lazy (BE-0234 Unit 2): `.get()` reads (once) only where a
-        # consumer needs the tree, so a step with no consumer under a NullSink never reads. A
-        # non-mutating step (`assert`/`wait`) hands back the tree it already settled on, so the
-        # read reuses that snapshot rather than issuing a second identical query (BE-0259);
-        # `snapshot` is None for mutating/tree-less steps, restoring the fresh post-step read.
-        #
-        # An `extract` on this step consumes the read, so it must observe a value that has stopped
-        # propagating, not whichever one the single read caught (BE-0299 Unit 3). Gated on
-        # `outcome.ok`, matching where the extract actually runs (below), so a failed step never
-        # pays the poll for a value it will not read. A mutating step (or `wait until: request`,
-        # which hands back no tree) has no seed, so the property-aware read is deferred into
-        # `_ScreenRead` and fires only when a consumer needs the tree; `partial` binds this step's
-        # driver/extracts now, not a later iteration's. A seeded non-mutating step cannot poll
-        # there — the seed short-circuits `.get()` — so it is refined here, at that earlier read
-        # site, before `_ScreenRead` reuses it (keeping `queried` False for it).
-        read: Callable[[], list[base.Element]] | None = None
-        if outcome.ok and interp_step.extract:
-            if snapshot is None:
-                # A mutating step: the extract read must postdate this step's actuation by the
-                # backend's read lag (BE-0332 Unit 1). Nothing actuates between the step body
-                # returning and here, so `now` is that actuation's completion; bound into the deferred
-                # read so the barrier is measured from the action, not from whenever `_ScreenRead`
-                # later fires.
-                actuated_at = self.cfg.clock.now()
-                read = partial(
-                    _settle_extract_read,
-                    active_driver,
-                    interp_step.extract,
-                    self.cfg.clock,
-                    actuated_at=actuated_at,
-                )
-            else:
-                # A seeded (non-mutating) step did not actuate, so it has no actuation to postdate.
-                snapshot = _settle_extract_read(
-                    active_driver, interp_step.extract, self.cfg.clock, initial=snapshot
-                )
-        screen = _ScreenRead(active_driver, seed=snapshot, read=read)
-        screen_changed = before is not None and screen.get() != before
-
-        # An unconditional first-wait diagnostic on a `for`-wait timeout: capturePolicy may not
-        # request an element dump on failure, so without this the timeout leaves no evidence to
-        # decide which cause fired (BE-0231 Unit 1). Deterministic, no LLM (prime directive 1).
-        # `polls > 0` fires only after a `for`-wait ran (only that branch records the trace), so
-        # the trigger is a structural fact, not the wording of the timeout message.
-        if wait_trace is not None and not ok and wait_trace.polls > 0:
-            try:
-                art = self.cfg.sink.wait_diagnostic(
-                    step_id, trace=wait_trace, elements=screen.get()
-                )
-            except OSError as exc:
-                # Best-effort evidence: a disk/permission failure writing the diagnostic must not
-                # mask the real timeout with an I/O traceback — keep the timeout as the failure and
-                # disclose the lost evidence loudly. A genuine bug (e.g. a redaction error) still
-                # surfaces rather than being swallowed here.
-                _logger.warning("dropping wait-timeout diagnostic: write failed: %s", exc)
-            else:
-                if art is not None:
-                    outcome.artifacts.append(art)
-
-        if outcome.ok and interp_step.extract:
-            ext_ok, ext_reason = _run_extract(
-                screen.get(), interp_step.extract, self.state.bindings
-            )
-            if not ext_ok:
-                outcome.ok, outcome.reason = False, ext_reason
-
-        # Read the produced value back out of the bindings the handler just wrote, so the run's
-        # record shows which value this step actually used (BE-0377). Evidence only — the verdict is
-        # unchanged either way.
-        if outcome.ok and interp_step.generate is not None:
-            outcome.generated = self.state.bindings.get(f"vars.{interp_step.generate.into.var}")
-
-        # This call records the post-action *tree*: `_collect_captures` always leads with
-        # `elements`, so every step keeps one whatever the scenario asked for. The screenshot
-        # half is not on that list — `_handle_action` shot `screenshot.after` right after the
-        # action, and the `instant` filter below drops the token. `elements.json` has one fixed
-        # name, so this write replaces the pre-step baseline's pre-action tree.
-        # `screenshot.before` is excluded for the mirror-image reason (BE-0341): the baseline
-        # above wrote that file from the true pre-action state, so re-taking it here would
-        # silently mislabel a post-action pixel as `before.png`.
-        fired = _collect_captures(
-            self.cfg.scenario, step, kind, outcome.ok, screen_changed, self.cfg.capture
-        )
-        # Interval kinds are recorded scenario-wide (run_scenario), so only the
-        # instant kinds are captured per step here. A `web` block captures against the native
-        # `driver`, so it must read the active (web) tree here rather than let the native writer
-        # fall back to a mismatched tree (BE-0234 Unit 2).
-        instant = [t for t in fired if _kind_of(t) not in intervals.INTERVAL_KINDS]
-        if active_driver is not self.cfg.driver:
-            # A `web` block's capture call below always targets the native `self.cfg.driver` (a
-            # `WebContextDriver` cannot screenshot), but `write_raw_tree` would then ask that native
-            # driver for `last_raw_source()` — whatever adb/XCUITest read before this block began,
-            # an unrelated backend entirely, next to this step's *web* `elements.json`. Drop the
-            # request rather than pair the two: no artifact beats a mismatched one.
-            instant = [t for t in instant if _kind_of(t) != "rawTree"]
-        # `screenshot.after` was already shot above, right after the action; re-taking it here would
-        # overwrite that pixel with a later one and leave a duplicate entry in the manifest. This
-        # also swallows a scenario's own request for it (a bare `screenshot`, normalized in
-        # `_collect_captures`, or a `capturePolicy` rule's `screenshot.after`) — the shutter above
-        # already satisfied it, from a moment closer to the action than this call could manage.
-        instant = [t for t in instant if t != "screenshot.after"]
-        # The tree read goes through `screen.get()` rather than being left to the sink's own writer
-        # (`write_elements`, when `elements=None`): a read issued inside the sink is invisible to
-        # `_ScreenRead`, so it is neither counted in `total_reads` nor carried into `prev_after` —
-        # and the next step's pre-step baseline, finding `prev_after` unset, pays a second read for
-        # the same screen. Routing it here costs one read per step instead of two, the reuse
-        # BE-0234 Unit 2 is built on (~2.4s per read on adb). A sink that writes nothing must still
-        # pay nothing, hence the `NullSink` guard the pre-step baseline uses too.
-        writes_elements = any(_kind_of(t) == "elements" for t in instant) and not isinstance(
-            self.cfg.sink, NullSink
-        )
-        els = (
-            screen.get()
-            if active_driver is not self.cfg.driver or writes_elements
-            else screen.cached
-        )
-        outcome.artifacts.extend(
-            self.cfg.sink.capture(
-                self.cfg.driver, step_id, instant, elements=els, elements_source=active_driver.name
-            )
         )
         if screen.queried:
             self.state.total_reads += 1

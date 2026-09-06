@@ -10,6 +10,8 @@ from __future__ import annotations
 import logging
 import math
 import re
+import subprocess
+import threading
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -1014,6 +1016,44 @@ def test_screenshot_writes_capture_bytes(tmp_path: Path, monkeypatch: pytest.Mon
     AdbDriver("U", run=lambda a: "").screenshot(str(out))
     assert out.read_bytes() == b"PNG"
     assert captured == [["adb", "-s", "U", "exec-out", "screencap", "-p"]]
+
+
+def test_background_screenshot_goes_through_the_same_capture_seam(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The deferred shot (BE-0407 Unit 2) must be the *same* capture, only joined later: it routes
+    # through `screenshot`, so the binary seam a test patches stays the one path pixels take.
+    gate = threading.Event()
+    captured: list[list[str]] = []
+
+    def fake_capture(cmd: list[str], path: str) -> None:
+        gate.wait(timeout=5)
+        captured.append(cmd)
+        Path(path).write_bytes(b"PNG")
+
+    monkeypatch.setattr(adb.Env, "_run_capture", staticmethod(fake_capture))
+    out = tmp_path / "shot.png"
+    join = AdbDriver("U", run=lambda a: "").screenshot_in_background(str(out))
+    assert not out.exists()  # the caller was handed a join, not a completed capture
+
+    gate.set()
+    join()
+    assert out.read_bytes() == b"PNG"
+    assert captured == [["adb", "-s", "U", "exec-out", "screencap", "-p"]]
+
+
+def test_a_failed_background_screenshot_surfaces_at_the_join(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The failure crosses the thread boundary unchanged, so a caller's error handling is the same as
+    # it would be for the synchronous shot — the thread must not swallow it into a silent evidence gap.
+    def fake_capture(cmd: list[str], path: str) -> None:
+        raise subprocess.CalledProcessError(1, cmd)
+
+    monkeypatch.setattr(adb.Env, "_run_capture", staticmethod(fake_capture))
+    join = AdbDriver("U", run=lambda a: "").screenshot_in_background(str(tmp_path / "shot.png"))
+    with pytest.raises(subprocess.CalledProcessError):
+        join()
 
 
 def test_parse_hierarchy_malformed_xml_is_empty() -> None:
