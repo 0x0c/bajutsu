@@ -243,19 +243,20 @@ def test_provenance_is_pruned_when_absent() -> None:
     assert "from:" not in dumped
 
 
-def test_dump_prunes_null_and_empty_list_inside_a_free_form_payload() -> None:
-    # `push.payload` is arbitrary JSON (`dict[str, Any]`), so pydantic's exclude_none/exclude_defaults
-    # never see inside it — pruning a `null` or an already-empty list nested there is `_prune`'s own
-    # job, distinct from the dict-valued keys `test_a_fieldless_step_action_round_trips` covers below.
+def test_dump_keeps_null_and_empty_list_inside_a_free_form_payload() -> None:
+    # `push.payload` is arbitrary JSON (`dict[str, Any]`), author data that pydantic's own
+    # exclude_none/exclude_defaults never look inside. A `null` or an already-empty list nested
+    # there can be semantically meaningful to whatever reads the payload (e.g. an APNs `badge:
+    # null` clears the badge), so a dump must keep it verbatim rather than guessing it away —
+    # dropping it would send a different push notification on a re-run than the one recorded.
     text = (
         "- name: t\n"
         "  steps:\n"
         "    - push: { payload: { aps: { alert: hi, badge: null, tags: [] } } }\n"
     )
-    dumped = dump_scenarios(load_scenarios(text))
-    assert "badge" not in dumped
-    assert "tags" not in dumped
-    assert "alert: hi" in dumped
+    reloaded = load_scenarios(dump_scenarios(load_scenarios(text)))[0]
+    assert reloaded.steps[0].push is not None
+    assert reloaded.steps[0].push.payload == {"aps": {"alert": "hi", "badge": None, "tags": []}}
 
 
 def test_a_fieldless_step_action_round_trips() -> None:

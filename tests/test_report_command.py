@@ -103,11 +103,14 @@ def test_report_rerenders_a_run_with_a_fieldless_after_step(tmp_path: Path) -> N
     run_dir.mkdir(parents=True, exist_ok=True)
     (run_dir / "scenario.yaml").write_text(dump_scenario_file(scenarios), encoding="utf-8")
     write_report(run_dir, run_dir.name, results, definitions, sources, source_name="smoke.yaml")
+    (run_dir / "report.html").write_text("STALE", encoding="utf-8")  # simulate an old/edited bake
 
     result = runner.invoke(app, ["report", "r1", "--runs", str(tmp_path / "runs")])
 
     assert result.exit_code == 0
-    assert "back: {}" in (run_dir / "scenario.yaml").read_text(encoding="utf-8")
+    assert (run_dir / "report.html").read_text(
+        encoding="utf-8"
+    ) != "STALE"  # re-rendered, not crashed
 
 
 def test_report_missing_run_exits_two(tmp_path: Path) -> None:

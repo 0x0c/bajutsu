@@ -525,8 +525,8 @@ load_scenarios        # parse + validate against this grammar
 - `load_scenarios(text) -> list[Scenario]` validates against everything above; the top level must be
   a sequence of scenarios or a `{description, scenarios}` mapping, and any rule in
   [§4](#4-cardinality--mutual-exclusion-constraints) failing is a load error (`scenario/load.py`).
-- `dump_scenarios(scenarios) -> str` serializes back to YAML, pruning `None` / empty list / empty
-  dict for readability and emitting alias keys (`idMatches`, `launchEnv`, …). The output **reloads
-  cleanly** — this is the round-trip `record` relies on (`scenario/serialize.py`).
+- `dump_scenarios(scenarios) -> str` serializes back to YAML, dropping only fields the author never
+  set and emitting alias keys (`idMatches`, `launchEnv`, …). The output **reloads cleanly** — this
+  is the round-trip `record` relies on (`scenario/serialize.py`).
 
 For the semantics behind the shapes — how a selector resolves to 0/1/2+ elements, how each assertion compares, how waits time out — see [selectors](selectors.md) and [run-loop](run-loop.md). To start writing scenarios by example, see [scenarios](scenarios.md).
