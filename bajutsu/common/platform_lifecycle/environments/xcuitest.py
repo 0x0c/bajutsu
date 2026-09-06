@@ -1348,13 +1348,14 @@ class XcuitestEnvironment(_DeviceEnvironment):
                     resolved = simctl.device_type_of(self._udid, self._run)
                     self._device_type_id, self._device_runtime_id = resolved or (None, None)
                 self._pin_system_locale(e, pre.resolved_locale(eff.locale))
+            clean_reinstall = pre.reinstall == "clean" and not pre.erase
             if ios.app_path:
                 app_path = Path(ios.app_path)
                 if not app_path.exists():
                     raise simctl.DeviceError(
                         f"appPath not found: {ios.app_path} (build the app first)"
                     )
-                if pre.reinstall == "clean" and not pre.erase:
+                if clean_reinstall:
                     e.uninstall(ios.bundle_id)
                     # The uninstall above always requires a fresh install right after it, whatever
                     # was tracked before — nothing survives to compare against.
@@ -1368,18 +1369,20 @@ class XcuitestEnvironment(_DeviceEnvironment):
                 if digest is None or digest != self._installed_app_digest:
                     e.install(ios.app_path)
                     self._installed_app_digest = digest
+            if clean_reinstall:
+                # Neither `uninstall` nor `install` touches TCC.db — verified on-device, only
+                # `erase` above does — so `clean` must reset permissions itself, the same way
+                # `adb.Env.clear` resets grants on the equivalent Android path (also run at this
+                # level, independent of whether an install happened this lease). A target with no
+                # `appPath` here (an already-installed build a provider handed over) still needs
+                # this: the bundle it names was installed by some earlier lease, and `clean` still
+                # promises a known permission state for it.
+                e.reset_permissions(ios.bundle_id)
             # Set permission state after install (the grant targets an installed bundle) but before
-            # the app launches, so a prompt never blocks it (BE-0276). Only `erase` is known to reset
-            # TCC grants (it wipes the whole data partition, TCC.db included); `install` on its own is
-            # not, whether or not the digest skip above (BE-0407 Unit 14) actually ran it — so under
-            # `reinstall: overwrite` (which never erases or uninstalls), a scenario with no
-            # `permissions` of its own inherits whatever an earlier scenario on this same warm runner
-            # last granted or revoked. This is pre-existing behavior the digest skip does not change.
-            # Whether `clean`'s `uninstall` above resets TCC on its own is a separate, unverified
-            # question (needs on-device confirmation) — the same inheritance risk may or may not also
-            # reach that mode. Either way, a scenario that must start from a known permission state
-            # names every service it cares about (grant or revoke) rather than relying on any install
-            # to clear it.
+            # the app launches, so a prompt never blocks it (BE-0276). `clean` resets TCC itself just
+            # above; `reinstall: overwrite` never resets permissions on its own (nor does `erase`
+            # re-grant anything, nor does the digest skip above change this) — a scenario that must
+            # start from a known state under `overwrite` names every service it cares about here.
             if permissions:
                 e.apply_permissions(ios.bundle_id, permissions)
         except subprocess.CalledProcessError as exc:

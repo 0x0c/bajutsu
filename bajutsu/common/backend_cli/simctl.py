@@ -235,7 +235,7 @@ _PBCOPY_TIMEOUT_EXIT = 60  # simctl's ETIMEDOUT — the one transient exit worth
 
 
 def privacy_cmd(udid: str, action: str, tcc_service: str, bundle_id: str) -> list[str]:
-    """`simctl privacy <udid> <grant|revoke> <tcc-service> <bundle>` (BE-0276)."""
+    """`simctl privacy <udid> <grant|revoke|reset> <tcc-service> <bundle>` (BE-0276)."""
     return ["xcrun", "simctl", "privacy", validated_udid(udid), action, tcc_service, bundle_id]
 
 
@@ -811,6 +811,18 @@ class Env:
 
     def clear_location(self) -> None:
         self._run(clear_location_cmd(self.udid), None)
+
+    def reset_permissions(self, bundle_id: str) -> None:
+        """Reset every TCC grant/revoke this bundle carries back to "ask on next use" (`simctl
+        privacy reset all`).
+
+        `simctl install`/`uninstall` do not touch TCC.db — verified on-device (BE-0407 follow-up):
+        a grant survives both a plain reinstall and an uninstall-then-install of the same bundle
+        id, only `simctl erase` clears it. A caller that means to hand a scenario a clean slate
+        (mirroring `adb.Env.clear`'s permission reset on Android) must reset explicitly rather than
+        relying on either install path to do it.
+        """
+        self._run(privacy_cmd(self.udid, "reset", "all", bundle_id), None)
 
     def apply_permissions(self, bundle_id: str, permissions: Mapping[str, str]) -> None:
         """Grant or revoke each `service: grant|revoke` entry in `permissions` up front, so a

@@ -98,7 +98,7 @@ def test_launch_driver_shuts_down_before_erase(
 def test_launch_driver_applies_permissions_after_boot(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """BE-0276: `permissions` runs after boot (a fresh install/erase resets TCC grants) but before
+    """BE-0276: `permissions` runs after boot (the grant targets an installed bundle) but before
     the runner launches the app, so a permission prompt never blocks the run."""
     calls = _launch_recording(
         monkeypatch,
@@ -113,8 +113,14 @@ def test_launch_driver_applies_permissions_after_boot(
 def test_launch_driver_applies_no_permissions_when_unset(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
+    """No `grant`/`revoke` runs when a scenario declares no `permissions` — but the default
+    `reinstall: clean` still resets whatever TCC state an earlier lease left (`simctl install`/
+    `uninstall` never touch TCC.db on their own), so a `privacy reset all` call is still made."""
+    bundle_id = require_ios(_ios_eff()).bundle_id
     calls = _launch_recording(monkeypatch, _xcuitest_eff(tmp_path), Preconditions(erase=False))
-    assert not any(c[:3] == ["xcrun", "simctl", "privacy"] for c in calls)
+    assert not any(c[:5] == ["xcrun", "simctl", "privacy", "UDID-1", "grant"] for c in calls)
+    assert not any(c[:5] == ["xcrun", "simctl", "privacy", "UDID-1", "revoke"] for c in calls)
+    assert ["xcrun", "simctl", "privacy", "UDID-1", "reset", "all", bundle_id] in calls
 
 
 def test_launch_driver_reinstall_clean_uninstalls_then_installs(

@@ -465,7 +465,8 @@ def test_cold_spawn_pins_the_system_locale_and_reboots_for_it(
     # boot (the initial one) -> bootstatus (waiting it out, BE-0359) -> list (recording the device
     # type a replacement would be cloned from) -> spawn (the read, then the two writes) -> shutdown
     # -> list (confirming the device went down) -> boot (the one that re-renders SpringBoard) ->
-    # bootstatus (waiting that one out too) -> spawn (the read-back that verifies it took).
+    # bootstatus (waiting that one out too) -> spawn (the read-back that verifies it took) -> privacy
+    # (the default `reinstall: clean` resets permissions on every prepare, not just a warm resume).
     assert _verbs(simctl_calls) == [
         "boot",
         "bootstatus",
@@ -478,6 +479,7 @@ def test_cold_spawn_pins_the_system_locale_and_reboots_for_it(
         "boot",
         "bootstatus",
         "spawn",
+        "privacy",
     ]
 
 
@@ -1297,6 +1299,86 @@ def test_warm_resume_reapplies_the_per_scenario_reset(
     assert "privacy" in verbs  # the camera permission was granted via `simctl privacy`
     assert "terminate" in verbs and "launch" in verbs  # the app was restarted
     assert "openurl" in verbs  # the deeplink was opened
+
+
+def test_clean_reinstall_resets_permissions_even_when_the_scenario_names_none(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # `simctl install`/`uninstall` never touch TCC.db (verified on-device) — only `erase` does — so
+    # without an explicit reset, a `clean` reinstall on a warm runner would let a permission an
+    # earlier scenario granted or revoked for this bundle id leak into a scenario that names none of
+    # its own, contradicting this method's "same known state a cold lease does" promise (BE-0291
+    # Unit 2). `permissions=None` here is the point: no `grant`/`revoke` call should be the reason a
+    # `privacy` call appears.
+    popen_argvs, simctl_calls, run = _fake_toolchain(monkeypatch)
+    app = tmp_path / "App.app"
+    app.mkdir()
+    cfg = (
+        f"targets:\n  s:\n    bundleId: com.x\n    appPath: {app}\n"
+        f"    xcuitest:\n      testRunner: {_write_runner(tmp_path)}\n"
+    )
+    eff = resolve(load_config(cfg), "s")
+    env = XcuitestEnvironment("xcuitest", "UDID", env_run=run)
+    env.start(eff, Preconditions())  # cold spawn
+    simctl_calls.clear()
+    env.start(eff, Preconditions())  # warm resume, reinstall defaults to "clean", no permissions
+    assert len(popen_argvs) == 1  # no respawn — the runner was reused
+    reset_calls = [c for c in simctl_calls if c[2:3] == ["privacy"] and c[4:6] == ["reset", "all"]]
+    assert reset_calls, f"expected a `simctl privacy reset all` call, got: {simctl_calls}"
+    reset_call = reset_calls[0]
+    assert reset_call[-1] == "com.x"  # scoped to this bundle id, not every app on the device
+    verbs = _verbs(simctl_calls)
+    # uninstall, then install, then reset — the reset targets the bundle this `clean` reinstall just
+    # (re)installed, the same order `adb.Env`'s uninstall → install → `pm clear` mirror uses. All
+    # three indices come from `verbs` (not a mix with `simctl_calls`): `permissions` is `None` here,
+    # so the first (and only) `privacy` verb is unambiguously this reset, already pinned above to
+    # `reset all … com.x` rather than a `grant`/`revoke`.
+    assert verbs.index("uninstall") < verbs.index("install") < verbs.index("privacy")
+
+
+def test_clean_reinstall_resets_permissions_with_no_app_path(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # A provider that hands over an already-installed build (no `appPath` here, BE-0236) skips
+    # install/uninstall entirely — but the bundle it names was installed by some earlier lease, and
+    # `clean` still promises that lease a known permission state, so the reset must not be nested
+    # inside the `appPath` branch the way the install/uninstall calls are.
+    popen_argvs, simctl_calls, run = _fake_toolchain(monkeypatch)
+    env = XcuitestEnvironment("xcuitest", "UDID", env_run=run)
+    eff = _sim_eff(test_runner=str(_write_runner(tmp_path)))  # app_path=None
+    env.start(eff, Preconditions())  # cold spawn
+    simctl_calls.clear()
+    env.start(eff, Preconditions())  # warm resume, reinstall defaults to "clean", no permissions
+    assert len(popen_argvs) == 1  # no respawn — the runner was reused
+    assert "install" not in _verbs(simctl_calls)  # nothing to (re)install without an appPath
+    reset_calls = [c for c in simctl_calls if c[2:3] == ["privacy"] and c[4:6] == ["reset", "all"]]
+    assert reset_calls, f"expected a reset even with no appPath, got: {simctl_calls}"
+    assert reset_calls[0][-1] == "com.x"
+
+
+def test_overwrite_reinstall_does_not_reset_permissions(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # `overwrite` deliberately keeps the app's data container across scenarios (it exists precisely
+    # to preserve state, predating BE-0407) — permission state is part of that same "keep what's
+    # there" contract, so unlike `clean`, this mode must not reset TCC (a scenario relying on a
+    # permission an earlier one granted, e.g. to test the already-granted path, would otherwise
+    # regress).
+    popen_argvs, simctl_calls, run = _fake_toolchain(monkeypatch)
+    app = tmp_path / "App.app"
+    app.mkdir()
+    cfg = (
+        f"targets:\n  s:\n    bundleId: com.x\n    appPath: {app}\n"
+        f"    xcuitest:\n      testRunner: {_write_runner(tmp_path)}\n"
+    )
+    eff = resolve(load_config(cfg), "s")
+    env = XcuitestEnvironment("xcuitest", "UDID", env_run=run)
+    env.start(eff, Preconditions(reinstall="overwrite"))  # cold spawn
+    simctl_calls.clear()
+    env.start(eff, Preconditions(reinstall="overwrite"))  # warm resume, still overwrite
+    assert len(popen_argvs) == 1  # no respawn — the runner was reused (the case this guards)
+    reset_calls = [c for c in simctl_calls if c[2:3] == ["privacy"] and c[4:6] == ["reset", "all"]]
+    assert not reset_calls, f"overwrite must not reset permissions, got: {simctl_calls}"
 
 
 def test_warm_resume_skips_reinstall_under_overwrite_when_the_bundle_is_unchanged(
