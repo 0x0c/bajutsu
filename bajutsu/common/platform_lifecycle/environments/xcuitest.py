@@ -1368,8 +1368,18 @@ class XcuitestEnvironment(_DeviceEnvironment):
                 if digest is None or digest != self._installed_app_digest:
                     e.install(ios.app_path)
                     self._installed_app_digest = digest
-            # Set permission state after install (a fresh install/erase resets TCC grants) but
-            # before the app launches, so a prompt never blocks it (BE-0276).
+            # Set permission state after install (the grant targets an installed bundle) but before
+            # the app launches, so a prompt never blocks it (BE-0276). Only `erase` is known to reset
+            # TCC grants (it wipes the whole data partition, TCC.db included); `install` on its own is
+            # not, whether or not the digest skip above (BE-0407 Unit 14) actually ran it — so under
+            # `reinstall: overwrite` (which never erases or uninstalls), a scenario with no
+            # `permissions` of its own inherits whatever an earlier scenario on this same warm runner
+            # last granted or revoked. This is pre-existing behavior the digest skip does not change.
+            # Whether `clean`'s `uninstall` above resets TCC on its own is a separate, unverified
+            # question (needs on-device confirmation) — the same inheritance risk may or may not also
+            # reach that mode. Either way, a scenario that must start from a known permission state
+            # names every service it cares about (grant or revoke) rather than relying on any install
+            # to clear it.
             if permissions:
                 e.apply_permissions(ios.bundle_id, permissions)
         except subprocess.CalledProcessError as exc:

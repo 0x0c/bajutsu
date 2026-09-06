@@ -10,10 +10,12 @@ the element it resolved, addressed by that element's per-snapshot handle.
 from __future__ import annotations
 
 import json
+import re
 import socket
 import time
 import weakref
 from collections.abc import Mapping
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -21,6 +23,7 @@ import pytest
 from bajutsu.common.drivers import base
 from bajutsu.common.drivers.xcuitest import (
     _ACTUATION_TIMEOUT_SECONDS,
+    _KEEPALIVE_IDLE_RECONNECT_SECONDS,
     _MAX_ATTEMPTS,
     _RECOVERY_TIMEOUT_SECONDS,
     _SOCKET_TIMEOUT_SECONDS,
@@ -1110,6 +1113,119 @@ def test_raw_transport_reconnects_when_the_reused_connection_is_already_closed(
     assert constructed == 2  # the second call found the first connection dead and reconnected
 
 
+def test_raw_transport_forces_a_reconnect_after_a_long_idle_gap(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The residual race `_is_stale`'s docstring names: a connection can look alive to the peek and
+    # still be old enough that the runner's own 10s `SO_RCVTIMEO` could plausibly have fired since
+    # the last call. `_raw_http_transport` must not lean on the peek alone once the gap has grown
+    # past `_KEEPALIVE_IDLE_RECONNECT_SECONDS` — it reconnects on elapsed time, even though `_is_stale`
+    # (patched here to always report "alive") would have said the old connection is still fine.
+    monkeypatch.setattr("bajutsu.common.drivers.xcuitest._is_stale", lambda _conn: False)
+    constructed = 0
+    clock = [1000.0]
+    monkeypatch.setattr("bajutsu.common.drivers.xcuitest.time.monotonic", lambda: clock[0])
+
+    class _FakeConn:
+        def __init__(self, host: str, port: int, timeout: float | None = None) -> None:
+            nonlocal constructed
+            constructed += 1
+            self.sock: _FakeSocket | None = None
+
+        def connect(self) -> None:
+            self.sock = _FakeSocket()
+
+        def request(self, method: str, path: str, body: Any = None, headers: Any = None) -> None:
+            pass
+
+        def getresponse(self) -> Any:
+            class _R:
+                status = 200
+
+                def read(self) -> bytes:
+                    return b'{"status":"ok"}'
+
+            return _R()
+
+        def close(self) -> None:
+            pass
+
+    monkeypatch.setattr("bajutsu.common.drivers.xcuitest.http.client.HTTPConnection", _FakeConn)
+    transport = _raw_http_transport("127.0.0.1", 1234)
+    transport("GET", "/elements", None)
+    assert constructed == 1
+    # Idle gap past the threshold: forced to reconnect despite `_is_stale` saying "still alive".
+    clock[0] += _KEEPALIVE_IDLE_RECONNECT_SECONDS + 0.1
+    transport("GET", "/elements", None)
+    assert constructed == 2
+
+
+def test_raw_transport_reuses_a_connection_within_the_idle_threshold(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The other half of the same behavior: a call spaced well under the threshold must still reuse
+    # the existing connection — the whole point of BE-0407 Unit 11 — rather than paying a fresh
+    # handshake defensively on every call.
+    _not_stale(monkeypatch)
+    constructed = 0
+    clock = [1000.0]
+    monkeypatch.setattr("bajutsu.common.drivers.xcuitest.time.monotonic", lambda: clock[0])
+
+    class _FakeConn:
+        def __init__(self, host: str, port: int, timeout: float | None = None) -> None:
+            nonlocal constructed
+            constructed += 1
+            self.sock: _FakeSocket | None = None
+
+        def connect(self) -> None:
+            self.sock = _FakeSocket()
+
+        def request(self, method: str, path: str, body: Any = None, headers: Any = None) -> None:
+            pass
+
+        def getresponse(self) -> Any:
+            class _R:
+                status = 200
+
+                def read(self) -> bytes:
+                    return b'{"status":"ok"}'
+
+            return _R()
+
+        def close(self) -> None:
+            pass
+
+    monkeypatch.setattr("bajutsu.common.drivers.xcuitest.http.client.HTTPConnection", _FakeConn)
+    transport = _raw_http_transport("127.0.0.1", 1234)
+    transport("GET", "/elements", None)
+    clock[0] += _KEEPALIVE_IDLE_RECONNECT_SECONDS - 0.1
+    transport("GET", "/elements", None)
+    assert constructed == 1  # still within the threshold — the same connection is reused
+
+
+# `_KEEPALIVE_IDLE_RECONNECT_SECONDS`'s own comment derives it as half of `HTTPServer.swift`'s
+# `defaultReceiveTimeout` — a relationship only prose enforces across the two languages. Reading the
+# Swift source's literal here, the way `tests/test_touch_markers.py` reads `BajutsuTouch.swift`,
+# catches a future edit to either side that quietly breaks the margin this whole mechanism depends
+# on, in the fast Python gate rather than only on-device.
+_HTTP_SERVER_SWIFT = (
+    Path(__file__).resolve().parent.parent / "BajutsuKit/Sources/BajutsuRunner/HTTPServer.swift"
+)
+
+
+def test_keepalive_idle_reconnect_threshold_stays_a_safe_margin_below_the_servers_own_timeout() -> (
+    None
+):
+    source = _HTTP_SERVER_SWIFT.read_text(encoding="utf-8")
+    match = re.search(r"defaultReceiveTimeout:\s*TimeInterval\s*=\s*([\d.]+)", source)
+    assert match, "HTTPServer.swift's defaultReceiveTimeout literal must still be findable"
+    server_receive_timeout = float(match.group(1))
+    assert server_receive_timeout >= _KEEPALIVE_IDLE_RECONNECT_SECONDS * 2, (
+        "the driver must reconnect well before the runner's own idle timeout could fire, or the "
+        "residual _is_stale race this constant closes reopens"
+    )
+
+
 def test_raw_transport_discards_a_connection_a_non_os_error_failure_touched(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1931,6 +2047,37 @@ def test_drain_interruptions_merges_the_carried_fold_with_the_wire_after_somethi
     driver.query()  # something else happened — the carry alone can no longer be trusted complete
     drained = driver.drain_interruptions()  # must hit the wire AND keep the earlier tap's carry
     assert drained.tapped == ["Not Now", "Allow"]
+
+
+def test_drain_interruptions_keeps_the_carry_when_the_wire_drain_fails() -> None:
+    # The carry must be cleared only after the wire call succeeds: a transient failure on the POST
+    # must leave whatever an earlier tap's fold already carried recoverable, not silently dropped
+    # (the docstring's own "never dropped, only ever reported and cleared here").
+    fail_drain = True
+
+    def transport(method: str, path: str, body: Mapping[str, Any] | None) -> _Reply:
+        if path == "/elements":
+            return _elements(_el_wire("h-ok", "ok", "OK"))
+        if path == "/tap":
+            return _Reply(
+                status="ok", raw=json.dumps({"labels": ["Not Now"], "unmatched": []}).encode()
+            )
+        assert path == "/interruptionPolicy/drain"
+        if fail_drain:
+            raise XcuitestChannelError("transient runner blip")
+        return _Reply(status="ok", raw=json.dumps({"labels": [], "unmatched": []}).encode())
+
+    driver = _driver(transport)
+    driver.tap({"id": "ok"})
+    driver.query()  # marks the carry no-longer-current, so the next drain must hit the (failing) wire
+    with pytest.raises(XcuitestChannelError):
+        driver.drain_interruptions()
+    # The failed call above must not have dropped "Not Now" from the carry: once the wire recovers,
+    # a later drain still reports it.
+    fail_drain = False
+    assert driver.drain_interruptions().tapped == ["Not Now"]
+    # And cleared it: a drain that forgot to would re-report "Not Now" forever.
+    assert driver.drain_interruptions().tapped == []
 
 
 def test_drain_interruptions_uses_an_uneventful_taps_present_but_empty_fold() -> None:

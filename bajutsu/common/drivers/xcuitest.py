@@ -124,6 +124,17 @@ _SOCKET_TIMEOUT_SECONDS = 15
 # job's per-step budget by a wide margin.
 _ACTUATION_TIMEOUT_SECONDS = 30
 
+# How long a kept-alive connection (BE-0407 Unit 11) may sit idle before `_raw_http_transport` forces
+# a reconnect regardless of what `_is_stale`'s peek sees. `HTTPServer.swift`'s own idle timeout
+# (`HTTPServer.defaultReceiveTimeout`, `SO_RCVTIMEO`) is 10s; the peek narrows but cannot close the
+# race against it (see `_is_stale`'s docstring), so this bounds the reused connection's age from the
+# other end instead. Half the server's window: comfortably past the spacing between ordinary driver
+# calls (so keep-alive still pays off for the common case this PR exists to speed up), while leaving
+# 5s of margin between "we decided to reuse it" and the actual `conn.request(...)` — far more than
+# scheduling jitter on a live host ever needs — so that by the time the write lands, the server's own
+# timer cannot plausibly have fired yet.
+_KEEPALIVE_IDLE_RECONNECT_SECONDS = 5.0
+
 
 def _timeout_for(method: str) -> float:
     """Per-attempt socket timeout for a channel call, chosen by its idempotency class.
@@ -629,12 +640,16 @@ def _is_stale(conn: http.client.HTTPConnection) -> bool:
     from the very first call — rather than surfacing as an ambiguous send/receive failure to sort out
     after the fact.
 
-    The peek narrows the window rather than closing it: `SO_RCVTIMEO` can still fire between this
-    check and the `conn.request(...)` that follows it, in which case the write lands on a socket the
-    runner has already torn down. `delivered` is `True` by then, so a `GET` is simply re-issued on a
-    fresh connection by `_with_retry`, while a `POST` is refused by `_is_retry_eligible` and fails
-    loudly (delivery is genuinely unknown, so re-sending it would be the same double-actuation risk
-    above) rather than getting the clean reconnect this check gives the common case.
+    The peek narrows the window rather than closing it on its own: `SO_RCVTIMEO` can still fire
+    between this check and the `conn.request(...)` that follows it, in which case the write lands on
+    a socket the runner has already torn down. `delivered` is `True` by then, so a `GET` is simply
+    re-issued on a fresh connection by `_with_retry`, while a `POST` is refused by `_is_retry_eligible`
+    and fails loudly (delivery is genuinely unknown, so re-sending it would be the same double-
+    actuation risk above) rather than getting the clean reconnect this check gives the common case.
+    `_raw_http_transport` closes the remaining gap from the other end: it forces a reconnect once a
+    connection has sat idle past `_KEEPALIVE_IDLE_RECONNECT_SECONDS`, so a connection old enough for
+    this peek to matter is never old enough for the peer's 10s timer to have plausibly fired between
+    the peek and the send.
     """
     sock = conn.sock
     if sock is None:
@@ -644,6 +659,19 @@ def _is_stale(conn: http.client.HTTPConnection) -> bool:
         return bool(readable) and sock.recv(1, socket.MSG_PEEK) == b""
     except OSError:
         return True
+
+
+@dataclass
+class _ConnState:
+    """Mutable per-lease state for `_raw_http_transport`'s kept-alive connection (BE-0407 Unit 11).
+
+    Plain fields rather than a bare `dict`, now that a second value — the monotonic time of the last
+    successful call — travels alongside the connection itself to bound how long it may be reused
+    before `_KEEPALIVE_IDLE_RECONNECT_SECONDS` forces a reconnect.
+    """
+
+    conn: http.client.HTTPConnection | None = None
+    last_success_at: float | None = None
 
 
 def _raw_http_transport(host: str, port: int) -> TransportFn:
@@ -657,31 +685,36 @@ def _raw_http_transport(host: str, port: int) -> TransportFn:
     started reaching the runner is never re-sent (a double-actuation risk), it fails loudly instead.
 
     The connection itself is kept open and reused across calls (BE-0407 Unit 11) rather than a fresh
-    one paid for every call: `holder` carries it (or `None`, before the first call and again after any
+    one paid for every call: `state` carries it (or `None`, before the first call and again after any
     failure discards it) across this closure's calls, since the driver issues them one at a time and
     holds no other reference to the socket. `HTTPServer.swift` answers in kind, keeping its own end of
     the connection open. A discard-and-reconnect on the next call is `_with_retry`'s job, unchanged;
     this only changes when a connection is *opened* — never how a failure once open is handled.
     """
-    holder: dict[str, http.client.HTTPConnection | None] = {"conn": None}
+    state = _ConnState()
 
     def transport(method: str, path: str, body: Mapping[str, Any] | None) -> _Reply:
         # One `app.snapshot()` per `/elements` (BE-0105), so the bounded read window still covers a
         # cold first snapshot; a write gets the longer actuation window (`_timeout_for`) since it
         # can't be retried after delivery — both still fail a wedged runner in a reasonable window.
         timeout = _timeout_for(method)
-        conn = holder["conn"]
-        if conn is not None and _is_stale(conn):
+        conn = state.conn
+        idle_too_long = (
+            conn is not None
+            and state.last_success_at is not None
+            and time.monotonic() - state.last_success_at > _KEEPALIVE_IDLE_RECONNECT_SECONDS
+        )
+        if conn is not None and (idle_too_long or _is_stale(conn)):
             conn.close()
             conn = None
-            holder["conn"] = None
+            state.conn = None
         delivered = False
         succeeded = False
         try:  # pragma: no cover - exercised on-device against the real runner, not on the gate
             if conn is None:
                 conn = http.client.HTTPConnection(host, port, timeout=timeout)
                 conn.connect()  # split from send: a connect failure is safe to re-issue, a send failure isn't
-                holder["conn"] = conn
+                state.conn = conn
             else:
                 # A reused connection keeps whatever timeout its last call set otherwise — a read
                 # reusing a connection an actuation last used must not inherit the longer window.
@@ -701,6 +734,9 @@ def _raw_http_transport(host: str, port: int) -> TransportFn:
             ) from exc
         else:
             succeeded = True
+            # Recorded now, not at the top of this call: it must reflect when the runner last
+            # answered, so the next call's idle gap is measured from here.
+            state.last_success_at = time.monotonic()
             return reply
         finally:
             # A connection any failure touched — an `OSError` above, or a non-`OSError` decode failure
@@ -710,7 +746,7 @@ def _raw_http_transport(host: str, port: int) -> TransportFn:
             # so this socket, and the runner connection slot behind it — alive for as long as the
             # crash-recovery layer holds the error it becomes.
             if not succeeded:
-                holder["conn"] = None
+                state.conn = None
                 if conn is not None:
                     conn.close()
 
@@ -1372,12 +1408,18 @@ class XcuitestDriver:
         or retry made "no longer provably current" without making it any less real.
         """
         carry = self._drain_carry
-        carried, carry.drained = carry.drained, base.DrainedInterruptions(tapped=[], declined=[])
+        carried = carry.drained
         if carry.is_current:
             carry.is_current = False
+            carry.drained = base.DrainedInterruptions(tapped=[], declined=[])
             return carried
+        # Cleared only once the wire has answered *and* its fold parsed: a drain that raises must
+        # leave the carry intact, or whatever it held (a genuinely tapped/declined label the fold
+        # already captured) is gone from the driver with nothing left to recover it from — exactly
+        # on the failure path where the eventual report needs it most.
         reply = self._transport("POST", "/interruptionPolicy/drain", {})
         fresh = _parse_drain_fold(reply.raw)
+        carry.drained = base.DrainedInterruptions(tapped=[], declined=[])
         return base.DrainedInterruptions(
             tapped=carried.tapped + fresh.tapped, declined=carried.declined + fresh.declined
         )
