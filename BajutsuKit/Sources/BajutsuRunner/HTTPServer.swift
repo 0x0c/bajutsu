@@ -37,7 +37,11 @@ final class HTTPServer {
     // single request, so this window is also this server's own keep-alive idle bound, not only a
     // dead-peer detector. Unbounded, either kind of stall holds one of the eight connection slots
     // below for the life of the process, and enough of them starve `/health`, which the driver then
-    // reads as a dead runner (BE-0287's whole point is that `/health` stays answerable).
+    // reads as a dead runner (BE-0287's whole point is that `/health` stays answerable). The driver
+    // reconnects at half this window (`_KEEPALIVE_IDLE_RECONNECT_SECONDS`, 5s, in
+    // `bajutsu/common/drivers/xcuitest.py`), so it retires an idle connection well before this side
+    // closes it out from under a request; that constant is derived from this one and has to be
+    // revisited whenever this value changes.
     static let defaultReceiveTimeout: TimeInterval = 10
     // A reply is written to a peer that is waiting for it, so only a peer that stopped reading — yet
     // left the connection open — stalls a send. The driver's own windows are 15s for a read and 30s
@@ -248,11 +252,17 @@ final class HTTPServer {
                 // anything to answer.
                 return
             case .malformed:
-                writeResponse(fd, .error(400, "bad request"), keepAlive: false)
+                // The connection ends either way right below, so a truncated 400 changes nothing
+                // here — unlike the `.request` case, whose loop must not continue past one.
+                _ = writeResponse(fd, .error(400, "bad request"), keepAlive: false)
                 return
             case .request(let request):
                 let response = handler(request)
-                writeResponse(fd, response, keepAlive: true)
+                // A reply that could not be fully written leaves this connection's stream
+                // desynchronized — the client is still blocked reading the truncated reply's
+                // declared `Content-Length` — so it must end here rather than loop into serving
+                // another request behind it (BE-0407 Unit 11).
+                guard writeResponse(fd, response, keepAlive: true) else { return }
             }
         }
     }
@@ -342,7 +352,15 @@ final class HTTPServer {
         return .request(HTTPRequest(method: method, path: path, body: body))
     }
 
-    private func writeResponse(_ fd: Int32, _ response: HTTPResponse, keepAlive: Bool) {
+    /// Writes the status line, headers, and body — returning whether the whole reply actually went
+    /// out. Before keep-alive (BE-0407 Unit 11) a truncated write didn't matter: this function
+    /// returned, the caller closed `fd`, and the client's `http.client` read the short body followed
+    /// by EOF and failed loudly. Now the caller loops back to serve another request on the same
+    /// connection, so a truncated write must be reported rather than silently treated as done — see
+    /// `sendAll`. Deliberately not `@discardableResult`: the one caller that has nothing further to
+    /// do with the outcome (`handleConnection`'s `.malformed` branch) says so with an explicit
+    /// `_ = `, so the compiler still flags a future call site that forgets to check it.
+    private func writeResponse(_ fd: Int32, _ response: HTTPResponse, keepAlive: Bool) -> Bool {
         let statusText: String
         switch response.statusCode {
         case 200: statusText = "OK"
@@ -358,20 +376,29 @@ final class HTTPServer {
         header += "Connection: \(keepAlive ? "keep-alive" : "close")\r\n"
         header += "\r\n"
 
-        sendAll(fd, Data(header.utf8))
-        sendAll(fd, response.body)
+        return sendAll(fd, Data(header.utf8)) && sendAll(fd, response.body)
     }
 
-    private func sendAll(_ fd: Int32, _ data: Data) {
-        data.withUnsafeBytes { ptr in
-            guard var base = ptr.baseAddress else { return }
+    /// Sends the whole buffer, or stops and reports failure the moment `send` stops making progress
+    /// (a `SO_SNDTIMEO` fire, `EPIPE`, or any other `n <= 0`). Returning `Bool` instead of swallowing
+    /// that outcome is what lets `writeResponse`/`handleConnection` tell a complete reply from a
+    /// truncated one — needed now that a connection serves more than one reply (BE-0407 Unit 11): a
+    /// caller that kept looping after a truncated write would desynchronize the stream, since the
+    /// client is still reading toward the truncated reply's own declared `Content-Length`. Not
+    /// `@discardableResult`, for the same reason as `writeResponse`: both its own callers use the
+    /// result (the `&&` in `writeResponse`), so nothing here should ever need to silence the check.
+    private func sendAll(_ fd: Int32, _ data: Data) -> Bool {
+        guard !data.isEmpty else { return true }
+        return data.withUnsafeBytes { ptr in
+            guard var base = ptr.baseAddress else { return false }
             var remaining = data.count
             while remaining > 0 {
                 let n = send(fd, base, remaining, 0)
-                if n <= 0 { break }
+                if n <= 0 { return false }
                 base += n
                 remaining -= n
             }
+            return true
         }
     }
 
