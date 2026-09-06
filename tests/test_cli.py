@@ -1725,23 +1725,33 @@ def _touch_marker_scenario(name: str = "demo") -> Scenario:
     return Scenario(name=name, steps=[])
 
 
+def _channel_always(_scenario: Scenario) -> bool:
+    """Availability for a run whose every scenario resolves to `xcuitest` with network on."""
+    return True
+
+
+def _channel_never(_scenario: Scenario) -> bool:
+    """Availability for a run no scenario of which can reach the channel (non-iOS, or no network)."""
+    return False
+
+
 def test_touch_markers_flag_sets_the_launch_env() -> None:
     scenarios = [_touch_marker_scenario("a"), _touch_marker_scenario("b")]
-    _apply_touch_markers(scenarios, True, channel_available=True)
+    _apply_touch_markers(scenarios, True, channel_available=_channel_always)
     assert [s.preconditions.launch_env["BAJUTSU_TOUCH_MARKERS"] for s in scenarios] == ["1", "1"]
 
 
 def test_touch_markers_default_leaves_the_launch_env_alone() -> None:
     """Off unless asked for: the marker is drawn inside the app under test."""
     scenario = _touch_marker_scenario()
-    _apply_touch_markers([scenario], False, channel_available=True)
+    _apply_touch_markers([scenario], False, channel_available=_channel_always)
     assert "BAJUTSU_TOUCH_MARKERS" not in scenario.preconditions.launch_env
 
 
 def test_touch_markers_does_not_override_a_scenario_that_set_it() -> None:
     scenario = _touch_marker_scenario()
     scenario.preconditions.launch_env["BAJUTSU_TOUCH_MARKERS"] = "0"
-    _apply_touch_markers([scenario], True, channel_available=True)
+    _apply_touch_markers([scenario], True, channel_available=_channel_always)
     assert scenario.preconditions.launch_env["BAJUTSU_TOUCH_MARKERS"] == "0"
 
 
@@ -1755,7 +1765,7 @@ def test_touch_markers_leave_the_channel_off_for_a_scenario_that_pinned_markers_
     scenario = _touch_marker_scenario("visual one")
     scenario.expect = [Assertion(visual=VisualMatch(baseline="home.png"))]
     scenario.preconditions.launch_env["BAJUTSU_TOUCH_MARKERS"] = "0"
-    _apply_touch_markers([scenario], True, channel_available=True)
+    _apply_touch_markers([scenario], True, channel_available=_channel_always)
     assert scenario.preconditions.launch_env["BAJUTSU_TOUCH_MARKERS"] == "0"
     assert "BAJUTSU_CONTROL_CHANNEL" not in scenario.preconditions.launch_env
 
@@ -1771,7 +1781,7 @@ def test_touch_markers_leave_markers_off_for_a_scenario_that_declined_the_channe
     scenario = _touch_marker_scenario("visual one")
     scenario.expect = [Assertion(visual=VisualMatch(baseline="home.png"))]
     scenario.preconditions.launch_env["BAJUTSU_CONTROL_CHANNEL"] = "0"
-    _apply_touch_markers([scenario], True, channel_available=True)
+    _apply_touch_markers([scenario], True, channel_available=_channel_always)
     assert "BAJUTSU_TOUCH_MARKERS" not in scenario.preconditions.launch_env
     assert scenario.preconditions.launch_env["BAJUTSU_CONTROL_CHANNEL"] == "0"
 
@@ -1784,7 +1794,7 @@ def test_touch_markers_arm_the_channel_for_a_scenario_that_compares_a_screenshot
     """
     scenario = _touch_marker_scenario("visual one")
     scenario.expect = [Assertion(visual=VisualMatch(baseline="home.png"))]
-    _apply_touch_markers([scenario], True, channel_available=True)
+    _apply_touch_markers([scenario], True, channel_available=_channel_always)
     assert scenario.preconditions.launch_env["BAJUTSU_TOUCH_MARKERS"] == "1"
     assert scenario.preconditions.launch_env["BAJUTSU_CONTROL_CHANNEL"] == "1"
 
@@ -1794,7 +1804,7 @@ def test_touch_markers_arm_the_channel_for_a_step_level_visual_assertion() -> No
     scenario.steps = [
         Step.model_validate({"assert": [Assertion(visual=VisualMatch(baseline="home.png"))]})
     ]
-    _apply_touch_markers([scenario], True, channel_available=True)
+    _apply_touch_markers([scenario], True, channel_available=_channel_always)
     assert scenario.preconditions.launch_env["BAJUTSU_CONTROL_CHANNEL"] == "1"
 
 
@@ -1808,7 +1818,7 @@ def test_touch_markers_leave_the_channel_off_for_a_scenario_that_reads_no_screen
     visual.expect = [Assertion(visual=VisualMatch(baseline="home.png"))]
     plain = _touch_marker_scenario("plain one")
 
-    _apply_touch_markers([visual, plain], True, channel_available=True)
+    _apply_touch_markers([visual, plain], True, channel_available=_channel_always)
 
     assert plain.preconditions.launch_env["BAJUTSU_TOUCH_MARKERS"] == "1"
     assert "BAJUTSU_CONTROL_CHANNEL" not in plain.preconditions.launch_env
@@ -1817,13 +1827,13 @@ def test_touch_markers_leave_the_channel_off_for_a_scenario_that_reads_no_screen
 def test_touch_markers_fall_back_to_skipping_when_the_channel_cannot_be_carried() -> None:
     """A backend the channel structurally cannot reach gets the pre-BE-0365 behavior, not a wait.
 
-    `channel_available=False` is the caller's own answer for a non-iOS backend or network
-    collection off — arming the channel there would demand an acknowledgement no app will ever
-    send, so this scenario's markers stay off entirely rather than failing every run.
+    A `channel_available` that answers False is the caller's own verdict for a non-iOS backend or
+    network collection off — arming the channel there would demand an acknowledgement no app will
+    ever send, so this scenario's markers stay off entirely rather than failing every run.
     """
     scenario = _touch_marker_scenario("visual one")
     scenario.expect = [Assertion(visual=VisualMatch(baseline="home.png"))]
-    _apply_touch_markers([scenario], True, channel_available=False)
+    _apply_touch_markers([scenario], True, channel_available=_channel_never)
     assert "BAJUTSU_TOUCH_MARKERS" not in scenario.preconditions.launch_env
     assert "BAJUTSU_CONTROL_CHANNEL" not in scenario.preconditions.launch_env
 
@@ -1834,10 +1844,62 @@ def test_touch_markers_reach_a_non_visual_scenario_even_when_the_channel_is_unav
     visual.expect = [Assertion(visual=VisualMatch(baseline="home.png"))]
     plain = _touch_marker_scenario("plain one")
 
-    _apply_touch_markers([visual, plain], True, channel_available=False)
+    _apply_touch_markers([visual, plain], True, channel_available=_channel_never)
 
     assert "BAJUTSU_TOUCH_MARKERS" not in visual.preconditions.launch_env
     assert plain.preconditions.launch_env["BAJUTSU_TOUCH_MARKERS"] == "1"
+
+
+def test_touch_markers_decide_availability_per_scenario_not_per_run(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The actuator is chosen per scenario (BE-0240), so the channel's availability is too.
+
+    A `--backend ios,web` run resolves more than one candidate, and a scenario needing a capability
+    only the web backend has escalates away from `xcuitest` on its own. Answering once for the whole
+    run would arm the channel on that escalated scenario, whose collector deliberately carries none,
+    and fail it on a wait nothing will ever answer — where before BE-0365 it simply ran unmarked.
+    """
+    stays = _touch_marker_scenario("stays on ios")
+    stays.expect = [Assertion(visual=VisualMatch(baseline="home.png"))]
+    escalates = _touch_marker_scenario("escalates to web")
+    escalates.expect = [Assertion(visual=VisualMatch(baseline="home.png"))]
+
+    _apply_touch_markers(
+        [stays, escalates], True, channel_available=lambda s: s.name == "stays on ios"
+    )
+
+    assert stays.preconditions.launch_env["BAJUTSU_TOUCH_MARKERS"] == "1"
+    assert stays.preconditions.launch_env["BAJUTSU_CONTROL_CHANNEL"] == "1"
+    assert "BAJUTSU_TOUCH_MARKERS" not in escalates.preconditions.launch_env
+    assert "BAJUTSU_CONTROL_CHANNEL" not in escalates.preconditions.launch_env
+    # Both notes fire in one run, each naming only its own scenarios — where the single `elif`
+    # this replaced could print at most one of them.
+    armed_note, channel_less_note = capsys.readouterr().err.splitlines()
+    assert "stays on ios" in armed_note
+    assert "escalates to web" not in armed_note
+    assert "escalates to web" in channel_less_note
+    assert "stays on ios" not in channel_less_note
+
+
+def test_touch_markers_announce_a_scenario_that_declined_the_channel(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A decline drops the markers, so it has to say so — the evidence alone shows only an absence.
+
+    Without the note, an operator who passed `--touch-markers` and pinned the variable on the one
+    scenario they were investigating opens the evidence, finds the touch overlay missing, and has
+    nothing on stderr telling them their own pin is why.
+    """
+    scenario = _touch_marker_scenario("visual one")
+    scenario.expect = [Assertion(visual=VisualMatch(baseline="home.png"))]
+    scenario.preconditions.launch_env["BAJUTSU_CONTROL_CHANNEL"] = "0"
+
+    _apply_touch_markers([scenario], True, channel_available=_channel_always)
+
+    err = capsys.readouterr().err
+    assert "BAJUTSU_CONTROL_CHANNEL" in err
+    assert "visual one" in err
 
 
 def test_run_declares_the_touch_markers_flag() -> None:

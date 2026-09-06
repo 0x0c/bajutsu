@@ -199,9 +199,10 @@ Log:
   the initial `expect` capture, and the post-alert-dismiss retry. `run_scenario` hides the markers
   around both. A command that cannot prove it took effect becomes an ordinary scenario failure.
   `--touch-markers` no longer skips a screenshot-comparing scenario outright. It arms the channel
-  where the run can carry one, the `xcuitest` actuator with network collection on. Everywhere else —
-  another backend, network off, or a scenario that pinned either launch-env key — it falls back to
-  the pre-BE-0365 skip.
+  for each scenario that can carry one — the `xcuitest` actuator with network collection on — and
+  asks per scenario, since BE-0240 chooses the actuator per scenario too. Everywhere else — a
+  scenario that resolved to another backend, network off, or one that pinned either launch-env
+  key — it falls back to the pre-BE-0365 skip, and stderr names which of the three reasons applied.
 
 ## References
 
