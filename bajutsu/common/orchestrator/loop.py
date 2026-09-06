@@ -611,9 +611,18 @@ def _hides_touch_markers(scenario: Scenario) -> bool:
     Both launch-env keys, never either alone: the markers are what would land in the compared image,
     and the channel is the only way to take them back out of it. `run --touch-markers` sets the pair
     only on the screenshot-comparing scenarios that can carry the channel, and never on one whose
-    verdict reads no screenshot, so a scenario drawing markers without the channel — an adopter's
-    own launch env, say — is left alone rather than failed for a capture it never asked bajutsu to
-    correct.
+    verdict reads no screenshot, so a scenario drawing markers without the channel — one that pinned
+    the marker key itself on a run that armed no channel for it, say — is left alone rather than
+    failed for a capture it never asked bajutsu to correct.
+
+    The scenario's own `preconditions.launch_env` is the whole input. A target's `launchEnv`, which
+    the launch merges *underneath* it (`environments/xcuitest.py`'s `_launch_params`), is out of
+    scope for unit 3: neither this predicate nor `_apply_touch_markers` (`run/cli.py`) reads that
+    half, so a target pinning `BAJUTSU_TOUCH_MARKERS` for every scenario reads to both as a scenario
+    that pinned nothing. Under `--touch-markers` that costs it nothing — such a scenario is armed and
+    its markers hidden like any other the channel is available for — but wherever the marker key is
+    left unset (the flag off, or one of `_apply_touch_markers`'s fallbacks) the target draws markers
+    into the compared image with nothing here to hide them, exactly as before BE-0365.
     """
     env = scenario.preconditions.launch_env
     return env.get("BAJUTSU_TOUCH_MARKERS") == "1" and env.get("BAJUTSU_CONTROL_CHANNEL") == "1"

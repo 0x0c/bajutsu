@@ -649,6 +649,11 @@ def _apply_touch_markers(
     ([`docs/evidence.md`](../../docs/evidence.md) — a relaunched process is unaffected by another
     scenario's own launch env either way).
 
+    Where these partitions read a launch env they read the scenario's own alone, the same half
+    `_hides_touch_markers` reads: a target-level `launchEnv` is out of scope for unit 3, so a target
+    that pins the marker key for every scenario keeps drawing markers whatever this function decides
+    or announces.
+
     Every internal decision here is keyed by scenario object identity, never by `.name`: nothing
     enforces unique scenario names across a multi-file run, and a name-keyed lookup would let two
     same-named scenarios that resolve to different actuators share one verdict on whether either
@@ -1244,7 +1249,9 @@ def run(
         "screenshot show where the gesture landed. Needs an app that links BajutsuKit; the marker "
         "is a layer, never an accessibility element, so no selector can see it. Evidence only — no "
         "assertion reads the markers. A scenario carrying a `visual` assertion hides them for that "
-        "one capture over the in-app control channel, which the app must be built to carry",
+        "one capture over the in-app control channel, which the app must be built to carry; where "
+        "that channel is unavailable (no network collection, or a non-xcuitest actuator) this flag "
+        "draws no markers for that scenario at all",
     ),
     # --- Baseline / schema / golden directory overrides ---
     baselines: str = typer.Option(
