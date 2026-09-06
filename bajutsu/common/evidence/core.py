@@ -192,7 +192,7 @@ def begin_after_screenshot(
 
     The shot is a device round trip, so the run loop starts it right after the action and joins it at
     the end of the same step, letting the post-step tree read run inside it. Whether it may actually
-    overlap is the backend's own answer, decided here (`start_after_screenshot` above decides the
+    overlap is the backend's own answer, decided here (`start_after_screenshot` below decides the
     sink's half): a backend that does not implement `base.BackgroundScreenshotProvider` is shot
     synchronously, and its join only hands back the record, so nothing about its timing moves.
 
@@ -216,7 +216,10 @@ def begin_after_screenshot(
         synchronous = record(write_screenshot(driver, writer, prefix))
         return lambda: synchronous
     name = f"{prefix}/after.png"
-    wait = driver.screenshot_in_background(str(writer.reserve(name)))
+    # Restricted up front, not only at the join: a screenshot can hold on-screen secrets, and the
+    # ordinary reserve/record pair would leave this one at the ambient umask for the whole overlap
+    # window rather than for no time at all (BE-0131).
+    wait = driver.screenshot_in_background(str(writer.reserve_restricted(name)))
 
     def join() -> list[Artifact]:
         wait()

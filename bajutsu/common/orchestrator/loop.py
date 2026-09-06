@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import logging
 import subprocess
-import sys
 import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field, replace
@@ -1930,6 +1929,7 @@ class _StepRunner:
         # does, XCUITest does not (see `base.BackgroundScreenshotProvider`) — so on every other
         # backend the shot both starts and completes right here, order intact.
         after_shot: list[Artifact] = []
+        body_completed = False
         finish_after_shot = start_after_screenshot(self.cfg.sink, self.cfg.driver, step_id)
         try:
             # The post-step read is lazy (BE-0234 Unit 2): `.get()` reads (once) only where a
@@ -2027,11 +2027,12 @@ class _StepRunner:
                 # an unrelated backend entirely, next to this step's *web* `elements.json`. Drop the
                 # request rather than pair the two: no artifact beats a mismatched one.
                 instant = [t for t in instant if _kind_of(t) != "rawTree"]
-            # `screenshot.after` was already shot above, right after the action; re-taking it here would
-            # overwrite that pixel with a later one and leave a duplicate entry in the manifest. This
-            # also swallows a scenario's own request for it (a bare `screenshot`, normalized in
-            # `_collect_captures`, or a `capturePolicy` rule's `screenshot.after`) — the shutter above
-            # already satisfied it, from a moment closer to the action than this call could manage.
+            # `screenshot.after` was already started above, right after the action; re-taking it here
+            # would write the same path while that shot may still be in flight (BE-0407 Unit 2), and
+            # leave a duplicate entry in the manifest. This also swallows a scenario's own request for
+            # it (a bare `screenshot`, normalized in `_collect_captures`, or a `capturePolicy` rule's
+            # `screenshot.after`) — the shutter above already satisfied it, from a moment closer to
+            # the action than this call could manage.
             instant = [t for t in instant if t != "screenshot.after"]
             # The tree read goes through `screen.get()` rather than being left to the sink's own writer
             # (`write_elements`, when `elements=None`): a read issued inside the sink is invisible to
@@ -2057,6 +2058,7 @@ class _StepRunner:
                     elements_source=active_driver.name,
                 )
             )
+            body_completed = True
         finally:
             # In a `finally` so a pending shot can never outlive the step that took it and land while
             # the *next* step is actuating — the pixels would then show a screen this step never saw.
@@ -2064,16 +2066,18 @@ class _StepRunner:
             # the synchronous shutter got for free by running before any of it. The artifact *record*
             # is not kept there, and does not need to be: the outcome carrying it is discarded with
             # the step either way.
-            failing = sys.exception()
             try:
                 after_shot = finish_after_shot()
             except Exception as exc:
                 # A device that vanished mid-step fails the read and then fails the shot against the
                 # same device. Raising here would report the shot's symptom in place of the read's
                 # cause, so on a step already failing the lost evidence is disclosed loudly instead —
-                # the same trade the wait-timeout diagnostic makes a few lines up. With nothing else
-                # failing, the shot's own failure is the step's, exactly as the synchronous one was.
-                if failing is None:
+                # the same trade the wait-timeout diagnostic makes a few lines up. With the body
+                # through, the shot's own failure is the step's, exactly as the synchronous one was.
+                # A local flag, not `sys.exception()`: that reports whatever exception the *thread*
+                # is handling, which would also answer "something failed" for a caller that ran this
+                # step from inside its own `except` — none does today, and this cannot start to.
+                if body_completed:
                     raise
                 _logger.warning("dropping this step's after.png: capture failed: %s", exc)
         outcome.artifacts.extend(after_shot)

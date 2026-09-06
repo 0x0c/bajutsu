@@ -872,7 +872,10 @@ def test_a_background_capable_backend_defers_the_shot_until_the_join(tmp_path: P
     join = start_after_screenshot(sink, driver, "00-s/step0")
     driver.started.wait(timeout=5)
     shot = tmp_path / "run1" / "00-s" / "step0" / "after.png"
-    assert not shot.exists()  # still in flight — the caller was not made to wait for it
+    assert shot.read_bytes() == b""  # still in flight — the caller was not made to wait for it
+    # Restricted before the recorder writes, not at the join: the overlap window is exactly when a
+    # screenshot holding on-screen secrets would otherwise sit at the ambient umask (BE-0131).
+    assert stat.S_IMODE(shot.stat().st_mode) == 0o600
 
     driver.release.set()
     artifacts = join()

@@ -141,6 +141,20 @@ class RunArtifactWriter:
         path.parent.mkdir(parents=True, exist_ok=True)
         return path
 
+    def reserve_restricted(self, name: str) -> Path:
+        """`reserve`, with the file created owner-only before the recorder writes into it.
+
+        For a recorder that will not have finished by the time the caller can call `record_unmasked`
+        — the background screenshot of BE-0407 Unit 2 — where the ordinary reserve/record pair would
+        leave a file that can hold on-screen secrets at the ambient umask for the whole overlap
+        window. Opening an existing path for writing keeps the mode it already has, so the recorder's
+        own bytes land already restricted (BE-0131). The caller still closes the redaction loop with
+        `record_unmasked` afterwards, for the `unmasked` bookkeeping it also does.
+        """
+        path = self.reserve(name)
+        path.touch()
+        return restrict_file(path)
+
     def record_unmasked(self, name: str) -> None:
         """Note that a reserved artifact holds content the sink could not inspect.
 

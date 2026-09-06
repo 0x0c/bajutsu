@@ -180,10 +180,12 @@ def _collect_captures(
     recorded tree describes the screen the action produced — the screen the step's `after.png`
     shows, which viewers draw element frames onto.
 
-    The screenshot half of that pair is *not* here. `_handle_action` shoots it directly, right after
-    the step's action and ahead of anything that could read the tree, so the image is never the older
-    of the two (`loop.py`); it then drops any `screenshot.after` from this list, which is why a
-    scenario's own `screenshot` spelling normalizes to that token below rather than shooting again.
+    The screenshot half of that pair is *not* here. `_handle_action` starts it directly, right after
+    the step's action and ahead of anything that could read the tree, so the image is never older
+    than the tree by more than the shot's own latency (`loop.py`; on a backend that overlaps the two,
+    BE-0407 Unit 2, that bound is all it is — the order itself is no longer fixed). It then drops any
+    `screenshot.after` from this list, which is why a scenario's own `screenshot` spelling normalizes
+    to that token below rather than shooting again.
     `screenshot.before` is dropped for a different reason: the pre-step baseline already wrote that
     file, so re-taking it post-step would mislabel a post-action pixel as `before.png`. Interval
     kinds (`video` / `deviceLog` / `appTrace`) are left in; the caller splits those out separately.

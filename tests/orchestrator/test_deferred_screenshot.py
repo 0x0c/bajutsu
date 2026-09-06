@@ -139,3 +139,19 @@ def test_a_failing_shot_never_replaces_the_steps_own_failure(
             sink=FileSink(tmp_path / "run1"),
         )
     assert "dropping this step's after.png" in caplog.text
+
+
+def test_the_next_step_reuses_the_deferred_shot_as_its_before_png(tmp_path: Path) -> None:
+    # The deferred record is produced late, in the join, and it is what BE-0407 Unit 1's reuse reads
+    # to copy the previous step's pixels into this step's `before.png`. A join moved back above that
+    # assignment would leave the reuse with nothing and quietly reinstate a per-step screenshot.
+    driver = _OverlappingDriver([el("go", "Go", ["button"])])
+    result = run_scenario(
+        driver,
+        _scenario({"name": "x", "steps": [{"tap": {"id": "go"}}, {"tap": {"id": "go"}}]}),
+        clock=FakeClock(),
+        sink=FileSink(tmp_path / "run1"),
+    )
+    assert result.ok
+    run = tmp_path / "run1" / "x"
+    assert (run / "step1" / "before.png").read_bytes() == (run / "step0" / "after.png").read_bytes()
