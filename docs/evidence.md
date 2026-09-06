@@ -412,6 +412,11 @@ verdict reads a screenshot. Everywhere else, such a scenario keeps the pre-BE-03
 draws no markers. The investigator loses the touch evidence for that one scenario. That is the same
 trade-off this channel exists to remove, where it can.
 
+That fallback stays local to the scenario that took it. One scenario can arm the channel while the
+next stays unmarked. Between scenarios, the run relaunches the app with **each scenario's own**
+launch env. An unmarked scenario runs in a process the marker variable never reached. The rest of
+the same run still draws its markers.
+
 Where the channel is active, the app side gates it twice, and the second gate is a build setting.
 `BajutsuKit` compiles the channel out unless the build passes `-DBAJUTSU_ENABLE_CONTROL_CHANNEL`.
 Compiled in, the channel stays inert without `BAJUTSU_CONTROL_CHANNEL=1` on the launch environment.
