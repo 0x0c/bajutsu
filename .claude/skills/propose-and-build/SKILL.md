@@ -130,6 +130,10 @@ does not restate those rules, it runs them:
   (敬体; the Japanese layer beneath `document-writing`, natural Japanese, not a literal rendering).
   Keep the `BE-XXXX` placeholder — the real id is allocated on `main`
   by CI ([`roadmap-id`](../../../.github/workflows/roadmap-id.yml)), never guessed.
+- **The `Author` row is a GitHub handle, resolved exactly as
+  [`ideation`](../../../.apm/skills/ideation/SKILL.md) step 4 requires** — ask the user and pass `HANDLE=<handle>`
+  to `make new-roadmap-item`; never let it fall through unconfirmed, and never guess. Step 4 also
+  carries the only legal fallback when there is no user to ask.
 - Self-review the staged diff against the CI review contract (`ideation` step 5) in its two roles
   (BE-0347), on different models — `opus` for the review/plan pass, `sonnet` for the implement
   pass, whose diff here is roadmap prose: a fresh Agent-tool subagent, blind to the authoring
