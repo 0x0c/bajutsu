@@ -7,6 +7,8 @@ any two of them is what would let a run proceed on an app state bajutsu never es
 
 from __future__ import annotations
 
+import logging
+
 import pytest
 
 from bajutsu.common.cancellation import RunCancelled
@@ -160,7 +162,9 @@ def test_a_body_that_raises_still_restores_the_capability() -> None:
     assert channel.issued == [(_TOUCH, False), (_TOUCH, True)]
 
 
-def test_a_failed_restore_does_not_mask_the_bodys_own_failure() -> None:
+def test_a_failed_restore_does_not_mask_the_bodys_own_failure(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     """The body's failure is the one worth reporting; a restore that also fails is logged, not raised.
 
     Raising the restore's error instead would report a control-channel problem for a run that failed
@@ -173,10 +177,19 @@ def test_a_failed_restore_does_not_mask_the_bodys_own_failure() -> None:
 
     channel = _OnlyOffWorks()
     with (
+        caplog.at_level(logging.WARNING, logger="bajutsu.common.orchestrator.control_channel"),
         pytest.raises(ValueError, match="cares about"),
         capability_suspended(channel, _TOUCH, timeout=_QUICK),
     ):
         raise ValueError("the assertion the run actually cares about")
+    # That warning is the only trace the swallowed restore leaves, so an investigator reading the
+    # body's failure can still tell the app was left with the capability off.
+    assert any(
+        r.name == "bajutsu.common.orchestrator.control_channel"
+        and r.levelno == logging.WARNING
+        and _TOUCH.value in r.getMessage()
+        for r in caplog.records
+    )
 
 
 def test_a_restore_failure_of_any_kind_still_lets_the_bodys_own_failure_through() -> None:

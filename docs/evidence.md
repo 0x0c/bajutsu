@@ -406,12 +406,14 @@ correct instead of hopeful.
 
 The channel needs a real Simulator process, since that is where BajutsuKit's poll loop runs. So
 carrying it takes the `xcuitest` actuator with network collection on. A `fake` run starts a
-collector, but nothing ever polls it. `adb` and `playwright` observe network a different way, with
-no such loop at all. Where both of those hold — the `xcuitest` actuator, with network collection
-on — `--touch-markers` activates the channel for a scenario whose verdict reads a screenshot.
-Everywhere else, such a scenario keeps the pre-BE-0365 behavior and
-draws no markers. The investigator loses the touch evidence for that one scenario. That is the same
-trade-off this channel exists to remove, where it can.
+collector, but nothing ever polls it. `playwright` observes network through the driver, so it
+starts no such collector at all. `adb` reports to the same host receiver iOS does, so it does start
+one — but nothing on the device answers a command, which is why the actuator check, rather than the
+shape of the collector, is what keeps the channel to `xcuitest`. Where both of those hold — the
+`xcuitest` actuator, with network collection on — `--touch-markers` activates the channel for a
+scenario whose verdict reads a screenshot. Everywhere else, such a scenario keeps the pre-BE-0365
+behavior and draws no markers. The investigator loses the touch evidence for that one scenario.
+That is the same trade-off this channel exists to remove, where it can.
 
 That fallback stays local to the scenario that took it. One scenario can arm the channel while the
 next stays unmarked. Between scenarios, the run relaunches the app with **each scenario's own**

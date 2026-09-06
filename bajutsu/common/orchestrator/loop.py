@@ -692,8 +692,11 @@ def run_scenario(
 
     `channel` (BE-0365) is the run's collector, carried here only so a `visual` verdict can hide the
     in-app touch markers for the capture it compares and restore them after. It is `None` on every
-    caller that has no collector, which is harmless: the toggle is attempted only when this
-    scenario's launch env asked for both the markers and the channel.
+    caller that has no collector, and that is *not* inert: the toggle is attempted whenever this
+    scenario's launch env sets both `BAJUTSU_TOUCH_MARKERS` and `BAJUTSU_CONTROL_CHANNEL` to `"1"`
+    and its `expect` phase has a `visual` capture to take — which a scenario pinning the pair itself
+    reaches whether or not `run --touch-markers` was passed — so a `None` channel there fails the
+    scenario loudly rather than skipping the suspension.
 
     `cancelled` (BE-0370) makes a cancelled run land as an ordinary failed scenario: it is read at
     each step boundary and inside the poll loops that back every condition wait, and the resulting

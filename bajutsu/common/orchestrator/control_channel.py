@@ -67,7 +67,8 @@ def apply_capability(
             f"cannot set {capability.value}={str(enabled).lower()}: this run's collector "
             f"({type(channel).__name__}) carries no control channel. The channel rides the HTTP "
             "collector the app POSTs to, so it reaches an app bajutsu launched with "
-            "BAJUTSU_COLLECTOR — not a backend whose network is observed through the driver."
+            "BAJUTSU_COLLECTOR — not a collector that observes network through the driver, as the "
+            "web backend's does, and a run with network collection off has no collector at all."
         )
     command_id = channel.enqueue_command(capability, enabled=enabled)
     for _ in deadline_ticks(timeout, _ACK_POLL_INIT, _ACK_POLL_MAX):

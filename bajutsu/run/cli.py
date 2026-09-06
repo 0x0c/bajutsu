@@ -814,8 +814,10 @@ def _channel_available_for(
 
     The channel rides the network collector and the app-side poll loop BajutsuKit ships only for a
     real Simulator process — the `xcuitest` actuator, not `fake`, whose collector nothing ever
-    polls, and not `adb`/`playwright`, which observe network a different way entirely
-    (`_hides_touch_markers`, `orchestrator/loop.py`).
+    polls, not `playwright`, which observes network through the driver, and not `adb`, whose lease
+    holds the same external receiver iOS reports to (BE-0283) but has no such poll loop to answer a
+    command. That last one is why this selector, rather than the collector's shape, is what keeps
+    the channel to `xcuitest` (`_hides_touch_markers`, `orchestrator/loop.py`).
 
     Asked through `select_actuator_for_scenario`, the same selector the run loop resolves each
     scenario's actuator with (BE-0240), and given the requested `backends` rather than the
