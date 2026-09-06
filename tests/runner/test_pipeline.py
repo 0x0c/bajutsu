@@ -1457,6 +1457,36 @@ def test_run_all_hands_the_lease_s_collector_to_run_scenario_as_the_channel(
     assert seen == [collector]
 
 
+def test_run_all_hands_the_target_s_launch_env_to_run_scenario(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`eff.launch_env` crosses into `run_scenario` as `target_launch_env` (BE-0365 unit 3 gap).
+
+    A target's own `launchEnv` (e.g. a `BAJUTSU_TOUCH_MARKERS` pin in `targets.<name>.launchEnv`)
+    is merged *underneath* each scenario's own at launch (`environments/xcuitest.py`'s
+    `_launch_params`). `_hides_touch_markers` has to see the same merge, or a target-level pin
+    would look to it like a scenario that pinned nothing — a stray edit that dropped this kwarg
+    would silently reopen that gap without failing any other pipeline test.
+    """
+    from dataclasses import replace
+
+    from bajutsu.common.orchestrator import run_scenario as original_run_scenario
+
+    seen: list[object] = []
+
+    def spying_run_scenario(*args: object, **kwargs: object) -> object:
+        seen.append(kwargs.get("target_launch_env"))
+        return original_run_scenario(*args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr("bajutsu.common.runner.pipeline.run_scenario", spying_run_scenario)
+
+    eff = replace(_eff(), launch_env={"BAJUTSU_TOUCH_MARKERS": "1"})
+    scenarios = [Scenario.model_validate({"name": "a", "steps": [{"tap": {"id": "ok"}}]})]
+
+    run_all(eff, scenarios, _lease)
+    assert seen == [{"BAJUTSU_TOUCH_MARKERS": "1"}]
+
+
 def test_run_all_alert_guard_for_selects_per_scenario() -> None:
     # The factory picks each scenario's guard from its systemAlertHandling: the guarded scenario
     # recovers from a blocked tap and passes; the one that disabled it fails.

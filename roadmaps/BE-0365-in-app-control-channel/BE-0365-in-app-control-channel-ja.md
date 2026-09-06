@@ -9,7 +9,7 @@
 | 提案者 | [@0x0c](https://github.com/0x0c) |
 | 状態 | **実装中** |
 | トラッキング Issue | [検索](https://github.com/bajutsu-e2e/bajutsu/issues?q=is%3Aissue+label%3Aroadmap-tracking+in%3Atitle+"BE-0365") |
-| 実装 PR | [#1699](https://github.com/bajutsu-e2e/bajutsu/pull/1699)（単位 1）、[#1788](https://github.com/bajutsu-e2e/bajutsu/pull/1788)（単位 2）、[#1916](https://github.com/bajutsu-e2e/bajutsu/pull/1916)（単位 3） |
+| 実装 PR | [#1699](https://github.com/bajutsu-e2e/bajutsu/pull/1699)（単位 1）、[#1788](https://github.com/bajutsu-e2e/bajutsu/pull/1788)（単位 2）、[#1916](https://github.com/bajutsu-e2e/bajutsu/pull/1916)（単位 3）、[#1922](https://github.com/bajutsu-e2e/bajutsu/pull/1922)（単位 3 の追補） |
 | トピック | ドライバとバックエンドのアーキテクチャ |
 | 関連 | [BE-0364](../BE-0364-in-app-control-channel/BE-0364-in-app-control-channel-ja.md) |
 <!-- /BE-METADATA -->
@@ -208,6 +208,16 @@ bajutsu が走っているアプリへコマンドを届ける経路であり、
   `visual` による判定がなく、チャネルのキーだけピン留めしたシナリオには、マーカー用のキーを
   書きません。書いてしまうと実行ループが読む組が完成し、頼まれてもいないチャネルを起動するからです。
   6 つのどの結果になったのかは、標準エラー出力に示します。
+
+- [#1922](https://github.com/bajutsu-e2e/bajutsu/pull/1922)：単位 3 の追補です。`_hides_touch_markers`
+  と `_apply_touch_markers` は、どちらもアプリが実際に起動する起動環境を読むようになりました。
+  ターゲット自身の `launchEnv` は、起動時にシナリオ自身の `launchEnv` の下に重なります。シナリオ
+  ごとに `--touch-markers` が書き込む代わりに、ターゲットが `BAJUTSU_TOUCH_MARKERS` や
+  `BAJUTSU_CONTROL_CHANNEL` を全シナリオに固定していたとします。これまでは、そのシナリオが
+  何も固定していない場合と区別がつきませんでした。そのためアプリはマーカーを描き続け、
+  `visual` の撮影に対して実行ループがそれを隠すことはありませんでした。新設した
+  `target_launch_env` という引数が、起動処理と同じ順序でターゲットの `launchEnv` を
+  両方の関数に渡します。
 
 ## 参考
 

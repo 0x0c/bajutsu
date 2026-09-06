@@ -345,6 +345,33 @@ def test_a_visual_capture_hides_the_touch_markers_and_restores_them(tmp_path: Pa
     assert [arg for k, arg in driver.actions if k == "command"] == [False, True]
 
 
+def test_a_target_level_pin_hides_the_markers_even_when_the_scenario_pins_nothing_itself(
+    tmp_path: Path,
+) -> None:
+    """A target's own `launchEnv` counts too, merged the same way the launch itself merges it.
+
+    A target can pin `BAJUTSU_TOUCH_MARKERS`/`BAJUTSU_CONTROL_CHANNEL` for every scenario
+    (`targets.<name>.launchEnv`) rather than relying on `run --touch-markers` to write them per
+    scenario. Before `target_launch_env` existed, this predicate read the scenario's own
+    `preconditions.launch_env` alone, so a scenario that set neither key itself looked exactly like
+    one that opted out — the app drew markers the run loop never hid, and a `visual` comparison
+    failed against the marker circle and trail instead of a real app defect.
+    """
+    driver = FakeDriver([el("home.title", "ホーム")])
+    (tmp_path / "00-s").mkdir(parents=True)
+    run_scenario(
+        driver,
+        _visual_scenario({}),  # the scenario itself pins neither key
+        clock=FakeClock(),
+        ctx=_visual_ctx(tmp_path),
+        channel=_RecordingChannel(driver),
+        target_launch_env={"BAJUTSU_TOUCH_MARKERS": "1", "BAJUTSU_CONTROL_CHANNEL": "1"},
+    )
+    ordered = [k for k, _ in driver.actions if k in {"command", "screenshot"}]
+    assert ordered == ["command", "screenshot", "command"]
+    assert [arg for k, arg in driver.actions if k == "command"] == [False, True]
+
+
 def test_a_visual_capture_issues_no_command_when_the_scenario_did_not_arm_the_channel(
     tmp_path: Path,
 ) -> None:

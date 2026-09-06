@@ -754,6 +754,11 @@ class _ScenarioRunner:
                 # the one direction that runs *into* the app, so it has no snapshot to hand over.
                 # A collector that carries no channel is caught at the command, not skipped here.
                 channel=lz.collector,
+                # The target's own `launchEnv`, merged underneath the scenario's own the same way
+                # the launch itself merges them, so a target-level touch-marker pin is seen here
+                # exactly as the app that launched sees it, not read as if the scenario pinned
+                # nothing (BE-0365 unit 3).
+                target_launch_env=self.eff.launch_env,
             )
             result.sid = sid  # the evidence-dir slug, so the matrix links to the real dir (BE-0076)
             result.device = lz.udid  # attribute the scenario to the device that ran it
