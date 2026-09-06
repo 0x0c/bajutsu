@@ -442,7 +442,6 @@ nothing. The scenario then fails naming both gates, rather than comparing an ima
 markers.
 
 The run loop reads those two launch-environment keys and nothing else, so it cannot tell a pair
-the flag armed from one a scenario assembled itself. It reads them from the scenario's *effective*
 the flag armed from one a scenario assembled itself. It reads them from the *effective* launch
 environment, which merges the target's own `launchEnv` underneath the scenario's own, in the same
 order the launch itself merges them — so a target-level pin counts here exactly as a scenario's own
@@ -451,6 +450,7 @@ that effective environment already sets `BAJUTSU_CONTROL_CHANNEL=1`: adding the 
 would complete the pair, and any such scenario whose `expect` runs against a baselines directory
 would then enter the channel it never asked for. Such a scenario keeps its markers off, and the run
 says so on stderr.
+
 ## Sinks (where evidence goes)
 
 ```python
