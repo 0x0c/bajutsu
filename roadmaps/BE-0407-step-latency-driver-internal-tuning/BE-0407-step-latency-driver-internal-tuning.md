@@ -9,7 +9,7 @@
 | Author | [@0x0c](https://github.com/0x0c) |
 | Status | **In progress** |
 | Tracking issue | [Search](https://github.com/bajutsu-e2e/bajutsu/issues?q=is%3Aissue+label%3Aroadmap-tracking+in%3Atitle+"BE-0407") |
-| Implementing PR | [#1897](https://github.com/bajutsu-e2e/bajutsu/pull/1897) (Group 1, units 1, 3-5), [#1912](https://github.com/bajutsu-e2e/bajutsu/pull/1912) (Group 1 unit 6, Group 2 units 7, 9, 10, 11, 12, 13, and half of 14) |
+| Implementing PR | [#1897](https://github.com/bajutsu-e2e/bajutsu/pull/1897) (Group 1, units 1, 3-5), [#1912](https://github.com/bajutsu-e2e/bajutsu/pull/1912) (Group 1 unit 6, Group 2 units 7, 9, 10, 11, 12, 13, and half of 14), [#1925](https://github.com/bajutsu-e2e/bajutsu/pull/1925) (Group 1 unit 2, completing Group 1) |
 | Topic | Platform support |
 | Related | [BE-0105](../BE-0105-xcuitest-single-snapshot-query/BE-0105-xcuitest-single-snapshot-query.md), [BE-0114](../BE-0114-driver-conformance-suite/BE-0114-driver-conformance-suite.md), [BE-0234](../BE-0234-adb-run-performance/BE-0234-adb-run-performance.md), [BE-0259](../BE-0259-assert-query-snapshot-reuse/BE-0259-assert-query-snapshot-reuse.md), [BE-0310](../BE-0310-ios-accessibility-screen-change-readiness/BE-0310-ios-accessibility-screen-change-readiness.md), [BE-0341](../BE-0341-pre-action-evidence-capture/BE-0341-pre-action-evidence-capture.md), [BE-0396](../BE-0396-ios-sfsafariviewcontroller-tree/BE-0396-ios-sfsafariviewcontroller-tree.md), [BE-0408](../BE-0408-step-latency-device-executor-protocol/BE-0408-step-latency-device-executor-protocol.md), [BE-0409](../BE-0409-step-latency-ios-device-executor/BE-0409-step-latency-ios-device-executor.md), [BE-0410](../BE-0410-step-latency-android-device-executor/BE-0410-step-latency-android-device-executor.md) |
 <!-- /BE-METADATA -->
@@ -366,6 +366,19 @@ Log:
   review and on-device verification found each unsafe as designed — see the Progress notes on
   both. Unit 14's `MAX_WARM_REUSES` half, unit 16, units 17–24, and the two Group 1 units already
   deferred remain for later PRs.
+- [#1925](https://github.com/bajutsu-e2e/bajutsu/pull/1925) — Group 1 unit 2, which completes Group 1.
+  Overlapped the step's `after.png` with the post-step tree read rather than deferring a write.
+  Measurement put the cost in the device round trip, not the write. That write comes in at 0.36ms on
+  a real device tree. Two narrow opt-ins gate the overlap, one per side.
+  `base.BackgroundScreenshotProvider` names the driver's half, `DeferredScreenshotSink` the sink's.
+  The run loop asks those two rather than branching on a backend name. A backend that declares
+  neither takes its shot synchronously, where it always did. adb alone declares the driver half. The
+  iOS runner serializes every XCUITest operation onto its main thread, so nothing overlaps there. A
+  `finally` joins the pending shot before the step returns. That answers the three design questions
+  this unit sat parked over. Tests pin three consequences the design left unlisted. A failing shot
+  never stands in for the fault that caused it. The reservation gets its owner-only mode before the
+  recorder writes into it. A shot that never wrote leaves no zero-byte husk. Measured on an API 34
+  emulator, through the real driver and sink. The shot-then-read pair fell from 3361ms to 2182ms.
 
 ## References
 
