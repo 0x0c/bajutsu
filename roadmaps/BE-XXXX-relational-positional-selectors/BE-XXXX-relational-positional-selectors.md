@@ -19,8 +19,8 @@ Five new selector fields address an element by its position relative to another 
 `above`, `below`, `leftOf`, `rightOf`, and `containing`. Each takes a nested `<Selector>` naming the
 anchor. All five are pure geometry over the `frame` every backend already reports on `Element`
 (`bajutsu/common/drivers/base.py:158`). No driver changes, no capability token, no preflight entry.
-They filter the candidate set inside `find_all`. `resolve_unique` is untouched, so an ambiguous
-match still fails rather than resolving to an arbitrary element.
+They filter the candidate set inside `find_all`. `resolve_unique`'s ambiguity rule is untouched, so
+an ambiguous match still fails rather than resolving to an arbitrary element.
 
 ## Motivation
 
@@ -48,7 +48,8 @@ change that preserves reading order.
 
 Once this ships, an author can point to two concrete differences from today. First, a control with
 no identifier and no distinguishing label becomes addressable — an icon in a labelled row, say —
-without `index` and without coordinates. Today the grammar offers those two and nothing else. Second,
+without `index` and without coordinates. Today the grammar offers those two. It also offers a
+`within` scope, which helps only when the surrounding container is itself addressable. Second,
 `audit` reports a `positional-selector` finding, naming the anchor a step depends on and that
 anchor's own tier. Today the same step draws a finding that names the risk without naming what the
 step depends on.
@@ -82,9 +83,9 @@ Selector ::= {
 
 Three cardinality rules join [dsl-grammar](../../docs/dsl-grammar.md) §4. `above` and `below` are
 mutually exclusive, and so are `leftOf` and `rightOf`. The third is new: a selector needs at least
-one field that is not an anchor. `Selector._non_empty` does not cover that case — it accepts any set
-field, a nested selector included, so `{below: {id: x}}` would load and then match everything in that
-column. A separate validator rejects it at load instead.
+one field that is not an anchor. `Selector._non_empty` does not cover that case. It accepts any set
+field, a nested selector included. So `{below: {id: x}}` would load, and then match everything in
+that column. A separate validator rejects it at load instead.
 
 ### Resolution
 
@@ -104,7 +105,7 @@ filters by `contains`. The relational fields extend that chain in this order:
    that *strictly* encloses another surviving container. `contains` is edge-inclusive, so strictly
    means it contains the other while not being contained by it. Two containers with identical frames
    therefore both survive, and stay ambiguous.
-6. `resolve_unique` runs **unchanged**.
+6. `resolve_unique` runs, applying its **unchanged** ambiguity rule.
 
 Steps 4 and 5 are total pure functions of the frame set, and **neither breaks a tie**. Two controls
 side by side in the first row below the anchor both survive. The selector then fails, exactly as two
@@ -112,7 +113,7 @@ same-labelled buttons fail today. The author narrows with `traits`, `labelMatche
 
 That is the point of the whole design. A relational field **filters** the candidate set and never
 **picks** from it. `resolve_unique`'s guarantee therefore holds unchanged at a new site. Zero
-candidates raise `ElementNotFound`, one resolves, and two or more raise `AmbiguousSelector`
+candidates raise `ElementNotFound`. One resolves. Two or more raise `AmbiguousSelector`
 ([selectors](../../docs/selectors.md)).
 
 ### An anchor resolves the way `within` does, and `find_all` stays total
@@ -122,21 +123,30 @@ matched the same way today. A candidate survives when it holds the stated relati
 element the anchor matches. Two consequences follow, and both are deliberate.
 
 **An anchor that matches nothing yields an empty candidate set** rather than an error. That keeps
-`find_all` total, and several call sites depend on it. `base.default_wait_for` (`base.py:965`) is
-`len(find_all(driver.query(), sel)) >= 1`, and every backend's `wait_for` delegates to it. Were a
-missing anchor to raise, `wait: { for: { traits: [button], below: { id: x } } }` could never wait for
-its own anchor to appear. That is the most natural use of a relational selector, so the feature would
-fight prime directive 2 rather than serve it. `_eval_exists` with `negate: true`
-(`assertions/evaluate.py:85`) and `_eval_count` with `equals: 0` (`evaluate.py:124`) need the same
-totality. A `within` container that matches nothing already returns an empty list (`base.py:783`).
-This is the existing contract, not a new one.
+`find_all` total, and eighteen call sites depend on it. `base.default_wait_for` (`base.py:965`) is
+`len(find_all(driver.query(), sel)) >= 1`. Every real backend's `wait_for` delegates to it, and
+`FakeDriver` and `WebContextDriver` inline the same check. Were a missing anchor to raise,
+`wait: { for: { traits: [button], below: { id: x } } }` could never wait for its own anchor to
+appear. That is the most natural use of a relational selector. The feature would then fight prime
+directive 2 rather than serve it. `_eval_exists` with `negate: true`
+(`bajutsu/common/assertions/evaluate.py:85`) and `_eval_count` with `equals: 0` (`evaluate.py:124`)
+need the same totality. A `within` container that matches nothing already returns an empty list
+(`base.py:783`). This is the existing contract, not a new one.
 
 **An anchor that matches several elements widens the candidate set** rather than failing on the
-spot. The widening is not silent. The extra candidates flow into `resolve_unique`, which raises
-`AmbiguousSelector` as it always does. The loud failure lands one step later, at the place that
-already owns it. `resolve_unique`'s message names the relational field and the anchor that widened
-the set, as in `the 'below:' anchor {id: form.emailLabel} matched 2 elements`. A maintainer is then
-not sent looking at the target element instead.
+spot. The extra candidates flow into `resolve_unique`, which raises `AmbiguousSelector` whenever two
+or more survive. The loud failure lands one step later, at the place that already owns it. Its
+message names the relational field and the anchor that widened the set, so a maintainer is not sent
+looking at the target element instead.
+
+That message is the one change to `resolve_unique`. It needs the anchor matches `find_all` already
+computes and currently discards. The ambiguity rule itself does not move.
+
+The widening is loud only when it leaves two or more candidates. Two anchors above one shared
+candidate leave a single survivor. `resolve_unique` also collapses content-identical candidates
+before counting (`_collapse_identical_duplicates`, `base.py:862-875`). An ambiguous anchor can
+therefore still resolve, and do it silently. Whether that residual case deserves its own diagnosis
+is an open question below, and it is about more than message quality.
 
 ### `audit` grades the candidate, and reports the anchor separately
 
@@ -183,14 +193,17 @@ would hand a team a native test that checks less than the scenario did.
    self-reference needs no new `model_rebuild()`.
 2. **Geometry helpers** (`bajutsu/common/drivers/base.py`). `beyond` and `spans_overlap` beside
    `contains`, keeping the geometry in one module, with a pure unit suite.
-3. **Resolution** (`base.find_all`). The filter chain and the frontier, with `resolve_unique`
-   untouched. `find_all` stays total, proven by tests over the call sites that depend on it:
+3. **Resolution** (`base.find_all`). The filter chain and the frontier, with `resolve_unique`'s
+   ambiguity rule untouched. `find_all` stays total, proven by tests over the call sites that depend
+   on it:
    `base.default_wait_for`, `_eval_exists` with `negate: true`, and `_eval_count` with `equals: 0`.
    The driver conformance suite
    ([BE-0114](../BE-0114-driver-conformance-suite/BE-0114-driver-conformance-suite.md)) is extended
    so every backend proves the same answers.
 4. **Anchor-attributed failures**. `resolve_unique`'s `AmbiguousSelector` message names the
-   relational field and the anchor that widened the candidate set.
+   relational field and the anchor that widened the candidate set. That needs the anchor matches
+   carried out of `find_all` rather than discarded, and the message written in the register the
+   existing `base.py` messages already use.
 5. **Static-analysis walk** (`bajutsu/analysis/audit.py`). `_with_nested` descends into all six
    anchors, and `_describe` excludes them from a selector's own text as it already excludes `within`.
    Regressions cover an identifier referenced from an anchor alone, in `coverage` and in `impact`.
@@ -254,8 +267,9 @@ Open questions to settle while building:
 - Whether the frontier needs an opt-out for an author who wants every candidate on that side. The
   default is the frontier, and an opt-out would need a determinism argument of its own.
 - Whether an anchor matching several elements deserves a distinct diagnosis. It currently widens the
-  candidate set and surfaces as an ordinary `AmbiguousSelector`, which is honest but conflates two
-  causes: a target that is genuinely ambiguous, and an anchor that was.
+  candidate set and surfaces as an ordinary `AmbiguousSelector`, which conflates two causes: a target
+  that is genuinely ambiguous, and an anchor that was. Worse, a widening that still leaves one
+  survivor resolves with no diagnosis at all.
 - How `index` and the frontier compose. `index` counts the `other`-filtered set today, and would
   count the frontier set after this change. The ordering needs stating, or the two features will
   surprise each other.
