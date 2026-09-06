@@ -201,13 +201,14 @@ Log:
   `--touch-markers` no longer skips a screenshot-comparing scenario outright. It arms the channel
   for each scenario that can carry one — the `xcuitest` actuator with network collection on — and
   asks per scenario, since BE-0240 chooses the actuator per scenario too. Everywhere else — a
-  scenario that resolved to another backend, network off, or one that pinned either launch-env
-  key — it falls back to the pre-BE-0365 skip, except where a scenario pinned
-  `BAJUTSU_TOUCH_MARKERS: "1"` itself: `setdefault` cannot turn those markers off, so that
-  scenario keeps drawing them, and one that pinned `BAJUTSU_CONTROL_CHANNEL: "1"` alongside them
-  on a run that cannot carry the channel fails outright. A scenario with no `visual` verdict that pinned only the channel key gets no marker
-  key at all, since writing one would complete the pair the run loop reads and arm a channel it never
-  asked for. Which of the six outcomes applied is named on stderr.
+  scenario that resolved to another backend, network off, or one that declined the channel by
+  pinning `BAJUTSU_CONTROL_CHANNEL` to anything but `"1"` — it falls back to the pre-BE-0365 skip,
+  except where a scenario pinned `BAJUTSU_TOUCH_MARKERS: "1"` itself: `setdefault` cannot turn
+  those markers off, so that scenario keeps drawing them, and one that pinned
+  `BAJUTSU_CONTROL_CHANNEL: "1"` alongside them on a run that cannot carry the channel fails
+  outright. A scenario with no `visual` verdict that pinned only the channel key gets no marker
+  key at all, since writing one would complete the pair the run loop reads and arm a channel it
+  never asked for. Which of the six outcomes applied is named on stderr.
 
 ## References
 
