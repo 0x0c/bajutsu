@@ -211,6 +211,21 @@ def test_methods_map_keeps_the_first_parameter_of_a_staticmethod(tmp_path: Path)
     assert rows[1].detail == "(spec: str) -> None"
 
 
+def test_methods_map_drops_cls_from_a_classmethod(tmp_path: Path) -> None:
+    """`@classmethod`'s `cls` is a receiver too, so it must be dropped like `self`."""
+    _write(
+        tmp_path / "p2.py",
+        "class Tool:\n"
+        "    @classmethod\n"
+        "    def from_config(cls, path: str) -> None:\n"
+        "        pass\n",
+    )
+
+    rows = rm.iter_methods(tmp_path / "p2.py")
+
+    assert rows[1].detail == "(path: str) -> None"
+
+
 def test_methods_map_walks_every_file_under_a_package(tmp_path: Path) -> None:
     """Given a directory, the map covers every ``.py`` file inside it, not just the top one."""
     pkg = tmp_path / "bajutsu" / "drivers"

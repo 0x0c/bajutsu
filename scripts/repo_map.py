@@ -261,13 +261,10 @@ def _format_arg(arg: ast.arg, default: ast.expr | None) -> str:
     return text
 
 
-def _is_static_or_class_method(node: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
-    """Whether ``node`` is decorated ``@staticmethod``/``@classmethod`` — the two cases where a
-    method's first parameter is not the receiver a reader already knows about."""
-    return any(
-        isinstance(d, ast.Name) and d.id in ("staticmethod", "classmethod")
-        for d in node.decorator_list
-    )
+def _is_staticmethod(node: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
+    """Whether ``node`` is decorated ``@staticmethod`` — the one case where a method's first
+    parameter is not the receiver a reader already knows about (``@classmethod``'s ``cls`` is)."""
+    return any(isinstance(d, ast.Name) and d.id == "staticmethod" for d in node.decorator_list)
 
 
 def _signature(node: ast.FunctionDef | ast.AsyncFunctionDef, *, drop_first: bool) -> str:
@@ -327,7 +324,7 @@ def _class_rows(cls: ast.ClassDef, file_path: str) -> list[Row]:
     ]
     for node in cls.body:
         if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
-            drop_first = not _is_static_or_class_method(node)
+            drop_first = not _is_staticmethod(node)
             rows.append(
                 _def_row(node, file_path, name=f"{cls.name}.{node.name}", drop_first=drop_first)
             )
