@@ -214,6 +214,12 @@ colliding or regressing each other. Full guide: [`docs/ai-development.md`](docs/
   team assigned as reviewer: `gh pr create --reviewer bajutsu-e2e/steering-committee …` (omit
   `--draft`). Everything else — anything touching product code — still starts as Draft per the rule
   above.
+- **Also keep a Draft PR in Draft while any review conversation is open.** CI-green is not enough:
+  before running `gh pr ready`, confirm every review conversation on the PR is resolved too — reply
+  or push a fix, then resolve the thread (see
+  [`docs/ai-development.md`](docs/ai-development.md#responding-to-pr-review-comments)). An open
+  conversation keeps the PR in Draft until `pr-followup` / the paced `/loop` has cleared it; the
+  human still decides when it goes ready.
 - **A wording-only review finding arrives as a companion PR (BE-0343).** When the automated reviewer
   marks a finding `(non-blocking, prose)`, a job applies that finding's own `suggestion` block to a
   `prose-fix/pr-<N>` branch and opens a small PR **based on your branch**, so your PR pays no CI
