@@ -93,7 +93,7 @@ flowchart TB
 | `common/drivers/zorder.py` | z 順応答クライアント。BajutsuKit の `nativeZ` チャネルの Python 側（BE-0355） | [drivers](drivers.md) |
 | `common/scenario/` | シナリオスキーマ（pydantic 厳格検証）+ YAML 読込 / 書出（パッケージ: `models` / `load` / `load_expanded` / `expand` / `select` / `serialize` / `edit`） | [scenarios](scenarios.md) |
 | `common/assertions/` | 機械アサーション評価（総関数。例外を投げない）（パッケージ: `evaluate` / `network` / `visual` / `schema` / `_common`、BE-0250） | [selectors](selectors.md#アサーション評価) |
-| `common/orchestrator/` | 決定的 Tier 2 run ループ（act → wait → verify）（パッケージ: `loop` / `waits` / `substitution` / `evidence_rules` / `actions`） | [run-loop](run-loop.md) |
+| `common/orchestrator/` | 決定的 Tier 2 run ループ（act → wait → verify）（パッケージ: `loop` / `waits` / `substitution` / `evidence_rules` / `actions` / `control_channel`） | [run-loop](run-loop.md) |
 | `common/cancellation.py` | 協調的キャンセル（BE-0370）。orchestrator の wait ループと runner がポーリングする読み取り専用の `CancelSource`、poll ループが安全な境界まで巻き戻すために投げる `RunCancelled` 例外、`bajutsu run` のエントリポイントが組み込む `SIGTERM` → イベントのブリッジをまとめて持ちます。Bajutsu の他モジュールを一切 import しないため、決定的コア、CLI、`serve` のいずれからも参照できます | [run-loop](run-loop.md) |
 | `common/evidence/` | 証跡の取得を役割ごとに分けたパッケージ（BE-0257）：`core`（瞬時 / 区間の取得と Sink）、`intervals`（video / deviceLog の simctl 子プロセス管理）、`media`（完了した録画の再生時間をファイルから読み取る）、`network`（collector + プロトコル内の決定的モック）、`visual`（ビジュアルリグレッションの画像比較）、`golden`（要素ツリー比較）、`redaction`（ラベル / ヘッダ / フィールド + シークレット値の redaction） | [evidence](evidence.md) |
 | `common/report/` | `manifest.json` + JUnit XML + CTRF JSON + インタラクティブ HTML に加え、完了した run の `.zip` エクスポートと再描画用のオフライン再読込（パッケージ: `format` / `manifest` / `ctrf` / `rows` / `panels` / `html` / `richtext` / `archive` / `load`）、および `rows.py` が使う行グルーピングのヘルパー `from_grouping.py` | [reporting](reporting.md) |
@@ -353,7 +353,7 @@ iOS 側の対になるジョブ `pool (xcuitest)` は、Simulator を 2 台起�
 
 #### 証跡、ネットワーク観測、レポート
 
-- 証跡: 瞬時（`screenshot`/`elements`/`actionLog`/`rawTree`。`actionLog` はステップごとの具体的な actuation、つまり送った座標、ジェスチャの形状、それを運んだ経路を持ち、`rawTree` は `elements` の元になった生ダンプで、opt-in、adb と XCUITest が対応します）+ 区間（`video`/`deviceLog`/`appTrace`）+ ネットワーク collector（`network.json`）+ **ビジュアルリグレッション**（baseline に対する `visual`。`approve` コマンドで baseline を昇格）+ `capturePolicy` 発火 + 書き出し前の **redaction 適用** + `bajutsu run --touch-markers`（BE-0371、iOS 限定、`BajutsuKit` をリンクするアプリが必要。アプリの `UIEvent` キューが実際に配送した各タッチをマーカーとして録画と各ステップのスクリーンショットへ描画、ジェスチャが実際に届いた証跡。既定では無効、リポジトリ自身の iOS CI レーンでは有効、verdict がスクリーンショットを比較するシナリオではスキップ）
+- 証跡: 瞬時（`screenshot`/`elements`/`actionLog`/`rawTree`。`actionLog` はステップごとの具体的な actuation、つまり送った座標、ジェスチャの形状、それを運んだ経路を持ち、`rawTree` は `elements` の元になった生ダンプで、opt-in、adb と XCUITest が対応します）+ 区間（`video`/`deviceLog`/`appTrace`）+ ネットワーク collector（`network.json`）+ **ビジュアルリグレッション**（baseline に対する `visual`。`approve` コマンドで baseline を昇格）+ `capturePolicy` 発火 + 書き出し前の **redaction 適用** + `bajutsu run --touch-markers`（BE-0371、iOS 限定、`BajutsuKit` をリンクするアプリが必要。アプリの `UIEvent` キューが実際に配送した各タッチをマーカーとして録画と各ステップのスクリーンショットへ描画、ジェスチャが実際に届いた証跡。既定では無効、リポジトリ自身の iOS CI レーンでは有効、`visual` アサーションが比較する 1 回の撮影のあいだだけアプリ内制御チャネル（BE-0365）で非表示）
 - ネットワーク観測 + **決定的モック**（シナリオ `mocks` → プロトコル内スタブ、実機検証済み）: `request` アサーション、`wait: { until: request }`、オフラインのスタブ応答
 - **画面遷移シグナル**（BE-0310、iOS）: `BajutsuKit` のオプトインの `BajutsuScreen` が
   `UIViewController.viewDidAppear(_:)` を swizzle し、完了したビューコントローラの出現をそれぞれ

@@ -168,7 +168,9 @@ def device_pool(  # noqa: C901, PLR0915
     # run loop). If a start fails mid-setup, stop the ones already started so we don't leak
     # listening sockets. Only the external-receiver path (the device backends) pre-starts these; a
     # driver-observed platform (web) has no up-front receiver and hooks its collector to the page
-    # built per lease instead.
+    # built per lease instead. `run/cli.py`'s `_channel_available_for` mirrors this condition to
+    # decide whether BE-0365's control channel can be armed for a scenario, so a change to which
+    # runs pre-start a collector has to be reflected there too.
     collectors: dict[str, NetworkCollector] = {}
     if network and not pool_env.observes_network_via_driver():
         try:

@@ -6,8 +6,8 @@
 > のみで決めます。AI は関与しません。最初の失敗で停止します。
 >
 > 実装: `bajutsu/common/orchestrator/`（ループ本体。package: `loop` / `waits` / `substitution` /
-> `evidence_rules` / `actions`）、`bajutsu/common/runner/`（実機起動 + レポート連結。package: `pipeline` /
-> `pool` / `launch`）。
+> `evidence_rules` / `actions` / `control_channel`）、`bajutsu/common/runner/`（実機起動 + レポート連結。
+> package: `pipeline` / `pool` / `launch`）。
 
 関連: [scenarios](scenarios.md) · [selectors](selectors.md) · [evidence](evidence.md) · [reporting](reporting.md)
 

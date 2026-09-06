@@ -28,13 +28,22 @@ from bajutsu.common.drivers import base
 from bajutsu.common.drivers.actuation import Actuation
 from bajutsu.common.drivers.webview import DomSource, WebContextDriver
 from bajutsu.common.evidence import Artifact, EvidenceSink, NullSink, intervals
-from bajutsu.common.evidence.network import TransitionSource, _no_transitions
+from bajutsu.common.evidence.network import (
+    Collector,
+    InAppCapability,
+    TransitionSource,
+    _no_transitions,
+)
 from bajutsu.common.mailbox import extract_value, select
 from bajutsu.common.orchestrator.actions import (
     _action_of,
     _do_action,
     _step_label,
     handle_system_alert_selector,
+)
+from bajutsu.common.orchestrator.control_channel import (
+    ControlChannelError,
+    capability_suspended,
 )
 from bajutsu.common.orchestrator.evidence_rules import (
     _collect_captures,
@@ -596,6 +605,49 @@ def _dispatch_after(
     return failure, verdict
 
 
+def _hides_touch_markers(scenario: Scenario) -> bool:
+    """Whether this scenario's `visual` capture has to hide the in-app touch markers (BE-0365).
+
+    Both launch-env keys, never either alone: the markers are what would land in the compared image,
+    and the channel is the only way to take them back out of it. `run --touch-markers` sets the pair
+    only on the screenshot-comparing scenarios that can carry the channel, and never on one whose
+    verdict reads no screenshot, so a scenario drawing markers without the channel — one that pinned
+    the marker key itself on a run that armed no channel for it, say — is left alone rather than
+    failed for a capture it never asked bajutsu to correct.
+
+    The scenario's own `preconditions.launch_env` is the whole input. A target's `launchEnv`, which
+    the launch merges *underneath* it (`environments/xcuitest.py`'s `_launch_params`), is out of
+    scope for unit 3: neither this predicate nor `_apply_touch_markers` (`run/cli.py`) reads that
+    half, so a target pinning `BAJUTSU_TOUCH_MARKERS` for every scenario reads to both as a scenario
+    that pinned nothing. Under `--touch-markers` that costs it nothing — such a scenario is armed and
+    its markers hidden like any other the channel is available for — but wherever the marker key is
+    left unset (the flag off, or one of `_apply_touch_markers`'s fallbacks) the target draws markers
+    into the compared image with nothing here to hide them, exactly as before BE-0365.
+    """
+    env = scenario.preconditions.launch_env
+    return env.get("BAJUTSU_TOUCH_MARKERS") == "1" and env.get("BAJUTSU_CONTROL_CHANNEL") == "1"
+
+
+def _capture_visual_actual(
+    ctx: EvalContext,
+    driver: base.Driver,
+    *,
+    channel: Collector | None,
+    hide_markers: bool,
+    cancelled: CancelSource,
+) -> None:
+    """Capture the image this scenario's `visual` assertions read, marker-free when it must be."""
+    if ctx.visual is None:
+        return
+    if not hide_markers:
+        ctx.visual.capture_actual(driver)
+        return
+    # The suspension is acknowledged at both edges, so the shutter fires against a screen the app
+    # confirmed is clear of markers rather than one it was merely asked to clear (BE-0365 unit 3).
+    with capability_suspended(channel, InAppCapability.TOUCH_VISUALIZATION, cancelled=cancelled):
+        ctx.visual.capture_actual(driver)
+
+
 def run_scenario(
     driver: base.Driver,
     scenario: Scenario,
@@ -617,6 +669,7 @@ def run_scenario(
     wall_clock: WallClock = time.time,
     capture: list[str] | None = None,
     cancelled: CancelSource = not_cancelled,
+    channel: Collector | None = None,
 ) -> RunResult:
     """Run one scenario deterministically, firing capturePolicy rules into `sink`.
 
@@ -647,6 +700,14 @@ def run_scenario(
     the report renders are the same object. A caller that builds a `Scenario` directly therefore gets
     exactly the phases it declared.
 
+    `channel` (BE-0365) is the run's collector, carried here only so a `visual` verdict can hide the
+    in-app touch markers for the capture it compares and restore them after. It is `None` on every
+    caller that has no collector, and that is *not* inert: the toggle is attempted whenever this
+    scenario's launch env sets both `BAJUTSU_TOUCH_MARKERS` and `BAJUTSU_CONTROL_CHANNEL` to `"1"`
+    and its `expect` phase has a `visual` capture to take — which a scenario pinning the pair itself
+    reaches whether or not `run --touch-markers` was passed — so a `None` channel there fails the
+    scenario loudly rather than skipping the suspension.
+
     `cancelled` (BE-0370) makes a cancelled run land as an ordinary failed scenario: it is read at
     each step boundary and inside the poll loops that back every condition wait, and the resulting
     `RunCancelled` is turned into `failure: "cancelled"` here. The trailing `expect` re-check is
@@ -658,6 +719,7 @@ def run_scenario(
     sink = sink or NullSink()
     ctx = ctx or EvalContext()
     sid = scenario_id or scenario_slug(scenario.name)
+    hide_markers = _hides_touch_markers(scenario)
     recordings = sink.start_scenario_intervals(sid, requested_intervals(scenario, capture))
     wants_screen_changed = any(r.on.event == "screenChanged" for r in scenario.capture_policy)
     outcomes: list[StepOutcome] = []
@@ -747,8 +809,9 @@ def run_scenario(
             if failure is None and scenario.expect:
                 expect = _interp_asserts(scenario.expect, live_bindings)
                 clip = _clipboard_for(expect, control)
-                if ctx.visual is not None:
-                    ctx.visual.capture_actual(driver)
+                _capture_visual_actual(
+                    ctx, driver, channel=channel, hide_markers=hide_markers, cancelled=cancelled
+                )
                 expect_results = _evaluate_expect(
                     driver, expect, network, clock, ctx=replace(ctx, clipboard=clip)
                 )
@@ -779,8 +842,13 @@ def run_scenario(
                         settle_after_alert_dismiss(
                             driver, clock, transitions=transitions, cancelled=cancelled
                         )
-                        if ctx.visual is not None:
-                            ctx.visual.capture_actual(driver)
+                        _capture_visual_actual(
+                            ctx,
+                            driver,
+                            channel=channel,
+                            hide_markers=hide_markers,
+                            cancelled=cancelled,
+                        )
                         # Re-read the clipboard too: clearing the block may have let the app update the
                         # pasteboard, so the retry must compare against the fresh value, not the stale one.
                         clip = _clipboard_for(expect, control)
@@ -806,6 +874,11 @@ def run_scenario(
                     # assertion mismatch's own detail is not lost alongside the alert that caused it.
                     note = undeclared_interruption_note(expect_undeclared)
                     failure = f"{failure} \u2014 {note}" if failure else "expect: " + note
+        except ControlChannelError as exc:
+            # A command that could not be shown to have taken effect fails the scenario rather than
+            # letting it proceed on an app state bajutsu never established (BE-0365). It lands as an
+            # ordinary failure, so the verdict stays machine-checkable and the cause is in the report.
+            failure = f"control channel: {exc}"
         except RunCancelled:
             # A cancelled run is a failed run, not a silent gap: the scenario the cancel interrupted
             # (or one whose first boundary was already past it) fails with the one spelling
