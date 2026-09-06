@@ -38,9 +38,11 @@ three ways, each already graded weak in this repository:
 An application a team owns can grow identifiers. `doctor` and
 [`coverage`](../BE-0050-e2e-coverage-map/BE-0050-e2e-coverage-map.md) push exactly that way. A
 third-party screen cannot. Neither can a legacy screen nobody may edit, nor a control a framework
-generates. `audit` scores that situation but cannot advise on it. A selector relying on `index` draws
-a `fragile-selector` finding whose text is `prefer a unique id` (`bajutsu/analysis/audit.py:247`).
-That is the one thing such a screen cannot supply. Anchoring on a neighbour that *does* carry an
+generates. `audit` scores that situation but cannot advise on it. A selector carrying only a label
+or traits draws a `moderate-selector` finding reading `is auxiliary; prefer a unique id`
+(`bajutsu/analysis/audit.py:247`), and one relying on `index` draws `fragile-selector`
+(`audit.py:243-246`). A unique id is the one thing such a screen cannot supply. Anchoring on a
+neighbour that *does* carry an
 identifier is more stable than any of the three. It survives translation, and it survives a layout
 change that preserves reading order.
 
@@ -48,8 +50,8 @@ Once this ships, an author can point to two concrete differences from today. Fir
 no identifier and no distinguishing label becomes addressable — an icon in a labelled row, say —
 without `index` and without coordinates. Today the grammar offers those two and nothing else. Second,
 `audit` reports a `positional-selector` finding, naming the anchor a step depends on and that
-anchor's own tier. Today the same step draws `fragile-selector` and advice the screen cannot act
-on.
+anchor's own tier. Today the same step draws a finding that names the risk without naming what the
+step depends on.
 
 ## Detailed design
 
@@ -78,9 +80,11 @@ Selector ::= {
 - tap: { traits: [cell], containing: { label: "Order 12345" } }
 ```
 
-Two cardinality rules join [dsl-grammar](../../docs/dsl-grammar.md) §4. `above` and `below` are
-mutually exclusive, and so are `leftOf` and `rightOf`. `Selector._non_empty` already requires at
-least one field. A selector carrying nothing but an anchor is therefore rejected at load.
+Three cardinality rules join [dsl-grammar](../../docs/dsl-grammar.md) §4. `above` and `below` are
+mutually exclusive, and so are `leftOf` and `rightOf`. The third is new: a selector needs at least
+one field that is not an anchor. `Selector._non_empty` does not cover that case — it accepts any set
+field, a nested selector included, so `{below: {id: x}}` would load and then match everything in that
+column. A separate validator rejects it at load instead.
 
 ### Resolution
 
@@ -90,15 +94,16 @@ filters by `contains`. The relational fields extend that chain in this order:
 1. The candidate's own fields (`matches`) — unchanged.
 2. The `within` scope — unchanged.
 3. `containing` — a candidate survives when some element matching the anchor has its frame inside
-   the candidate's. The existing `contains` (`base.py:749`) decides it.
-4. Half-plane **and** cross-axis span overlap. The anchor resolves through **`resolve_unique`**
-   against the same `query()` snapshot. `below` keeps candidates whose `y` starts at or past the
-   anchor's bottom edge, and whose horizontal span overlaps the anchor's. The other three mirror it.
-   Requiring the overlap is what makes `below` mean *in the same column, lower down* rather than
+   the candidate's. The existing `contains` (`base.py:749`) decides that.
+4. Half-plane **and** cross-axis span overlap. `below` keeps candidates whose `y` starts at or past
+   the anchor's bottom edge, and whose horizontal span overlaps the anchor's. The other three mirror
+   it. Requiring the overlap is what makes `below` mean *in the same column, lower down* rather than
    *anywhere lower on the screen*.
-5. The nearest-rank frontier. Drop any survivor that another survivor sits entirely between, along
-   that axis. `containing` takes the symmetric rule: drop a surviving container that encloses another
-   surviving container, so the smallest enclosing container wins.
+5. The nearest-rank frontier. Drop a survivor when another survivor sits entirely between it and
+   the anchor, along that axis. `containing` takes the symmetric rule. Drop a surviving container
+   that *strictly* encloses another surviving container. `contains` is edge-inclusive, so strictly
+   means it contains the other while not being contained by it. Two containers with identical frames
+   therefore both survive, and stay ambiguous.
 6. `resolve_unique` runs **unchanged**.
 
 Steps 4 and 5 are total pure functions of the frame set, and **neither breaks a tie**. Two controls
@@ -106,20 +111,36 @@ side by side in the first row below the anchor both survive. The selector then f
 same-labelled buttons fail today. The author narrows with `traits`, `labelMatches`, or `within`.
 
 That is the point of the whole design. A relational field **filters** the candidate set and never
-**picks** from it. So `resolve_unique`'s guarantee holds unchanged at a new site: 0 raises
-`ElementNotFound`, 1 resolves, and 2 or more raises `AmbiguousSelector`
+**picks** from it. `resolve_unique`'s guarantee therefore holds unchanged at a new site. Zero
+candidates raise `ElementNotFound`, one resolves, and two or more raise `AmbiguousSelector`
 ([selectors](../../docs/selectors.md)).
 
-### Anchor failures name the anchor
+### An anchor resolves the way `within` does, and `find_all` stays total
 
-An anchor resolving to zero elements raises `ElementNotFound`; two or more raises
-`AmbiguousSelector`. Both messages name **which anchor failed**, as in `the 'below:' anchor
-{id: form.emailLabel}`, rather than naming the target selector. Attributing an anchor's failure to
-the target would send a maintainer looking at the wrong element.
+Every anchor is matched with `find_all` rather than `resolve_unique`. A `within` container is
+matched the same way today. A candidate survives when it holds the stated relation to **some**
+element the anchor matches. Two consequences follow, and both are deliberate.
+
+**An anchor that matches nothing yields an empty candidate set** rather than an error. That keeps
+`find_all` total, and several call sites depend on it. `base.default_wait_for` (`base.py:965`) is
+`len(find_all(driver.query(), sel)) >= 1`, and every backend's `wait_for` delegates to it. Were a
+missing anchor to raise, `wait: { for: { traits: [button], below: { id: x } } }` could never wait for
+its own anchor to appear. That is the most natural use of a relational selector, so the feature would
+fight prime directive 2 rather than serve it. `_eval_exists` with `negate: true`
+(`assertions/evaluate.py:85`) and `_eval_count` with `equals: 0` (`evaluate.py:124`) need the same
+totality. A `within` container that matches nothing already returns an empty list (`base.py:783`).
+This is the existing contract, not a new one.
+
+**An anchor that matches several elements widens the candidate set** rather than failing on the
+spot. The widening is not silent. The extra candidates flow into `resolve_unique`, which raises
+`AmbiguousSelector` as it always does. The loud failure lands one step later, at the place that
+already owns it. `resolve_unique`'s message names the relational field and the anchor that widened
+the set, as in `the 'below:' anchor {id: form.emailLabel} matched 2 elements`. A maintainer is then
+not sent looking at the target element instead.
 
 ### `audit` grades the candidate, and reports the anchor separately
 
-`_tier` (`bajutsu/analysis/audit.py:46-60`) grades three ways today. `id` and `idMatches` are
+`_tier` (`bajutsu/analysis/audit.py:54-60`) grades three ways today. `id` and `idMatches` are
 `stable`. `label`, `labelMatches`, `traits`, `value`, and `within` are `moderate`. `index` is
 `fragile`. A relational field gets **no tier of its own**, because its stability is inherited from
 its anchor. Anchoring on a stable identifier and anchoring on a translated label are not the same
@@ -156,20 +177,23 @@ would hand a team a native test that checks less than the scenario did.
 
 ### Work breakdown (MECE)
 
-1. **Grammar** (`bajutsu/common/scenario/models/selector.py`). The five fields and the two
-   axis-exclusion validators, plus the [dsl-grammar](../../docs/dsl-grammar.md) §2 and §4
-   productions with the Japanese mirror. The self-reference needs no new `model_rebuild()`.
+1. **Grammar** (`bajutsu/common/scenario/models/selector.py`). The five fields, the two
+   axis-exclusion validators, and the third validator requiring one non-anchor field, plus the
+   [dsl-grammar](../../docs/dsl-grammar.md) §2 and §4 productions with the Japanese mirror. The
+   self-reference needs no new `model_rebuild()`.
 2. **Geometry helpers** (`bajutsu/common/drivers/base.py`). `beyond` and `spans_overlap` beside
    `contains`, keeping the geometry in one module, with a pure unit suite.
 3. **Resolution** (`base.find_all`). The filter chain and the frontier, with `resolve_unique`
-   untouched. The driver conformance suite
+   untouched. `find_all` stays total, proven by tests over the call sites that depend on it:
+   `base.default_wait_for`, `_eval_exists` with `negate: true`, and `_eval_count` with `equals: 0`.
+   The driver conformance suite
    ([BE-0114](../BE-0114-driver-conformance-suite/BE-0114-driver-conformance-suite.md)) is extended
    so every backend proves the same answers.
-4. **Anchor-attributed failures**. `ElementNotFound` and `AmbiguousSelector` messages naming the
-   failing anchor.
+4. **Anchor-attributed failures**. `resolve_unique`'s `AmbiguousSelector` message names the
+   relational field and the anchor that widened the candidate set.
 5. **Static-analysis walk** (`bajutsu/analysis/audit.py`). `_with_nested` descends into all six
-   anchors. Regressions cover an identifier referenced from an anchor alone, in `coverage` and in
-   `impact`.
+   anchors, and `_describe` excludes them from a selector's own text as it already excludes `within`.
+   Regressions cover an identifier referenced from an anchor alone, in `coverage` and in `impact`.
 6. **`audit` reporting**. The `positional-selector` finding, and its row in
    [cli](../../docs/cli.md).
 7. **Codegen refusal**. The three emitters name the unsupported field and point at `bajutsu run`.
@@ -213,12 +237,13 @@ would hand a team a native test that checks less than the scenario did.
 > *Detailed design* (one box per unit of work); the log records what changed and when
 > (oldest first), linking the PRs.
 
-- [ ] Grammar — the five `Selector` fields, the two axis-exclusion validators, and the DSL grammar.
+- [ ] Grammar — the five `Selector` fields, the three validators, and the DSL grammar.
 - [ ] Geometry helpers — `beyond` and `spans_overlap` beside `contains`, with a pure unit suite.
-- [ ] Resolution — the `find_all` filter chain and the frontier, with the conformance suite extended.
-- [ ] Anchor-attributed failure messages.
-- [ ] Static-analysis walk — `_with_nested` over all six anchors, with `coverage` / `impact`
-      regressions.
+- [ ] Resolution — the `find_all` filter chain and the frontier, its totality proven over
+      `default_wait_for` / `exists` / `count`, and the conformance suite extended.
+- [ ] `AmbiguousSelector` naming the relational field and the anchor that widened the set.
+- [ ] Static-analysis walk — `_with_nested` over all six anchors, `_describe` excluding them, with
+      `coverage` / `impact` regressions.
 - [ ] `audit` reporting — the `positional-selector` finding and its CLI reference row.
 - [ ] Codegen refusal in the three emitters.
 - [ ] Documentation — the selectors resolution table, a scenarios example, the two limits, and the
@@ -228,6 +253,9 @@ Open questions to settle while building:
 
 - Whether the frontier needs an opt-out for an author who wants every candidate on that side. The
   default is the frontier, and an opt-out would need a determinism argument of its own.
+- Whether an anchor matching several elements deserves a distinct diagnosis. It currently widens the
+  candidate set and surfaces as an ordinary `AmbiguousSelector`, which is honest but conflates two
+  causes: a target that is genuinely ambiguous, and an anchor that was.
 - How `index` and the frontier compose. `index` counts the `other`-filtered set today, and would
   count the frontier set after this change. The ordering needs stating, or the two features will
   surprise each other.
