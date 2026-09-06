@@ -1266,6 +1266,44 @@ def test_run_all_releases_after_each_scenario() -> None:
     assert released == ["a", "b"]  # release runs after every scenario, including the last
 
 
+def test_run_all_hands_the_lease_s_collector_to_run_scenario_as_the_channel(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The collector itself crosses into `run_scenario`, not one of its callables (BE-0365).
+
+    The control channel is the one direction that runs *into* the app, so it has no snapshot to
+    read off — a stray edit that dropped the kwarg, or passed something other than the lease's own
+    collector, would leave the scenario's `visual` captures uncorrected without failing any other
+    pipeline test.
+    """
+    from bajutsu.common.evidence.network import NetworkCollector
+    from bajutsu.common.orchestrator import run_scenario as original_run_scenario
+
+    seen: list[object] = []
+
+    def spying_run_scenario(*args: object, **kwargs: object) -> object:
+        seen.append(kwargs.get("channel"))
+        return original_run_scenario(*args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr("bajutsu.common.runner.pipeline.run_scenario", spying_run_scenario)
+
+    collector = NetworkCollector()
+    scenarios = [Scenario.model_validate({"name": "a", "steps": [{"tap": {"id": "ok"}}]})]
+
+    def lease(eff: Effective, s: Scenario) -> Lease:
+        return Lease(
+            driver=_fake_driver(),
+            sink=NullSink(),
+            relaunch=None,
+            control=None,
+            collector=collector,
+            release=lambda: None,
+        )
+
+    run_all(_eff(), scenarios, lease)
+    assert seen == [collector]
+
+
 def test_run_all_alert_guard_for_selects_per_scenario() -> None:
     # The factory picks each scenario's guard from its systemAlertHandling: the guarded scenario
     # recovers from a blocked tap and passes; the one that disabled it fails.

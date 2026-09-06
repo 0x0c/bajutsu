@@ -1727,52 +1727,114 @@ def _touch_marker_scenario(name: str = "demo") -> Scenario:
 
 def test_touch_markers_flag_sets_the_launch_env() -> None:
     scenarios = [_touch_marker_scenario("a"), _touch_marker_scenario("b")]
-    _apply_touch_markers(scenarios, True)
+    _apply_touch_markers(scenarios, True, channel_available=True)
     assert [s.preconditions.launch_env["BAJUTSU_TOUCH_MARKERS"] for s in scenarios] == ["1", "1"]
 
 
 def test_touch_markers_default_leaves_the_launch_env_alone() -> None:
     """Off unless asked for: the marker is drawn inside the app under test."""
     scenario = _touch_marker_scenario()
-    _apply_touch_markers([scenario], False)
+    _apply_touch_markers([scenario], False, channel_available=True)
     assert "BAJUTSU_TOUCH_MARKERS" not in scenario.preconditions.launch_env
 
 
 def test_touch_markers_does_not_override_a_scenario_that_set_it() -> None:
     scenario = _touch_marker_scenario()
     scenario.preconditions.launch_env["BAJUTSU_TOUCH_MARKERS"] = "0"
-    _apply_touch_markers([scenario], True)
+    _apply_touch_markers([scenario], True, channel_available=True)
     assert scenario.preconditions.launch_env["BAJUTSU_TOUCH_MARKERS"] == "0"
 
 
-def test_touch_markers_skips_a_scenario_that_compares_a_screenshot() -> None:
-    """The markers land in the very image a `visual` assertion reads, so that scenario opts out."""
+def test_touch_markers_leave_the_channel_off_for_a_scenario_that_pinned_markers_off() -> None:
+    """A scenario that pinned `BAJUTSU_TOUCH_MARKERS: "0"` draws no markers, so it needs no channel.
+
+    Arming the channel for it anyway would start the app-side poll timer inside a scenario that
+    opted out of the markers entirely — exactly what the timer's own cost analysis rules out.
+    `demos/showcase/scenarios/golden/golden_xcuitest.yaml` pins the value this way.
+    """
     scenario = _touch_marker_scenario("visual one")
     scenario.expect = [Assertion(visual=VisualMatch(baseline="home.png"))]
-    _apply_touch_markers([scenario], True)
+    scenario.preconditions.launch_env["BAJUTSU_TOUCH_MARKERS"] = "0"
+    _apply_touch_markers([scenario], True, channel_available=True)
+    assert scenario.preconditions.launch_env["BAJUTSU_TOUCH_MARKERS"] == "0"
+    assert "BAJUTSU_CONTROL_CHANNEL" not in scenario.preconditions.launch_env
+
+
+def test_touch_markers_leave_markers_off_for_a_scenario_that_declined_the_channel() -> None:
+    """Pinning `BAJUTSU_CONTROL_CHANNEL: "0"` must not leave markers drawn with nothing to hide them.
+
+    Without this, a scenario that only declined the channel — leaving `BAJUTSU_TOUCH_MARKERS`
+    untouched — would still get markers via the flag's default, fail its own `visual` comparison
+    against them, and give no reason why: the one silent-and-wrong failure this channel exists to
+    rule out.
+    """
+    scenario = _touch_marker_scenario("visual one")
+    scenario.expect = [Assertion(visual=VisualMatch(baseline="home.png"))]
+    scenario.preconditions.launch_env["BAJUTSU_CONTROL_CHANNEL"] = "0"
+    _apply_touch_markers([scenario], True, channel_available=True)
     assert "BAJUTSU_TOUCH_MARKERS" not in scenario.preconditions.launch_env
+    assert scenario.preconditions.launch_env["BAJUTSU_CONTROL_CHANNEL"] == "0"
 
 
-def test_touch_markers_skips_a_step_level_visual_assertion() -> None:
+def test_touch_markers_arm_the_channel_for_a_scenario_that_compares_a_screenshot() -> None:
+    """The markers land in the image a `visual` assertion reads, so the run loop hides them for it.
+
+    Both keys, not the markers alone: the run loop toggles the visualization only for a scenario
+    that asked for the channel too, and this is where that pairing is decided (BE-0365 unit 3).
+    """
+    scenario = _touch_marker_scenario("visual one")
+    scenario.expect = [Assertion(visual=VisualMatch(baseline="home.png"))]
+    _apply_touch_markers([scenario], True, channel_available=True)
+    assert scenario.preconditions.launch_env["BAJUTSU_TOUCH_MARKERS"] == "1"
+    assert scenario.preconditions.launch_env["BAJUTSU_CONTROL_CHANNEL"] == "1"
+
+
+def test_touch_markers_arm_the_channel_for_a_step_level_visual_assertion() -> None:
     scenario = _touch_marker_scenario()
     scenario.steps = [
         Step.model_validate({"assert": [Assertion(visual=VisualMatch(baseline="home.png"))]})
     ]
-    _apply_touch_markers([scenario], True)
-    assert "BAJUTSU_TOUCH_MARKERS" not in scenario.preconditions.launch_env
+    _apply_touch_markers([scenario], True, channel_available=True)
+    assert scenario.preconditions.launch_env["BAJUTSU_CONTROL_CHANNEL"] == "1"
 
 
-def test_touch_markers_still_reach_the_other_scenarios_in_the_same_run() -> None:
-    """The skip is per scenario, not per run: one `visual` scenario must not disarm the rest.
+def test_touch_markers_leave_the_channel_off_for_a_scenario_that_reads_no_screenshot() -> None:
+    """The channel is armed by need, not by the flag: it starts a timer inside the app under test.
 
-    Safe at this granularity because the app is relaunched with each scenario's own launch env, so
-    the skipped scenario runs in a process where the hook was never installed.
+    A run that armed it everywhere would also make the whole run depend on a build setting only the
+    screenshot-comparing scenarios actually require.
     """
     visual = _touch_marker_scenario("visual one")
     visual.expect = [Assertion(visual=VisualMatch(baseline="home.png"))]
     plain = _touch_marker_scenario("plain one")
 
-    _apply_touch_markers([visual, plain], True)
+    _apply_touch_markers([visual, plain], True, channel_available=True)
+
+    assert plain.preconditions.launch_env["BAJUTSU_TOUCH_MARKERS"] == "1"
+    assert "BAJUTSU_CONTROL_CHANNEL" not in plain.preconditions.launch_env
+
+
+def test_touch_markers_fall_back_to_skipping_when_the_channel_cannot_be_carried() -> None:
+    """A backend the channel structurally cannot reach gets the pre-BE-0365 behavior, not a wait.
+
+    `channel_available=False` is the caller's own answer for a non-iOS backend or network
+    collection off — arming the channel there would demand an acknowledgement no app will ever
+    send, so this scenario's markers stay off entirely rather than failing every run.
+    """
+    scenario = _touch_marker_scenario("visual one")
+    scenario.expect = [Assertion(visual=VisualMatch(baseline="home.png"))]
+    _apply_touch_markers([scenario], True, channel_available=False)
+    assert "BAJUTSU_TOUCH_MARKERS" not in scenario.preconditions.launch_env
+    assert "BAJUTSU_CONTROL_CHANNEL" not in scenario.preconditions.launch_env
+
+
+def test_touch_markers_reach_a_non_visual_scenario_even_when_the_channel_is_unavailable() -> None:
+    """Only the scenarios that would need the channel fall back; the rest are unaffected."""
+    visual = _touch_marker_scenario("visual one")
+    visual.expect = [Assertion(visual=VisualMatch(baseline="home.png"))]
+    plain = _touch_marker_scenario("plain one")
+
+    _apply_touch_markers([visual, plain], True, channel_available=False)
 
     assert "BAJUTSU_TOUCH_MARKERS" not in visual.preconditions.launch_env
     assert plain.preconditions.launch_env["BAJUTSU_TOUCH_MARKERS"] == "1"

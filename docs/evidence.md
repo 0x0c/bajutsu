@@ -377,27 +377,47 @@ Three properties matter before turning the flag on.
   `UIView`, which is the only way a marker could gain an accessibility representation at all.
 - **A gesture's marks stay until the next gesture starts.** No timer removes them, which is what
   keeps them in the step's screenshot, and equally why a run with the flag on produces screenshots
-  that differ from a run without it. Leave the flag off for any pixel comparison, the way the
-  Android lanes leave the operating system's `show_touches` and `pointer_location` settings off for
-  theirs (`demos/showcase/android/Makefile`).
+  that differ from a run without it. A `visual` assertion gets its own capture with the markers
+  hidden (below), so the flag and a pixel comparison can share a run. Android has no such channel:
+  its scenario lanes turn `show_touches` and `pointer_location` on device-wide, and the
+  tree-comparing and pixel-comparing lanes turn the pair back off by hand instead
+  (`demos/showcase/android/Makefile`).
 
 The markers are evidence only — no assertion reads them — and the flag is off by default for a
 plain `bajutsu run`. The repository's own iOS lanes do pass it: `.github/actions/bajutsu-e2e`
 and the showcase's `run-swiftui` / `run-uikit` targets run with the markers on, so a failure
 there shows where the gesture landed. That is safe because `visual` is the only assertion kind
 fed by a screenshot; every other kind reads the accessibility tree, the network exchanges, or
-the clipboard.
+the clipboard. Neither lane's build passes `-DBAJUTSU_ENABLE_CONTROL_CHANNEL` today. Adding a
+`visual` scenario to either fails until the build gains that setting (below).
 
-One combination turns itself off: a scenario whose verdict compares a screenshot. A `visual`
-assertion reads the very image the markers are drawn into, so `--touch-markers` skips that scenario
-and says which on stderr, rather than letting a baseline fail for a reason that has nothing to do
-with the app. Masking cannot rescue the case, because the marker follows the gesture instead of
-sitting in a fixed region. The skip costs the rest of the run nothing: the app is terminated and
-relaunched with **each scenario's own** launch env, so a skipped scenario runs in a process where
-the hook was never installed while every other scenario in the same run still draws its markers.
-Narrowing further — markers for a scenario's gestures but not for its `visual` step — is not
-possible today, since the launch environment is the only channel into the app and it is fixed for
-the life of the process.
+The run loop hides the markers for the one capture a scenario's `visual` verdict compares,
+because that assertion reads the very image the markers are drawn into. It asks the running app
+to take the markers down, waits for the app to confirm, fires the shutter, then sends a second
+command putting them back. Masking cannot rescue the case, because the marker follows the
+gesture instead of sitting in a fixed region.
+
+The request travels the in-app control channel
+([BE-0365](../roadmaps/BE-0365-in-app-control-channel/BE-0365-in-app-control-channel.md)).
+That channel is a command queue on the collector the app already reports to. The app opens no socket
+of its own, and the collector's per-run token guards the commands. The run loop waits for the app's
+acknowledgement rather than pausing for a fixed interval. That wait is what makes the capture
+correct instead of hopeful.
+
+The channel needs a real Simulator process, since that is where BajutsuKit's poll loop runs. So
+carrying it takes the `xcuitest` actuator with network collection on. A `fake` run starts a
+collector, but nothing ever polls it. `adb` and `playwright` observe network a different way, with
+no such loop at all. Where both hold, `--touch-markers` activates the channel for a scenario whose
+verdict reads a screenshot. Everywhere else, such a scenario keeps the pre-BE-0365 behavior and
+draws no markers. The investigator loses the touch evidence for that one scenario. That is the same
+trade-off this channel exists to remove, where it can.
+
+Where the channel is active, the app side gates it twice, and the second gate is a build setting.
+`BajutsuKit` compiles the channel out unless the build passes `-DBAJUTSU_ENABLE_CONTROL_CHANNEL`.
+Compiled in, the channel stays inert without `BAJUTSU_CONTROL_CHANNEL=1` on the launch environment.
+`--touch-markers` supplies that key. An app built without the compilation setting acknowledges
+nothing. The scenario then fails naming both gates, rather than comparing an image carrying the
+markers.
 
 ## Sinks (where evidence goes)
 

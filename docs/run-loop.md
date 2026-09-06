@@ -6,8 +6,8 @@
 > only from machine assertions. No AI is involved. It stops at the first failure.
 >
 > Implementation: `bajutsu/common/orchestrator/` (the loop body, package: `loop` / `waits` / `substitution` /
-> `evidence_rules` / `actions`) · `bajutsu/common/runner/` (real-device launch + report wiring, package:
-> `pipeline` / `pool` / `launch`).
+> `evidence_rules` / `actions` / `control_channel`) · `bajutsu/common/runner/` (real-device launch +
+> report wiring, package: `pipeline` / `pool` / `launch`).
 
 Related: [scenarios](scenarios.md) · [selectors](selectors.md) · [evidence](evidence.md) · [reporting](reporting.md)
 

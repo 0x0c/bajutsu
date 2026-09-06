@@ -616,38 +616,82 @@ def _visual_asserting_scenarios(scenarios: list[Scenario]) -> list[str]:
     return named
 
 
-def _apply_touch_markers(scenarios: list[Scenario], enabled: bool) -> None:
+def _apply_touch_markers(
+    scenarios: list[Scenario], enabled: bool, *, channel_available: bool
+) -> None:
     """Ask BajutsuKit to draw a marker at each touch the app receives, via the launch env.
 
     Off unless asked for: the marker is drawn inside the app under test, so it belongs to a run
     someone is investigating rather than to every run. A scenario that already sets the variable
     keeps its own value, like the mocks above.
 
-    A scenario whose verdict compares a screenshot is skipped rather than marked, and the skip is
-    announced on stderr. The markers persist until the next gesture by design, so the image a
-    `visual` assertion reads would carry a circle and a trail its baseline does not, failing the
-    scenario for a reason that has nothing to do with the app; masking cannot rescue it either, since
-    the marker follows the gesture instead of occupying a fixed region. Skipping is safe at exactly
-    this granularity because the app is terminated and relaunched with **each scenario's own** launch
-    env — on the warm-runner path as much as the cold one (`_reuse_live_runner`, BE-0291) — so a
-    skipped scenario runs in a process where the hook was never installed. Narrowing further, to the
-    steps within one scenario, is not possible today: the launch env is the only channel into the app
-    and it is fixed for the life of the process.
+    A scenario whose verdict compares a screenshot additionally needs the in-app control channel
+    (BE-0365), which the run loop uses to hide the markers for exactly that capture and restore
+    them after. The markers persist until the next gesture by design, so the image a `visual`
+    assertion reads would otherwise carry a circle and a trail its baseline does not; masking
+    cannot rescue that, since the marker follows the gesture instead of occupying a fixed region.
+
+    `channel_available` is the caller's own answer to whether this run *can* carry the channel at
+    all — the `xcuitest` actuator (a real Simulator process) with network collection on, since the
+    channel rides the network collector and the app-side poll loop BajutsuKit runs only there,
+    never under `fake` (nothing polls its collector) or a backend with no such collector at all.
+    Where it cannot, arming the channel would demand an acknowledgement no app on that backend or
+    configuration will ever send, so this reverts to the pre-BE-0365 behavior instead: the
+    scenario's markers stay off, at the same per-scenario granularity
+    ([`docs/evidence.md`](../../docs/evidence.md) — a relaunched process is unaffected by another
+    scenario's own launch env either way).
+
+    Where the channel is available, the second gate is a build setting bajutsu cannot see from
+    here, so this says on stderr what an app that answers nothing will fail with.
     """
     if not enabled:
         return
-    skipped = _visual_asserting_scenarios(scenarios)
-    if skipped:
+    visual_scenarios = set(_visual_asserting_scenarios(scenarios))
+    # A scenario that pinned its own marker value to "0" (like the mocks above, `setdefault`
+    # leaves it alone) draws no markers at all, so it needs neither the channel nor the note below
+    # — arming either for it would start the app-side poll timer for a scenario that opted out of
+    # the very thing the channel exists to correct (golden_xcuitest.yaml does exactly this pin).
+    wants_markers = [
+        s
+        for s in scenarios
+        if s.name in visual_scenarios
+        and s.preconditions.launch_env.get("BAJUTSU_TOUCH_MARKERS", "1") == "1"
+    ]
+    # A scenario can decline the channel the same way, by pinning BAJUTSU_CONTROL_CHANNEL itself.
+    # Drawing markers with no channel to hide them would fail its `visual` comparison silently and
+    # for a reason that has nothing to do with the app — the one failure mode this channel exists
+    # to rule out — so a decline here falls back exactly like `channel_available=False`: no markers
+    # at all, rather than markers arming a channel bajutsu was just told not to use.
+    declines_channel = {
+        s.name
+        for s in wants_markers
+        if s.preconditions.launch_env.get("BAJUTSU_CONTROL_CHANNEL", "1") != "1"
+    }
+    needs_channel = [s.name for s in wants_markers if s.name not in declines_channel]
+    if needs_channel and channel_available:
         typer.echo(
-            "note: --touch-markers is off for the scenario(s) whose verdict compares a screenshot, "
-            "since the markers would be drawn into the image a `visual` assertion reads: "
-            f"{', '.join(skipped)}",
+            "note: the scenario(s) whose verdict compares a screenshot need the in-app control "
+            "channel, so the markers can be hidden for that one capture; the app must be built "
+            "with -DBAJUTSU_ENABLE_CONTROL_CHANNEL or the scenario fails saying so: "
+            f"{', '.join(needs_channel)}",
+            err=True,
+        )
+    elif needs_channel:
+        typer.echo(
+            "note: --touch-markers stays off for the scenario(s) whose verdict compares a "
+            "screenshot, since this run cannot carry the in-app control channel that would hide "
+            "the markers for that one capture (needs the xcuitest actuator with network "
+            f"collection on): {', '.join(needs_channel)}",
             err=True,
         )
     for s in scenarios:
-        if s.name in skipped:
-            continue
+        if s.name in declines_channel:
+            continue  # explicitly declined the channel: no markers, matching the fallback above
+        if s.name in needs_channel and not channel_available:
+            continue  # the channel-less fallback above: no markers, so nothing to hide
         s.preconditions.launch_env.setdefault("BAJUTSU_TOUCH_MARKERS", "1")
+        if s.name in needs_channel:
+            s.preconditions.launch_env.setdefault("BAJUTSU_CONTROL_CHANNEL", "1")
 
 
 def _resolve_evidence_dirs(
@@ -1058,8 +1102,8 @@ def run(
         help="draw a marker at each touch the app receives, so the recorded video and each step's "
         "screenshot show where the gesture landed. Needs an app that links BajutsuKit; the marker "
         "is a layer, never an accessibility element, so no selector can see it. Evidence only — no "
-        "assertion reads the markers — and automatically off for a scenario carrying a `visual` "
-        "assertion, whose screenshot comparison they would break",
+        "assertion reads the markers. A scenario carrying a `visual` assertion hides them for that "
+        "one capture over the in-app control channel, which the app must be built to carry",
     ),
     # --- Baseline / schema / golden directory overrides ---
     baselines: str = typer.Option(
@@ -1214,7 +1258,15 @@ def run(
         # `request` waits.
         network = _resolve_network(network, eff.run_defaults.network)
         _apply_mocks(scenarios, network)
-        _apply_touch_markers(scenarios, touch_markers)
+        # The control channel BE-0365 uses to hide the markers rides the network collector, and
+        # needs the app-side poll loop BajutsuKit ships only for a real Simulator process — the
+        # `xcuitest` actuator, not `fake`, whose collector nothing ever polls, and not `adb`/
+        # `playwright`, which observe network a different way entirely (`_hides_touch_markers`,
+        # `orchestrator/loop.py`). A scenario needing the channel elsewhere, or with network
+        # collection off, falls back to the pre-BE-0365 skip rather than a wait no app will answer.
+        _apply_touch_markers(
+            scenarios, touch_markers, channel_available=actuator == "xcuitest" and network
+        )
         baselines_dir, schemas_dir, gc = _resolve_evidence_dirs(
             baselines, schemas, goldens, eff, files[0]
         )
