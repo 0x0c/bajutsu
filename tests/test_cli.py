@@ -1882,6 +1882,27 @@ def test_touch_markers_decide_availability_per_scenario_not_per_run(
     assert "stays on ios" not in channel_less_note
 
 
+def test_touch_markers_keeps_same_named_scenarios_independent() -> None:
+    """Two scenarios sharing a `.name` must not be conflated into one channel verdict.
+
+    Nothing enforces unique scenario names across a multi-file run. Before this, every partition
+    here was keyed by `.name`, so a scenario that answered `channel_available=True` and a
+    same-named one that answered `False` collapsed into a single verdict — arming the channel on
+    both, including the one whose actuator structurally cannot carry it.
+    """
+    carries = _touch_marker_scenario("dup")
+    carries.expect = [Assertion(visual=VisualMatch(baseline="home.png"))]
+    escalates = _touch_marker_scenario("dup")
+    escalates.expect = [Assertion(visual=VisualMatch(baseline="home.png"))]
+
+    _apply_touch_markers([carries, escalates], True, channel_available=lambda s: s is carries)
+
+    assert carries.preconditions.launch_env["BAJUTSU_TOUCH_MARKERS"] == "1"
+    assert carries.preconditions.launch_env["BAJUTSU_CONTROL_CHANNEL"] == "1"
+    assert "BAJUTSU_TOUCH_MARKERS" not in escalates.preconditions.launch_env
+    assert "BAJUTSU_CONTROL_CHANNEL" not in escalates.preconditions.launch_env
+
+
 def test_touch_markers_announce_a_scenario_that_declined_the_channel(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
