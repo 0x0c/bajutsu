@@ -284,10 +284,12 @@ and a rerun of the tracer.
   `query()` path evidence and `serve` actually consume" instead — the intent the stale text was
   reaching for.
 - [x] Group 2, unit 11 — HTTP keep-alive on both ends. One persistent connection reused across a
-  driver's whole lease, discarded and reconnected only when a proactive liveness check (a
-  zero-timeout `select` plus a non-consuming peek) finds it already closed, or an actual failure
-  says so; `HTTPServer.swift` loops per connection until the peer goes idle or sends something
-  malformed.
+  driver's whole lease, discarded and reconnected when a proactive liveness check (a zero-timeout
+  `select` plus a non-consuming peek) finds it already closed, an actual failure says so, or it has
+  simply sat idle too long (past a conservative fraction of the runner's own idle timeout — the
+  peek alone leaves a residual race against that timeout that a PR review round later closed);
+  `HTTPServer.swift` loops per connection until the peer goes idle, sends something malformed, or a
+  reply to it could not be fully written (ending the connection rather than desynchronizing it).
 - [x] Group 2, unit 12 — re-query immediately on the first stale-handle retry; the second retry
   keeps its 1.0s backoff.
 - [x] Group 2, unit 13 — check `alerts.firstMatch.exists` before enumerating SpringBoard alert
