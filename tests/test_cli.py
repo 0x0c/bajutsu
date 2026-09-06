@@ -1831,6 +1831,41 @@ def test_touch_markers_self_pinned_note_names_the_scenario(
     assert "stays off" not in err
 
 
+def test_touch_markers_warns_a_self_pinned_channel_will_fail_not_just_go_unhidden() -> None:
+    """A scenario pinning *both* keys itself, on a run that can't carry the channel, will fail.
+
+    `_hides_touch_markers` (`orchestrator/loop.py`) reads both launch-env keys with no memory of
+    this function's own "can't carry it" verdict — pinning both `"1"` survives the `continue`
+    untouched, so the run loop invokes the channel anyway and `apply_capability` fails the
+    scenario loudly. That is a materially different outcome from "keeps drawing markers with
+    nothing to hide them", so it needs its own note rather than reusing that one.
+    """
+    scenario = _touch_marker_scenario("visual one")
+    scenario.expect = [Assertion(visual=VisualMatch(baseline="home.png"))]
+    scenario.preconditions.launch_env["BAJUTSU_TOUCH_MARKERS"] = "1"
+    scenario.preconditions.launch_env["BAJUTSU_CONTROL_CHANNEL"] = "1"
+    _apply_touch_markers([scenario], True, channel_available=_channel_never)
+    assert scenario.preconditions.launch_env["BAJUTSU_TOUCH_MARKERS"] == "1"
+    assert scenario.preconditions.launch_env["BAJUTSU_CONTROL_CHANNEL"] == "1"
+
+
+def test_touch_markers_will_fail_note_names_the_scenario_and_not_the_other_notes(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    scenario = _touch_marker_scenario("visual one")
+    scenario.expect = [Assertion(visual=VisualMatch(baseline="home.png"))]
+    scenario.preconditions.launch_env["BAJUTSU_TOUCH_MARKERS"] = "1"
+    scenario.preconditions.launch_env["BAJUTSU_CONTROL_CHANNEL"] = "1"
+
+    _apply_touch_markers([scenario], True, channel_available=_channel_never)
+
+    err = capsys.readouterr().err
+    assert "will fail" in err
+    assert "visual one" in err
+    assert "nothing here can hide them" not in err
+    assert "stays off" not in err
+
+
 def test_touch_markers_arm_the_channel_for_a_scenario_that_compares_a_screenshot() -> None:
     """The markers land in the image a `visual` assertion reads, so the run loop hides them for it.
 

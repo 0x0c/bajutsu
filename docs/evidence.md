@@ -407,8 +407,9 @@ correct instead of hopeful.
 The channel needs a real Simulator process, since that is where BajutsuKit's poll loop runs. So
 carrying it takes the `xcuitest` actuator with network collection on. A `fake` run starts a
 collector, but nothing ever polls it. `adb` and `playwright` observe network a different way, with
-no such loop at all. Where both hold, `--touch-markers` activates the channel for a scenario whose
-verdict reads a screenshot. Everywhere else, such a scenario keeps the pre-BE-0365 behavior and
+no such loop at all. Where both of those hold — the `xcuitest` actuator, with network collection
+on — `--touch-markers` activates the channel for a scenario whose verdict reads a screenshot.
+Everywhere else, such a scenario keeps the pre-BE-0365 behavior and
 draws no markers. The investigator loses the touch evidence for that one scenario. That is the same
 trade-off this channel exists to remove, where it can.
 

@@ -654,12 +654,14 @@ def _apply_touch_markers(
     same-named scenarios that resolve to different actuators share one verdict on whether either
     can carry the channel — arming it on one that structurally cannot.
 
-    Every outcome says so on stderr, since all four are silent in the evidence otherwise: where
+    Every outcome says so on stderr, since all five are silent in the evidence otherwise: where
     the channel is available, one of its two gates is a build setting bajutsu cannot see from
     here, so this says what an app that answers nothing will fail with; where it is unavailable or
     declined, the markers an investigator asked for simply do not appear — unless the scenario
-    pinned `BAJUTSU_TOUCH_MARKERS` to `"1"` itself, which `setdefault` never overrides, so that one
-    keeps drawing markers nothing here can hide, and gets the fourth note instead.
+    pinned `BAJUTSU_TOUCH_MARKERS` to `"1"` itself, which `setdefault` never overrides. That one
+    keeps drawing markers nothing here can hide, *unless* it also pinned `BAJUTSU_CONTROL_CHANNEL`
+    to `"1"` on a run that cannot carry it — the run loop reads both keys with no memory of this
+    function's own prediction, so that combination fails the scenario loudly instead.
     """
     if not enabled:
         return
@@ -694,17 +696,33 @@ def _apply_touch_markers(
     channel_less = {id(s) for s in needs_channel if id(s) not in armed}
     # `setdefault` below never overrides a key a scenario already set, so a scenario that pinned
     # `BAJUTSU_TOUCH_MARKERS: "1"` itself keeps drawing markers regardless of what this function
-    # decides — "stays off" would be false for one of these even though it landed in
-    # `declines_channel` or `channel_less` exactly like a defaulted scenario. Split that subset out
-    # so each side gets a note that describes what actually happens to it.
-    pinned_on = {
+    # decides. What that actually leads to still depends on `BAJUTSU_CONTROL_CHANNEL`, which
+    # `_hides_touch_markers` (`orchestrator/loop.py`) reads from the launch env alone, with no
+    # memory of this function's own prediction:
+    #   - pinned `"1"` and declined (`declines_channel`), or pinned `"1"` with the channel unset
+    #     and unavailable (`channel_less`): the channel is never invoked (one of its two keys is
+    #     not `"1"` at launch), so the markers just go unhidden — no failure.
+    #   - pinned `"1"` *and* `BAJUTSU_CONTROL_CHANNEL` also pinned `"1"`, landing in
+    #     `channel_less`: both keys read `"1"` at launch, so the run loop invokes the channel
+    #     anyway, and `apply_capability` fails the scenario loudly against a collector that
+    #     structurally cannot answer — this function's own "can't carry it" verdict never reaches
+    #     the launch env to stop it.
+    touch_pinned_on = {
         id(s)
         for s in wants_markers
         if s.preconditions.launch_env.get("BAJUTSU_TOUCH_MARKERS") == "1"
-        and (id(s) in declines_channel or id(s) in channel_less)
     }
-    channel_less_drops = channel_less - pinned_on
-    declines_drops = declines_channel - pinned_on
+    channel_pinned_on = {
+        id(s)
+        for s in wants_markers
+        if s.preconditions.launch_env.get("BAJUTSU_CONTROL_CHANNEL") == "1"
+    }
+    channel_less_will_fail = channel_less & touch_pinned_on & channel_pinned_on
+    pinned_unhidden = (touch_pinned_on & declines_channel) | (
+        touch_pinned_on & (channel_less - channel_less_will_fail)
+    )
+    channel_less_drops = channel_less - channel_less_will_fail - pinned_unhidden
+    declines_drops = declines_channel - pinned_unhidden
     if armed:
         typer.echo(
             "note: the scenario(s) whose verdict compares a screenshot need the in-app control "
@@ -730,17 +748,26 @@ def _apply_touch_markers(
             f"the capture their `visual` verdict compares: {', '.join(declined_names)}",
             err=True,
         )
-    if pinned_on:
-        pinned_names = sorted(s.name for s in wants_markers if id(s) in pinned_on)
+    if pinned_unhidden:
+        pinned_names = sorted(s.name for s in wants_markers if id(s) in pinned_unhidden)
         typer.echo(
             "note: the scenario(s) that pinned BAJUTSU_TOUCH_MARKERS themselves keep drawing "
             "markers even though nothing here can hide them for the capture their `visual` "
             f"verdict compares: {', '.join(pinned_names)}",
             err=True,
         )
+    if channel_less_will_fail:
+        failing_names = sorted(s.name for s in wants_markers if id(s) in channel_less_will_fail)
+        typer.echo(
+            "note: the scenario(s) that pinned both BAJUTSU_TOUCH_MARKERS and "
+            "BAJUTSU_CONTROL_CHANNEL themselves will fail: the run loop reads both keys and tries "
+            "the channel regardless of this run's own actuator, which cannot carry it: "
+            f"{', '.join(failing_names)}",
+            err=True,
+        )
     for s in scenarios:
-        if id(s) in pinned_on:
-            continue  # already "1" by the scenario's own pin; setdefault below would be a no-op
+        if id(s) in pinned_unhidden or id(s) in channel_less_will_fail:
+            continue  # already set by the scenario's own pin; setdefault below would be a no-op
         if id(s) in declines_channel or id(s) in channel_less:
             continue  # no channel to hide the markers: no markers, matching the notes above
         s.preconditions.launch_env.setdefault("BAJUTSU_TOUCH_MARKERS", "1")
