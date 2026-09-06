@@ -243,6 +243,18 @@ def _mask_url(url: str) -> str:
         return "***"
 
 
+def _mask_endpoint(ep_url: str) -> str:
+    """Mask an endpoint's *un-interpolated* URL template for safe, distinguishing log labels.
+
+    The documented config shape puts the whole URL inside a secret token
+    (``url: "${secrets.SLACK_WEBHOOK_URL}"``, docs/configuration.md), so ``ep_url`` alone can
+    carry no ``://`` for `_mask_url` to find a host in — it would degrade every such endpoint to
+    the same "://None/***" label. Falling back to the template string itself keeps endpoints
+    distinguishable; it only ever names a secret, never holds one.
+    """
+    return _mask_url(ep_url) if "://" in ep_url else f"endpoint {ep_url!r}"
+
+
 def _deliver(url: str, payload: dict[str, Any], *, masked: str) -> bool:
     """POST JSON to *url* with bounded timeout and retry. Returns success.
 
@@ -333,7 +345,7 @@ def emit(
             if not _should_fire(ep, ep_summary, prior_ok):
                 continue
 
-            masked = _mask_url(ep.url)
+            masked = _mask_endpoint(ep.url)
             url = str(interp.interpolate(ep.url, bindings))
             if "${" in url:
                 logger.warning(
@@ -353,8 +365,8 @@ def emit(
                 any_fired = True
         except Exception:
             logger.warning(
-                "webhook notification failed for endpoint %s",
-                _mask_url(ep.url),
+                "webhook notification failed for %s",
+                _mask_endpoint(ep.url),
                 exc_info=True,
             )
 
@@ -380,7 +392,7 @@ def emit_start(
             if "start" not in ep.on:
                 continue
 
-            masked = _mask_url(ep.url)
+            masked = _mask_endpoint(ep.url)
             url = str(interp.interpolate(ep.url, bindings))
             if "${" in url:
                 logger.warning(
@@ -407,7 +419,7 @@ def emit_start(
         except Exception:
             logger.warning(
                 "webhook start notification failed for %s",
-                _mask_url(ep.url),
+                _mask_endpoint(ep.url),
                 exc_info=True,
             )
 
