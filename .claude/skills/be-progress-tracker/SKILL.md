@@ -62,6 +62,11 @@ Field rules, all mandatory:
   sentence. Real values carry both characters (`Platform-aware backend registry & selection`,
   `roadmaps/BE-NNNN-<slug>/`), and unescaped the browser silently swallows them instead of
   showing them.
+- **Language** — write every freely composed sentence (the Overview paragraph, each work-log
+  sentence) in the language the human is using in *this* session, not always English. Text that is
+  copied verbatim from an existing source — `{ID}`, the roadmap item's own `{Title}` and `Status`
+  string, a step title lifted from the calling workflow's own step list — stays in that source's
+  own language regardless; only the prose this skill itself composes follows the session language.
 - **Roadmap-link button** — once the calling workflow has handed over the roadmap item's
   repo-relative path, include the `<a class="link-btn" href="https://github.com/bajutsu-e2e/bajutsu/blob/main/{that path}">Roadmap item ↗</a>`
   button verbatim, right after the status badge — it needs its own border/hover styling to read as
