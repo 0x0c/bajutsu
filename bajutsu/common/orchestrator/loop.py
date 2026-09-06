@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import subprocess
+import sys
 import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field, replace
@@ -1915,12 +1916,20 @@ class _StepRunner:
         # own latency — a `wait for` that returns the instant its target appears can pair a tree read
         # mid-transition with pixels a moment later. Dropping the seed here would swap that for the
         # opposite skew and a full tree read per `assert`/`wait` step, so the reuse stays and the
-        # guarantee is stated for what it is: the shutter leads every consumer downstream of it.
-        # Started here and joined at the end of this step, so the post-step tree read below runs
-        # inside the shot rather than after it (BE-0407 Unit 2). Only a backend that says its channel
-        # admits a second call in flight actually defers — adb does, XCUITest does not (see
-        # `base.BackgroundScreenshotProvider`) — so every other backend still shoots synchronously,
-        # right here, exactly as the paragraph above describes.
+        # guarantee is stated for what it is: the shutter's *start* leads every consumer downstream
+        # of it.
+        #
+        # Its start, not its completion, because the shot is begun here and joined at the end of this
+        # step so the post-step tree read runs inside it (BE-0407 Unit 2). What that costs is the
+        # fixed *direction* of the skew above: on a deferring backend the read and the pixels are
+        # concurrent, so either can land first. What it buys is the skew's size — bounded by the
+        # shot's own latency rather than by a whole tree read. A consumer added between here and the
+        # post-step capture may rely on the bound, never on the order.
+        #
+        # Only a backend that says its channel admits a second call in flight defers at all — adb
+        # does, XCUITest does not (see `base.BackgroundScreenshotProvider`) — so on every other
+        # backend the shot both starts and completes right here, order intact.
+        after_shot: list[Artifact] = []
         finish_after_shot = start_after_screenshot(self.cfg.sink, self.cfg.driver, step_id)
         try:
             # The post-step read is lazy (BE-0234 Unit 2): `.get()` reads (once) only where a
@@ -2050,10 +2059,23 @@ class _StepRunner:
             )
         finally:
             # In a `finally` so a pending shot can never outlive the step that took it and land while
-            # the *next* step is actuating — the artifact would then show a screen this step never
-            # saw. It is also what keeps `after.png` on the path where the step body raises, which
-            # the synchronous shutter got for free by running before any of it.
-            after_shot = finish_after_shot()
+            # the *next* step is actuating — the pixels would then show a screen this step never saw.
+            # It is also what keeps `after.png`'s bytes on the path where the step body raises, which
+            # the synchronous shutter got for free by running before any of it. The artifact *record*
+            # is not kept there, and does not need to be: the outcome carrying it is discarded with
+            # the step either way.
+            failing = sys.exception()
+            try:
+                after_shot = finish_after_shot()
+            except Exception as exc:
+                # A device that vanished mid-step fails the read and then fails the shot against the
+                # same device. Raising here would report the shot's symptom in place of the read's
+                # cause, so on a step already failing the lost evidence is disclosed loudly instead —
+                # the same trade the wait-timeout diagnostic makes a few lines up. With nothing else
+                # failing, the shot's own failure is the step's, exactly as the synchronous one was.
+                if failing is None:
+                    raise
+                _logger.warning("dropping this step's after.png: capture failed: %s", exc)
         outcome.artifacts.extend(after_shot)
         # Remembered for the *next* step's pre-step baseline to reuse as its `before.png` (BE-0407
         # Unit 1) instead of a fresh screenshot — `None` when nothing was actually written (a

@@ -204,21 +204,26 @@ def begin_after_screenshot(
     Returns:
         The join, which completes the capture and returns the step's screenshot artifact record.
     """
-    name = f"{prefix}/after.png"
-    target = str(writer.reserve(name))
-    record = [Artifact(name, "screenshot", "driver", _depicts(driver.name, "after"))]
+
+    def record(name: str) -> list[Artifact]:
+        return [Artifact(name, "screenshot", "driver", _depicts(driver.name, "after"))]
+
+    # `write_screenshot`, not an inlined copy of it, so a later change to how a screenshot artifact is
+    # produced reaches `after.png` and `before.png` alike. Only the deferred branch below has to
+    # reserve the path itself, because it hands that path to the driver before there is anything to
+    # record.
     if not isinstance(driver, base.BackgroundScreenshotProvider):
-        driver.screenshot(target)
-        writer.record_unmasked(name)
-        return lambda: record
-    wait = driver.screenshot_in_background(target)
+        synchronous = record(write_screenshot(driver, writer, prefix))
+        return lambda: synchronous
+    name = f"{prefix}/after.png"
+    wait = driver.screenshot_in_background(str(writer.reserve(name)))
 
     def join() -> list[Artifact]:
         wait()
         # Deferred with the bytes, not taken with the reservation: `record_unmasked` restricts the
         # file the recorder wrote (BE-0131), so it has to run once that file actually exists.
         writer.record_unmasked(name)
-        return record
+        return record(name)
 
     return join
 

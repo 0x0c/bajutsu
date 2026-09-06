@@ -1717,7 +1717,7 @@ class AdbDriver(CoordinateTreeDriver):
         would have; the thread is a daemon so a caller that dies before joining cannot wedge the
         interpreter on it.
         """
-        failure: list[BaseException] = []
+        failure: list[Exception] = []
 
         def run() -> None:
             try:
