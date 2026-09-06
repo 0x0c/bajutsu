@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -378,7 +379,7 @@ def test_deliver_success(monkeypatch: Any) -> None:
     resp.__enter__ = lambda self: self
     resp.__exit__ = MagicMock(return_value=False)
     monkeypatch.setattr(urllib.request, "urlopen", lambda req, timeout=None: resp)
-    assert _deliver("https://hook", {"text": "hi"}) is True
+    assert _deliver("https://hook", {"text": "hi"}, masked="https://hook/***") is True
 
 
 def test_deliver_retry_on_error(monkeypatch: Any) -> None:
@@ -397,7 +398,7 @@ def test_deliver_retry_on_error(monkeypatch: Any) -> None:
 
     monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
     monkeypatch.setattr("bajutsu.run.notify._RETRY_DELAY", 0.0)
-    assert _deliver("https://hook", {"text": "hi"}) is True
+    assert _deliver("https://hook", {"text": "hi"}, masked="https://hook/***") is True
     assert call_count == 2
 
 
@@ -407,7 +408,7 @@ def test_deliver_never_raises(monkeypatch: Any) -> None:
 
     monkeypatch.setattr(urllib.request, "urlopen", explode)
     monkeypatch.setattr("bajutsu.run.notify._RETRY_DELAY", 0.0)
-    assert _deliver("https://hook", {"text": "hi"}) is False
+    assert _deliver("https://hook", {"text": "hi"}, masked="https://hook/***") is False
 
 
 # --- emit (integration) ---
@@ -615,7 +616,7 @@ def test_deliver_exhausts_all_retries(monkeypatch: Any) -> None:
 
     monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
     monkeypatch.setattr("bajutsu.run.notify._RETRY_DELAY", 0.0)
-    assert _deliver("https://hook", {"text": "hi"}) is False
+    assert _deliver("https://hook", {"text": "hi"}, masked="https://hook/***") is False
     assert call_count == 3  # initial + 2 retries
 
 
@@ -704,4 +705,100 @@ def test_emit_mixed_start_and_failure(monkeypatch: Any) -> None:
         runs_dir=Path("/nonexistent"),
     )
     assert fired is True
-    assert len(captured) == 1
+
+
+# --- CodeQL clear-text-logging regression (alerts #71-73) ---
+
+
+def test_emit_failure_logs_never_contain_resolved_secret(monkeypatch: Any, caplog: Any) -> None:
+    """The failure/retry log label must come from the endpoint's un-interpolated URL
+    template, never from the secret-resolved URL — else the webhook secret (or the host
+    it embeds, per the documented ``url: "${secrets.SLACK_WEBHOOK_URL}"`` shape) ends up
+    in clear text in the logs.
+    """
+
+    def explode(req: Any, timeout: Any = None) -> Any:
+        raise OSError("network down")
+
+    monkeypatch.setattr(urllib.request, "urlopen", explode)
+    monkeypatch.setattr("bajutsu.run.notify._RETRY_DELAY", 0.0)
+
+    secret_url = "https://hooks.slack.com/services/T00/B00/SECRETVALUE"
+    results = [_res("s", False, "err")]
+    with caplog.at_level(logging.WARNING, logger="bajutsu.run.notify"):
+        fired = emit(
+            results,
+            run_id="r1",
+            source_name="s.yaml",
+            backend="xcuitest",
+            endpoints=[_endpoint(on=["failure"], url="${secrets.HOOK}")],
+            bindings={"secrets.HOOK": secret_url},
+            runs_dir=Path("/nonexistent"),
+        )
+
+    assert fired is False
+    log_text = "\n".join(r.getMessage() for r in caplog.records)
+    assert "SECRETVALUE" not in log_text
+    assert "hooks.slack.com" not in log_text
+    assert "${secrets.HOOK}" in log_text
+
+
+def test_emit_unexpected_error_log_names_endpoint_once(monkeypatch: Any, caplog: Any) -> None:
+    """``emit``'s catch-all handler labels the endpoint via ``_mask_endpoint``, whose
+    fallback branch already prefixes the word "endpoint" — so the template must not repeat
+    it, and must still name the secret token rather than its resolved value.
+    """
+
+    def explode(summary: Any) -> Any:
+        raise RuntimeError("renderer blew up")
+
+    monkeypatch.setattr("bajutsu.run.notify._render_slack", explode)
+
+    secret_url = "https://hooks.slack.com/services/T00/B00/SECRETVALUE"
+    results = [_res("s", False, "err")]
+    with caplog.at_level(logging.WARNING, logger="bajutsu.run.notify"):
+        fired = emit(
+            results,
+            run_id="r1",
+            source_name="s.yaml",
+            backend="xcuitest",
+            endpoints=[_endpoint(on=["failure"], url="${secrets.HOOK}")],
+            bindings={"secrets.HOOK": secret_url},
+            runs_dir=Path("/nonexistent"),
+        )
+
+    assert fired is False
+    log_text = "\n".join(r.getMessage() for r in caplog.records)
+    assert "endpoint endpoint" not in log_text
+    assert "SECRETVALUE" not in log_text
+    assert "hooks.slack.com" not in log_text
+    assert "endpoint '${secrets.HOOK}'" in log_text
+
+
+def test_emit_start_failure_logs_never_contain_resolved_secret(
+    monkeypatch: Any, caplog: Any
+) -> None:
+    """Same regression as above (BE-0099 'start' event path)."""
+
+    def explode(req: Any, timeout: Any = None) -> Any:
+        raise OSError("network down")
+
+    monkeypatch.setattr(urllib.request, "urlopen", explode)
+    monkeypatch.setattr("bajutsu.run.notify._RETRY_DELAY", 0.0)
+
+    secret_url = "https://hooks.slack.com/services/T00/B00/SECRETVALUE"
+    with caplog.at_level(logging.WARNING, logger="bajutsu.run.notify"):
+        fired = emit_start(
+            run_id="r1",
+            source_name="smoke.yaml",
+            target="sample",
+            scenario_count=5,
+            endpoints=[_endpoint(on=["start"], url="${secrets.HOOK}")],
+            bindings={"secrets.HOOK": secret_url},
+        )
+
+    assert fired is False
+    log_text = "\n".join(r.getMessage() for r in caplog.records)
+    assert "SECRETVALUE" not in log_text
+    assert "hooks.slack.com" not in log_text
+    assert "${secrets.HOOK}" in log_text
