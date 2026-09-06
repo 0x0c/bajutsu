@@ -169,6 +169,126 @@ def test_code_map_survives_an_unparseable_module(tmp_path: Path) -> None:
     assert row.detail == ""
 
 
+def test_methods_map_lists_a_class_bases_and_signature(tmp_path: Path) -> None:
+    """A class row names its bases; a method row drops the receiver and keeps the annotation."""
+    _write(
+        tmp_path / "m.py",
+        "class Base:\n"
+        "    pass\n\n\n"
+        "class Widget(Base):\n"
+        '    """A thing on screen."""\n\n'
+        "    def tap(self, times: int = 1) -> None:\n"
+        '        """Tap it."""\n'
+        "        pass\n",
+    )
+
+    rows = rm.iter_methods(tmp_path / "m.py")
+
+    assert [(row.size, row.name, row.detail) for row in rows if row.name.startswith("Widget")] == [
+        ("class", "Widget(Base)", "A thing on screen."),
+        ("def", "Widget.tap", "(times: int = 1) -> None — Tap it."),
+    ]
+
+
+def test_methods_map_keeps_the_receiver_for_a_bare_function(tmp_path: Path) -> None:
+    """A top-level function has no receiver to drop."""
+    _write(tmp_path / "n.py", "def make(x: int) -> int:\n    return x\n")
+
+    (row,) = rm.iter_methods(tmp_path / "n.py")
+
+    assert (row.name, row.detail) == ("make", "(x: int) -> int")
+
+
+def test_methods_map_keeps_the_first_parameter_of_a_staticmethod(tmp_path: Path) -> None:
+    """`@staticmethod` has no receiver, so its first parameter must stay in the signature."""
+    _write(
+        tmp_path / "o.py",
+        "class Tool:\n    @staticmethod\n    def build(spec: str) -> None:\n        pass\n",
+    )
+
+    rows = rm.iter_methods(tmp_path / "o.py")
+
+    assert rows[1].detail == "(spec: str) -> None"
+
+
+def test_methods_map_drops_cls_from_a_classmethod(tmp_path: Path) -> None:
+    """`@classmethod`'s `cls` is a receiver too, so it must be dropped like `self`."""
+    _write(
+        tmp_path / "p2.py",
+        "class Tool:\n"
+        "    @classmethod\n"
+        "    def from_config(cls, path: str) -> None:\n"
+        "        pass\n",
+    )
+
+    rows = rm.iter_methods(tmp_path / "p2.py")
+
+    assert rows[1].detail == "(path: str) -> None"
+
+
+def test_methods_map_walks_every_file_under_a_package(tmp_path: Path) -> None:
+    """Given a directory, the map covers every ``.py`` file inside it, not just the top one."""
+    pkg = tmp_path / "bajutsu" / "drivers"
+    _write(pkg / "a.py", "class A:\n    def go(self) -> None:\n        pass\n")
+    _write(pkg / "b.py", "class B:\n    def go(self) -> None:\n        pass\n")
+
+    names = {row.name for row in rm.iter_methods(tmp_path / "bajutsu" / "drivers")}
+
+    assert names == {"A", "A.go", "B", "B.go"}
+
+
+def test_methods_map_survives_an_unparseable_file(tmp_path: Path) -> None:
+    """One broken file must not stop the rest of a directory from mapping — and must not vanish
+    from the map either, or a session reads "this file defines nothing" instead of "this file
+    could not be parsed"."""
+    pkg = tmp_path / "bajutsu"
+    _write(pkg / "broken.py", "def (\n")
+    _write(pkg / "ok.py", "def fine() -> None:\n    pass\n")
+
+    rows = rm.iter_methods(pkg)
+
+    assert [row.name for row in rows] == ["broken", "fine"]
+    assert [row.size for row in rows if row.name == "broken"] == ["unparsed"]
+
+
+def test_methods_map_finds_a_class_nested_inside_a_function(tmp_path: Path) -> None:
+    """A factory function's closure class is part of the file's method surface too, and its name
+    is qualified so two same-named closures from different factories stay distinguishable."""
+    _write(
+        tmp_path / "s.py",
+        "def make_control() -> object:\n"
+        "    class _Control:\n"
+        "        def act(self) -> None:\n"
+        "            pass\n"
+        "    return _Control\n",
+    )
+
+    rows = rm.iter_methods(tmp_path / "s.py")
+
+    assert [(row.size, row.name) for row in rows] == [
+        ("def", "make_control"),
+        ("class", "make_control._Control"),
+        ("def", "make_control._Control.act"),
+    ]
+
+
+def test_methods_map_rejects_a_missing_target(tmp_path: Path) -> None:
+    """A typo'd path fails with a message rather than a silent empty table."""
+    with pytest.raises(OSError, match="not found"):
+        rm.iter_methods(tmp_path / "nope.py")
+
+
+def test_main_methods_mode_prints_the_expected_header(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """`--methods` renders through the same table as the other modes, with its own headers."""
+    _write(tmp_path / "p.py", "def f() -> None:\n    pass\n")
+
+    assert rm.main(["--methods", str(tmp_path / "p.py")]) == 0
+
+    assert capsys.readouterr().out.splitlines()[0] == "| File:line | Kind | Name | Signature |"
+
+
 def test_join_names_names_the_total_when_it_truncates() -> None:
     """A silently truncated list reads as complete, so the row states how many there are."""
     names = [f"name_{n:03d}" for n in range(40)]
