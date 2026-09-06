@@ -200,6 +200,135 @@ final class HTTPServerResilienceTests: XCTestCase {
         }
     }
 
+    // MARK: - Keep-alive (BE-0407 Unit 11)
+
+    /// Two requests over one connection the driver never reconnects for — the point of the whole
+    /// unit. Pipelined (both written before either is read) rather than round-tripped one at a time,
+    /// since the server itself still answers them strictly in order; pipelining only proves the
+    /// second request did not have to wait for a fresh TCP handshake to arrive.
+    func testTwoRequestsAreServedOverOneKeptAliveConnection() throws {
+        // `seenPaths` is appended to from `HTTPServer`'s connection-handling queue (inside the
+        // handler closure below) and read from this test thread once `readAll` returns — two
+        // threads, with nothing but the kernel-level socket ordering between them, so an `NSLock`
+        // guards it the same way `reached`/`release` guard the semaphore-based tests above.
+        let seenPathsLock = NSLock()
+        var seenPaths: [String] = []
+        func record(_ path: String) {
+            seenPathsLock.withLock { seenPaths.append(path) }
+        }
+        let server = HTTPServer(receiveTimeout: 0.3, sendTimeout: 3) { request in
+            record(request.path)
+            return .json(200, ["status": "ok", "path": request.path])
+        }
+        let port = try server.start()
+        defer { server.stop() }
+
+        let fd = try Self.connect(port: port)
+        defer { close(fd) }
+        Self.write(fd, "GET /a HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n")
+        Self.write(fd, "GET /b HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n")
+
+        // Blocks until the server's own receive timeout ends the (now idle) connection, so this
+        // reads both replies without the test racing the server's reply timing — and orders this
+        // read of `seenPaths` after every append above, the same way `reached.wait` orders the
+        // semaphore-based tests' own assertions.
+        let combined = Self.readAll(fd)
+        XCTAssertEqual(
+            seenPathsLock.withLock { seenPaths }, ["/a", "/b"],
+            "one connection served both requests, in order"
+        )
+        XCTAssertEqual(
+            combined.components(separatedBy: "HTTP/1.1 200 OK").count - 1, 2,
+            "both replies arrived over the connection this test never reconnected"
+        )
+        XCTAssertTrue(
+            combined.contains("Connection: keep-alive"),
+            "a reply that keeps the connection open must say so"
+        )
+    }
+
+    /// A reply too big to fit in the client's receive buffer plus the server's own send buffer,
+    /// written to a client that never reads it, forces `sendAll` to give up mid-write once
+    /// `sendTimeout` fires. `handleConnection` must end the connection there rather than loop back
+    /// to whatever the client already pipelined behind it — the exact desync a truncated write would
+    /// otherwise cause, since the client is still reading toward the truncated reply's own
+    /// `Content-Length` and would misparse the next reply's bytes as that reply's tail.
+    func testATruncatedWriteEndsTheConnectionInsteadOfServingWhatWasPipelinedBehindIt() throws {
+        // Asserted (non-inverted) first: without it, a scheduling delay that keeps this whole
+        // scenario from ever reaching the handler would pass the inverted expectation below
+        // vacuously — proving nothing about the behavior this test exists to pin.
+        let bigRequestReached = XCTestExpectation(description: "the big reply's handler was entered")
+        let secondRequestReached = XCTestExpectation(
+            description: "the pipelined second request must never reach the handler"
+        )
+        secondRequestReached.isInverted = true
+        // Large enough that neither the client's receive buffer nor the server's send buffer can
+        // absorb it on loopback, so the second `send` call is guaranteed to block until `sendTimeout`
+        // fires rather than racing it.
+        let bulk = Data(repeating: 0x41, count: 8 << 20)
+        let server = HTTPServer(receiveTimeout: 5, sendTimeout: 0.2) { request in
+            if request.path == "/big" { bigRequestReached.fulfill() }
+            if request.path == "/second" { secondRequestReached.fulfill() }
+            return request.path == "/big" ? .png(bulk) : .json(200, ["status": "ok"])
+        }
+        let port = try server.start()
+        defer { server.stop() }
+
+        let fd = try Self.connect(port: port)
+        defer { close(fd) }
+        // Pipelined, and never read: the client's own receive buffer fills, then the server's send
+        // buffer fills behind the unread reply, so the big reply's write blocks until it times out.
+        Self.write(fd, "GET /big HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n")
+        Self.write(fd, "GET /second HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n")
+
+        wait(for: [bigRequestReached], timeout: 2)
+        wait(for: [secondRequestReached], timeout: 2)
+    }
+
+    /// A malformed request arriving as the *second* one on an otherwise-good connection must still
+    /// end it — the loop must not keep trying to resynchronize against whatever garbage follows.
+    func testAMalformedSecondRequestStillClosesTheConnection() throws {
+        let server = HTTPServer(receiveTimeout: 1, sendTimeout: 3) { _ in
+            .json(200, ["status": "ok"])
+        }
+        let port = try server.start()
+        defer { server.stop() }
+
+        let fd = try Self.connect(port: port)
+        defer { close(fd) }
+        Self.write(fd, "GET /a HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n")
+        Self.write(fd, "POST /b HTTP/1.1\r\nContent-Length: -1\r\n\r\n")
+
+        let combined = Self.readAll(fd)
+        XCTAssertTrue(combined.contains("HTTP/1.1 200 OK"), "the first, well-formed request still lands")
+        guard let badReplyStart = combined.range(of: "HTTP/1.1 400 ") else {
+            return XCTFail("the second, malformed request must be answered 400")
+        }
+        XCTAssertTrue(
+            combined[badReplyStart.lowerBound...].contains("Connection: close"),
+            "the 400 must be the connection's last reply, not an invitation to keep sending"
+        )
+    }
+
+    /// An idle keep-alive connection — nothing sent since the last reply — ends quietly on the
+    /// receive timeout: `readRequest`'s `.connectionEnded`, not a spurious 400 for a request that
+    /// was never sent.
+    func testAnIdleKeptAliveConnectionEndsWithoutAMalformedRequestReply() throws {
+        let server = HTTPServer(receiveTimeout: 0.3, sendTimeout: 3) { _ in .json(200, ["status": "ok"]) }
+        let port = try server.start()
+        defer { server.stop() }
+
+        let fd = try Self.connect(port: port)
+        defer { close(fd) }
+        Self.write(fd, "GET /a HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n")
+
+        let combined = Self.readAll(fd)  // blocks until the idle timeout closes the connection
+        XCTAssertEqual(
+            combined.components(separatedBy: "HTTP/1.1").count - 1, 1,
+            "exactly the one reply — no 400 fabricated for a second request that was never sent"
+        )
+    }
+
     // MARK: - Raw socket helpers
 
     private enum SocketFailure: Error { case create, connect }
