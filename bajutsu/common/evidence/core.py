@@ -219,10 +219,20 @@ def begin_after_screenshot(
     # Restricted up front, not only at the join: a screenshot can hold on-screen secrets, and the
     # ordinary reserve/record pair would leave this one at the ambient umask for the whole overlap
     # window rather than for no time at all (BE-0131).
-    wait = driver.screenshot_in_background(str(writer.reserve_restricted(name)))
+    reserved = writer.reserve_restricted(name)
+    wait = driver.screenshot_in_background(str(reserved))
 
     def join() -> list[Artifact]:
-        wait()
+        try:
+            wait()
+        except Exception:
+            # The reservation pre-created the file, so a shot that never wrote would leave an empty
+            # `after.png` behind. No manifest names it — the artifact record below is never
+            # produced — but the run directory is shipped whole to an object store, so it would
+            # reach an investigator as a zero-byte screenshot of the very failure they opened the
+            # run for.
+            reserved.unlink(missing_ok=True)
+            raise
         # Deferred with the bytes, not taken with the reservation: `record_unmasked` restricts the
         # file the recorder wrote (BE-0131), so it has to run once that file actually exists.
         writer.record_unmasked(name)

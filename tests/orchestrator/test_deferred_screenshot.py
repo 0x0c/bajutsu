@@ -139,6 +139,10 @@ def test_a_failing_shot_never_replaces_the_steps_own_failure(
             sink=FileSink(tmp_path / "run1"),
         )
     assert "dropping this step's after.png" in caplog.text
+    # And it leaves no husk behind. The reservation creates the file before the recorder writes, so
+    # a shot that never wrote would otherwise strand a zero-byte `after.png` that no manifest names
+    # but the run directory's own upload still ships.
+    assert not (tmp_path / "run1" / "x" / "step0" / "after.png").exists()
 
 
 def test_the_next_step_reuses_the_deferred_shot_as_its_before_png(tmp_path: Path) -> None:

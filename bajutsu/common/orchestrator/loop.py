@@ -1919,11 +1919,13 @@ class _StepRunner:
         # of it.
         #
         # Its start, not its completion, because the shot is begun here and joined at the end of this
-        # step so the post-step tree read runs inside it (BE-0407 Unit 2). What that costs is the
-        # fixed *direction* of the skew above: on a deferring backend the read and the pixels are
-        # concurrent, so either can land first. What it buys is the skew's size — bounded by the
-        # shot's own latency rather than by a whole tree read. A consumer added between here and the
-        # post-step capture may rely on the bound, never on the order.
+        # step so the post-step tree read runs inside it (BE-0407 Unit 2). What that buys is that the
+        # tree no longer waits behind the shot: it starts at the action rather than after the round
+        # trip. What it costs is the fixed *direction* of the skew above — the pixels can now be up
+        # to the shot's own latency *newer* than the tree. In the other direction the separation is
+        # whatever the post-step read costs, an `extract` settle poll included, exactly as before. So
+        # a consumer added between here and the post-step capture may rely on neither the order nor a
+        # small bound.
         #
         # Only a backend that says its channel admits a second call in flight defers at all — adb
         # does, XCUITest does not (see `base.BackgroundScreenshotProvider`) — so on every other
@@ -2006,8 +2008,8 @@ class _StepRunner:
 
             # This call records the post-action *tree*: `_collect_captures` always leads with
             # `elements`, so every step keeps one whatever the scenario asked for. The screenshot
-            # half is not on that list — `_handle_action` shot `screenshot.after` right after the
-            # action, and the `instant` filter below drops the token. `elements.json` has one fixed
+            # half is not on that list — `_handle_action` started `screenshot.after` right after
+            # the action, and the `instant` filter below drops the token. `elements.json` has one fixed
             # name, so this write replaces the pre-step baseline's pre-action tree.
             # `screenshot.before` is excluded for the mirror-image reason (BE-0341): the baseline
             # above wrote that file from the true pre-action state, so re-taking it here would
