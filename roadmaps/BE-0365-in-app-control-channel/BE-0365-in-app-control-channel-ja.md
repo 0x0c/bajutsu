@@ -9,7 +9,7 @@
 | 提案者 | [@0x0c](https://github.com/0x0c) |
 | 状態 | **実装中** |
 | トラッキング Issue | [検索](https://github.com/bajutsu-e2e/bajutsu/issues?q=is%3Aissue+label%3Aroadmap-tracking+in%3Atitle+"BE-0365") |
-| 実装 PR | [#1699](https://github.com/bajutsu-e2e/bajutsu/pull/1699)（単位 1）、[#1788](https://github.com/bajutsu-e2e/bajutsu/pull/1788)（単位 2） |
+| 実装 PR | [#1699](https://github.com/bajutsu-e2e/bajutsu/pull/1699)（単位 1）、[#1788](https://github.com/bajutsu-e2e/bajutsu/pull/1788)（単位 2）、[#1916](https://github.com/bajutsu-e2e/bajutsu/pull/1916)（単位 3） |
 | トピック | ドライバとバックエンドのアーキテクチャ |
 | 関連 | [BE-0364](../BE-0364-in-app-control-channel/BE-0364-in-app-control-channel-ja.md) |
 <!-- /BE-METADATA -->
@@ -186,6 +186,16 @@ bajutsu が走っているアプリへコマンドを届ける経路であり、
   ときはループを終えます。取り消せない設定の誤りに問い合わせを続けると、アプリのプロセスが終わるまで
   タイマーが動き続けるためです。Swift のゲートは 2 つの構成を両方ビルドしてテストします。先に走らせるのは
   フラグなしの構成で、これが利用者のリンクする構成だからです。
+
+- [#1916](https://github.com/bajutsu-e2e/bajutsu/pull/1916)：単位 3。完了報告の条件待ち
+  （`orchestrator/control_channel.py`）を、既存の `deadline_ticks` の仕組みの上に実装しました。
+  最初のコマンドとして、タッチ可視化の切り替えを実装しました。`run_scenario` は、`visual` の撮影が
+  起きる 2 か所——最初の `expect` での撮影と、アラートを片付けたあとの再撮影——の両方でマーカーを
+  隠します。適用できたことを示せなかったコマンドは、通常のシナリオ失敗に変換します。
+  `--touch-markers` はもう、スクリーンショットを比較するシナリオを丸ごと対象から外しません。
+  代わりに、チャネルを運べる run（`xcuitest` actuator でネットワーク収集が有効なとき）にかぎって
+  チャネルを起動します。それ以外のバックエンド、ネットワーク収集が無効な run、あるいはシナリオが
+  起動環境のキーを自分でピン留めしている場合は、BE-0365 より前の除外に戻します。
 
 ## 参考
 

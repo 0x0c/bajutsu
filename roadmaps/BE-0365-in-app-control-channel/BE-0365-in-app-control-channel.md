@@ -9,7 +9,7 @@
 | Author | [@0x0c](https://github.com/0x0c) |
 | Status | **In progress** |
 | Tracking issue | [Search](https://github.com/bajutsu-e2e/bajutsu/issues?q=is%3Aissue+label%3Aroadmap-tracking+in%3Atitle+"BE-0365") |
-| Implementing PR | [#1699](https://github.com/bajutsu-e2e/bajutsu/pull/1699) (unit 1), [#1788](https://github.com/bajutsu-e2e/bajutsu/pull/1788) (unit 2) |
+| Implementing PR | [#1699](https://github.com/bajutsu-e2e/bajutsu/pull/1699) (unit 1), [#1788](https://github.com/bajutsu-e2e/bajutsu/pull/1788) (unit 2), [#1916](https://github.com/bajutsu-e2e/bajutsu/pull/1916) (unit 3) |
 | Topic | Driver & backend architecture |
 | Related | [BE-0364](../BE-0364-in-app-control-channel/BE-0364-in-app-control-channel.md) |
 <!-- /BE-METADATA -->
@@ -192,6 +192,16 @@ Log:
   drain schedules no main-thread work, and a drain answered `401` or `404` ends the loop rather than
   leaving a timer running in the app for the rest of the process's life. The Swift gate now builds and
   tests both configurations, the unflagged one first, since that is what an adopter links.
+
+- [#1916](https://github.com/bajutsu-e2e/bajutsu/pull/1916) — unit 3: the acknowledgement condition
+  wait, `orchestrator/control_channel.py`. It sits on the existing `deadline_ticks` skeleton.
+  The touch-visualization toggle is the first command. A `visual` capture happens in two places:
+  the initial `expect` capture, and the post-alert-dismiss retry. `run_scenario` hides the markers
+  around both. A command that cannot prove it took effect becomes an ordinary scenario failure.
+  `--touch-markers` no longer skips a screenshot-comparing scenario outright. It arms the channel
+  where the run can carry one, the `xcuitest` actuator with network collection on. Everywhere else —
+  another backend, network off, or a scenario that pinned either launch-env key — it falls back to
+  the pre-BE-0365 skip.
 
 ## References
 
