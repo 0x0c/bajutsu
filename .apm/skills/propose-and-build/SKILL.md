@@ -130,6 +130,12 @@ does not restate those rules, it runs them:
   (敬体; the Japanese layer beneath `document-writing`, natural Japanese, not a literal rendering).
   Keep the `BE-XXXX` placeholder — the real id is allocated on `main`
   by CI ([`roadmap-id`](../../../.github/workflows/roadmap-id.yml)), never guessed.
+- **The `Author` row is a GitHub handle, resolved the same way `ideation` step 4 requires.** Pass
+  `HANDLE=<handle>` to `make new-roadmap-item` — ask the user for their GitHub handle rather than
+  letting it fall through to `$GITHUB_ACTOR` / `git config github.user` unconfirmed, never reuse a
+  handle seen on another item, and never invent one. With no human in the turn, fall back to the
+  literal `HANDLE=handle` placeholder and say in your reply that the row still needs a real handle
+  before merge — see `ideation` step 4 for why a placeholder beats a guessed handle.
 - Self-review the staged diff against the CI review contract (`ideation` step 5) in its two roles
   (BE-0347), on different models — `opus` for the review/plan pass, `sonnet` for the implement
   pass, whose diff here is roadmap prose: a fresh Agent-tool subagent, blind to the authoring
