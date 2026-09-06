@@ -16,12 +16,20 @@ _TOTP_PLACEHOLDER = "<redacted>"
 
 
 def _prune(obj: Any) -> Any:
-    """Drop None / empty-list / empty-dict entries for readable output."""
+    """Drop None / empty-list entries for readable output.
+
+    An empty *dict* is left alone. `exclude_none` / `exclude_defaults` (applied before `_prune`
+    runs) already remove a field that was never set, so a dict surviving to here is present because
+    the author chose it — most often a fieldless action (`back: {}`, `random: { uuid: {} }`) or a
+    submodel left at all its own defaults. Dropping the key on top of that erases which action was
+    chosen, and re-validating against the one-of-N-required invariant (§6.2 / §6.4) then fails on a
+    step that has no action left at all.
+    """
     if isinstance(obj, dict):
         out: dict[str, Any] = {}
         for key, value in obj.items():
             pruned = _prune(value)
-            if pruned is None or pruned == [] or pruned == {}:
+            if pruned is None or pruned == []:
                 continue
             out[key] = pruned
         return out

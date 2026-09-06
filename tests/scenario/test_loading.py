@@ -243,6 +243,32 @@ def test_provenance_is_pruned_when_absent() -> None:
     assert "from:" not in dumped
 
 
+def test_dump_prunes_null_and_empty_list_inside_a_free_form_payload() -> None:
+    # `push.payload` is arbitrary JSON (`dict[str, Any]`), so pydantic's exclude_none/exclude_defaults
+    # never see inside it — pruning a `null` or an already-empty list nested there is `_prune`'s own
+    # job, distinct from the dict-valued keys `test_a_fieldless_step_action_round_trips` covers below.
+    text = (
+        "- name: t\n"
+        "  steps:\n"
+        "    - push: { payload: { aps: { alert: hi, badge: null, tags: [] } } }\n"
+    )
+    dumped = dump_scenarios(load_scenarios(text))
+    assert "badge" not in dumped
+    assert "tags" not in dumped
+    assert "alert: hi" in dumped
+
+
+def test_a_fieldless_step_action_round_trips() -> None:
+    # `back` (and the other zero-argument actions) always dump to `{}` — a step's action key must
+    # survive that even though its value is empty, or re-validation fails the one-action rule
+    # (§6.2) on reload. Regression for the `bajutsu report` re-render failure this was found from.
+    text = "- name: go back\n  steps:\n    - back: {}\n"
+    dumped = dump_scenarios(load_scenarios(text))
+    assert "back: {}" in dumped
+    reloaded = load_scenarios(dumped)[0]
+    assert reloaded.steps[0].back is not None
+
+
 def _step(sid: str) -> Step:
     return Step.model_validate({"tap": {"id": sid}})
 
