@@ -377,8 +377,10 @@ Three properties matter before turning the flag on.
   `UIView`, which is the only way a marker could gain an accessibility representation at all.
 - **A gesture's marks stay until the next gesture starts.** No timer removes them, which is what
   keeps them in the step's screenshot, and equally why a run with the flag on produces screenshots
-  that differ from a run without it. A `visual` assertion gets its own capture with the markers
-  hidden (below), so the flag and a pixel comparison can share a run. Android has no such channel:
+  that differ from a run without it. Where the in-app control channel is available (below), a
+  `visual` assertion gets its own capture with the markers hidden, so the flag and a pixel
+  comparison can share a run; everywhere else, leave the flag off for a pixel comparison. Android
+  has no such channel:
   its scenario lanes turn `show_touches` and `pointer_location` on device-wide, and the
   tree-comparing and pixel-comparing lanes turn the pair back off by hand instead
   (`demos/showcase/android/Makefile`).
