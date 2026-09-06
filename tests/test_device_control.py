@@ -106,6 +106,12 @@ def test_privacy_command_builder() -> None:
     ]
 
 
+def test_env_reset_permissions_runs_privacy_reset_all() -> None:
+    calls: list[list[str]] = []
+    simctl.Env("U", run=_recorder(calls)).reset_permissions("com.demo")
+    assert calls == [["xcrun", "simctl", "privacy", "U", "reset", "all", "com.demo"]]
+
+
 def test_env_apply_permissions_runs_privacy_per_entry() -> None:
     calls: list[list[str]] = []
     simctl.Env("U", run=_recorder(calls)).apply_permissions(

@@ -1299,6 +1299,63 @@ def test_warm_resume_reapplies_the_per_scenario_reset(
     assert "openurl" in verbs  # the deeplink was opened
 
 
+def test_clean_reinstall_resets_permissions_even_when_the_scenario_names_none(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # `simctl install`/`uninstall` never touch TCC.db (verified on-device) — only `erase` does — so
+    # without an explicit reset, a `clean` reinstall on a warm runner would let a permission an
+    # earlier scenario granted or revoked for this bundle id leak into a scenario that names none of
+    # its own, contradicting this method's "same known state a cold lease does" promise (BE-0291
+    # Unit 2). `permissions=None` here is the point: no `grant`/`revoke` call should be the reason a
+    # `privacy` call appears.
+    popen_argvs, simctl_calls, run = _fake_toolchain(monkeypatch)
+    app = tmp_path / "App.app"
+    app.mkdir()
+    cfg = (
+        f"targets:\n  s:\n    bundleId: com.x\n    appPath: {app}\n"
+        f"    xcuitest:\n      testRunner: {_write_runner(tmp_path)}\n"
+    )
+    eff = resolve(load_config(cfg), "s")
+    env = XcuitestEnvironment("xcuitest", "UDID", env_run=run)
+    env.start(eff, Preconditions())  # cold spawn
+    simctl_calls.clear()
+    env.start(eff, Preconditions())  # warm resume, reinstall defaults to "clean", no permissions
+    assert len(popen_argvs) == 1  # no respawn — the runner was reused
+    reset_calls = [c for c in simctl_calls if c[2:3] == ["privacy"] and c[4:6] == ["reset", "all"]]
+    assert reset_calls, f"expected a `simctl privacy reset all` call, got: {simctl_calls}"
+    reset_call = reset_calls[0]
+    assert reset_call[-1] == "com.x"  # scoped to this bundle id, not every app on the device
+    verbs = [c[2] for c in simctl_calls if len(c) >= 3 and c[:2] == ["xcrun", "simctl"]]
+    # uninstall, then install, then reset — the reset targets the bundle this `clean` reinstall just
+    # (re)installed, the same order `adb.Env`'s uninstall → install → `pm clear` mirror uses.
+    assert verbs.index("uninstall") < verbs.index("install") < simctl_calls.index(reset_call)
+
+
+def test_overwrite_reinstall_does_not_reset_permissions(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # `overwrite` deliberately keeps the app's data container across scenarios (it exists precisely
+    # to preserve state, predating BE-0407) — permission state is part of that same "keep what's
+    # there" contract, so unlike `clean`, this mode must not reset TCC (a scenario relying on a
+    # permission an earlier one granted, e.g. to test the already-granted path, would otherwise
+    # regress).
+    popen_argvs, simctl_calls, run = _fake_toolchain(monkeypatch)
+    app = tmp_path / "App.app"
+    app.mkdir()
+    cfg = (
+        f"targets:\n  s:\n    bundleId: com.x\n    appPath: {app}\n"
+        f"    xcuitest:\n      testRunner: {_write_runner(tmp_path)}\n"
+    )
+    eff = resolve(load_config(cfg), "s")
+    env = XcuitestEnvironment("xcuitest", "UDID", env_run=run)
+    env.start(eff, Preconditions(reinstall="overwrite"))  # cold spawn
+    simctl_calls.clear()
+    env.start(eff, Preconditions(reinstall="overwrite"))  # warm resume, still overwrite
+    assert len(popen_argvs) == 1  # no respawn — the runner was reused (the case this guards)
+    reset_calls = [c for c in simctl_calls if c[2:3] == ["privacy"] and c[4:6] == ["reset", "all"]]
+    assert not reset_calls, f"overwrite must not reset permissions, got: {simctl_calls}"
+
+
 def test_runner_output_is_captured_by_default_and_is_ephemeral(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

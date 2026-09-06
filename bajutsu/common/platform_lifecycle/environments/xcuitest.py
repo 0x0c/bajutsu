@@ -1342,11 +1342,21 @@ class XcuitestEnvironment(_DeviceEnvironment):
                     raise simctl.DeviceError(
                         f"appPath not found: {ios.app_path} (build the app first)"
                     )
-                if pre.reinstall == "clean" and not pre.erase:
+                clean_reinstall = pre.reinstall == "clean" and not pre.erase
+                if clean_reinstall:
                     e.uninstall(ios.bundle_id)
                 e.install(ios.app_path)
-            # Set permission state after install (a fresh install/erase resets TCC grants) but
-            # before the app launches, so a prompt never blocks it (BE-0276).
+                if clean_reinstall:
+                    # Neither the uninstall above nor this install touches TCC.db — verified
+                    # on-device, only `erase` above does — so `clean` must reset permissions itself,
+                    # against the bundle it just (re)installed, to make good on this method's "known
+                    # state" promise, the same way `adb.Env.clear` resets grants on the equivalent
+                    # Android path.
+                    e.reset_permissions(ios.bundle_id)
+            # Set permission state after install (the grant targets an installed bundle) but before
+            # the app launches, so a prompt never blocks it (BE-0276). `reinstall: overwrite` never
+            # resets permissions on its own (nor does `erase` re-grant anything) — a scenario that
+            # must start from a known state names every service it cares about here.
             if permissions:
                 e.apply_permissions(ios.bundle_id, permissions)
         except subprocess.CalledProcessError as exc:

@@ -110,6 +110,11 @@ scenarios:
 > target config の既定を継承し、config 側も指定がなければオフになります。`_filter_scenarios`
 > （`cli/commands/run.py`）が run の開始前にこれを解決します。
 
+> `reinstall: clean` は権限状態（`permissions`。後述）も同時にリセットします。iOS では `simctl privacy
+> reset all`、Android では `pm clear` を使います。`overwrite` はどちらもリセットしません。`overwrite` は
+> シナリオ間でデータを保持するために存在し、権限の許可状態もその保持対象に含まれるため、`overwrite`
+> では前のシナリオが許可した権限がそのまま見え続けます。
+
 ## systemAlertHandling（システムアラートガード）
 
 iOS バックエンドは **SpringBoard レベルのプロンプト**（通知や App Tracking Transparency のリクエスト、"Allow Paste" など）を見ることも tap することもできません。これらのプロンプトはアプリを覆って要素ツリーを潰し、ステップを静かにブロックします。**アラートガード**がこれをリアクティブに片付けます。iOS の XCUITest バックエンドでは**決定論的なネイティブ経路**をとります（BE-0315）。BE-0316 の SpringBoard 照会を再利用してアラートが提示するボタンを把握し、規則が名指しするボタンを押します。スクリーンショットもモデルへの往復も使わないため、頻出するプロンプトを 0.1 秒を大きく下回る時間で片付け、`ANTHROPIC_API_KEY` が**なくても**動作します。決定論的な経路がどれも対処できない場合（capability を持たないバックエンド、どの規則も同定しないアラート、SpringBoard の照会が列挙できず、しかもどの規則も同定しない画面。規則が同定するものは、後述のツリー内の経路が片付けます）、**ガードは何もしません**（[BE-0402](../../roadmaps/BE-0402-run-alert-guard-drop-vision-fallback/BE-0402-run-alert-guard-drop-vision-fallback-ja.md)）。ブロックされたステップまたは `wait` は、ガードを設定していないときとまったく同じように自身のタイムアウトまで進み、そのタイムアウトが**ガードの見たものを名指しします**。`wait timeout: for {'id': 'submit'} (10.0s) — an unhandled system alert is blocking the screen (buttons: Allow, Don't Allow)` の形、何も列挙できなかった場合は `… — the screen appears blocked, possibly by a system alert or another overlay outside the app's view` という曖昧な形です。BE-0402 より前は、この場合にスクリーンショットを読む AI 視覚ガードへフォールバックしていました。`run` はもうそれをしないため、**どのフラグを付けてもモデルに到達しません**。（`record` と `crawl` はオーサリング向けにそのガードを保持します。[詳細](recording.md#システムアラートの自動対処)）`wait` ステップ（`for`/`gone`/`settled`/`screenChanged`）では、ガードは **wait の途中でも**発火します。ネイティブ経路が独自の間隔（既定は 1 秒）で SpringBoard をポーリングするため、wait 自体のタイムアウトを待たず、ステップが失敗する前に回復できます（BE-0269）。
