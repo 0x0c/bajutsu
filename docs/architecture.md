@@ -475,7 +475,7 @@ Android; on iOS it rests on the fast suite's bookkeeping proof alone.
   the resolved element's identity to the resident server's `POST /act`, which re-resolves and
   injects device-side so the gesture lands on the bounds the device holds at inject time, falling
   back to a host-computed frame-center coordinate tap once retries exhaust or the channel has no
-  `/act` endpoint (BE-0339, in progress); the `AndroidEnvironment` launch sequence, `doctor`
+  `/act` endpoint (BE-0339); the `AndroidEnvironment` launch sequence, `doctor`
   reporting, interval evidence (`video` via `screenrecord`, `deviceLog` via `logcat`, both through
   the driver-supplied `driver_interval` seam) plus in-app **network capture** — `request` assertions
   over an OkHttp interceptor (`BajutsuAndroid`) reporting to the host collector, bridged to the
