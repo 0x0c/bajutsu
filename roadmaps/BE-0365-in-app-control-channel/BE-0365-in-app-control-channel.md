@@ -9,7 +9,7 @@
 | Author | [@0x0c](https://github.com/0x0c) |
 | Status | **In progress** |
 | Tracking issue | [Search](https://github.com/bajutsu-e2e/bajutsu/issues?q=is%3Aissue+label%3Aroadmap-tracking+in%3Atitle+"BE-0365") |
-| Implementing PR | [#1699](https://github.com/bajutsu-e2e/bajutsu/pull/1699) (unit 1), [#1788](https://github.com/bajutsu-e2e/bajutsu/pull/1788) (unit 2), [#1916](https://github.com/bajutsu-e2e/bajutsu/pull/1916) (unit 3) |
+| Implementing PR | [#1699](https://github.com/bajutsu-e2e/bajutsu/pull/1699) (unit 1), [#1788](https://github.com/bajutsu-e2e/bajutsu/pull/1788) (unit 2), [#1916](https://github.com/bajutsu-e2e/bajutsu/pull/1916) (unit 3), [#1922](https://github.com/bajutsu-e2e/bajutsu/pull/1922) (unit 3 follow-up) |
 | Topic | Driver & backend architecture |
 | Related | [BE-0364](../BE-0364-in-app-control-channel/BE-0364-in-app-control-channel.md) |
 <!-- /BE-METADATA -->
@@ -211,6 +211,15 @@ Log:
   outright. A scenario with no `visual` verdict that pinned only the channel key gets no marker
   key at all, since writing one would complete the pair the run loop reads and arm a channel it
   never asked for. Which of the six outcomes applied is named on stderr.
+
+- [#1922](https://github.com/bajutsu-e2e/bajutsu/pull/1922) — unit 3 follow-up: both
+  `_hides_touch_markers` and `_apply_touch_markers` read the launch environment the app actually
+  launches with. A target's own `launchEnv` merges *underneath* the scenario's own at launch
+  time, so a target-level `BAJUTSU_TOUCH_MARKERS`/`BAJUTSU_CONTROL_CHANNEL` pin — rather than one
+  `--touch-markers` writes per scenario — used to read as a scenario that pinned nothing, leaving
+  the app drawing markers the run loop never hid for a `visual` capture. A new
+  `target_launch_env` parameter carries the target's `launchEnv` into both functions, merged the
+  same way the launch itself merges it.
 
 ## References
 
