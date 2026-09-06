@@ -1786,6 +1786,51 @@ def test_touch_markers_leave_markers_off_for_a_scenario_that_declined_the_channe
     assert scenario.preconditions.launch_env["BAJUTSU_CONTROL_CHANNEL"] == "0"
 
 
+def test_touch_markers_warns_when_a_self_pinned_marker_cannot_be_hidden_declined() -> None:
+    """`setdefault` can never turn off a marker the scenario itself pinned to `"1"`.
+
+    A scenario that pins `BAJUTSU_TOUCH_MARKERS: "1"` *and* declines the channel keeps drawing
+    markers regardless of what this function decides, so the decline note must not claim they
+    stay off — it must warn that nothing here can hide them instead.
+    """
+    scenario = _touch_marker_scenario("visual one")
+    scenario.expect = [Assertion(visual=VisualMatch(baseline="home.png"))]
+    scenario.preconditions.launch_env["BAJUTSU_TOUCH_MARKERS"] = "1"
+    scenario.preconditions.launch_env["BAJUTSU_CONTROL_CHANNEL"] = "0"
+    _apply_touch_markers([scenario], True, channel_available=_channel_always)
+    assert scenario.preconditions.launch_env["BAJUTSU_TOUCH_MARKERS"] == "1"
+    assert scenario.preconditions.launch_env["BAJUTSU_CONTROL_CHANNEL"] == "0"
+
+
+def test_touch_markers_warns_when_a_self_pinned_marker_cannot_be_hidden_no_actuator() -> None:
+    """The same self-pinned-marker gap on the channel-less (actuator-can't-carry-it) path."""
+    scenario = _touch_marker_scenario("visual one")
+    scenario.expect = [Assertion(visual=VisualMatch(baseline="home.png"))]
+    scenario.preconditions.launch_env["BAJUTSU_TOUCH_MARKERS"] = "1"
+    _apply_touch_markers([scenario], True, channel_available=_channel_never)
+    assert scenario.preconditions.launch_env["BAJUTSU_TOUCH_MARKERS"] == "1"
+    assert "BAJUTSU_CONTROL_CHANNEL" not in scenario.preconditions.launch_env
+
+
+def test_touch_markers_self_pinned_note_names_the_scenario(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The fourth note fires for a self-pinned, unhideable marker, and names the right scenario."""
+    scenario = _touch_marker_scenario("visual one")
+    scenario.expect = [Assertion(visual=VisualMatch(baseline="home.png"))]
+    scenario.preconditions.launch_env["BAJUTSU_TOUCH_MARKERS"] = "1"
+    scenario.preconditions.launch_env["BAJUTSU_CONTROL_CHANNEL"] = "0"
+
+    _apply_touch_markers([scenario], True, channel_available=_channel_always)
+
+    err = capsys.readouterr().err
+    assert "nothing here can hide them" in err
+    assert "visual one" in err
+    # Neither of the other two "stays off" notes fires: this scenario didn't take either of the
+    # paths they describe, and claiming it did would misinform the operator reading stderr.
+    assert "stays off" not in err
+
+
 def test_touch_markers_arm_the_channel_for_a_scenario_that_compares_a_screenshot() -> None:
     """The markers land in the image a `visual` assertion reads, so the run loop hides them for it.
 

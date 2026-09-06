@@ -654,10 +654,12 @@ def _apply_touch_markers(
     same-named scenarios that resolve to different actuators share one verdict on whether either
     can carry the channel — arming it on one that structurally cannot.
 
-    Every outcome says so on stderr, since all three are silent in the evidence otherwise: where
+    Every outcome says so on stderr, since all four are silent in the evidence otherwise: where
     the channel is available, one of its two gates is a build setting bajutsu cannot see from
-    here, so this says what an app that answers nothing will fail with; where it is unavailable
-    or declined, the markers an investigator asked for simply do not appear.
+    here, so this says what an app that answers nothing will fail with; where it is unavailable or
+    declined, the markers an investigator asked for simply do not appear — unless the scenario
+    pinned `BAJUTSU_TOUCH_MARKERS` to `"1"` itself, which `setdefault` never overrides, so that one
+    keeps drawing markers nothing here can hide, and gets the fourth note instead.
     """
     if not enabled:
         return
@@ -690,6 +692,19 @@ def _apply_touch_markers(
     # Both partitions can be non-empty in one run: availability follows the actuator each scenario
     # resolved to, so a `--backend ios,web` run can arm one scenario and skip the next.
     channel_less = {id(s) for s in needs_channel if id(s) not in armed}
+    # `setdefault` below never overrides a key a scenario already set, so a scenario that pinned
+    # `BAJUTSU_TOUCH_MARKERS: "1"` itself keeps drawing markers regardless of what this function
+    # decides — "stays off" would be false for one of these even though it landed in
+    # `declines_channel` or `channel_less` exactly like a defaulted scenario. Split that subset out
+    # so each side gets a note that describes what actually happens to it.
+    pinned_on = {
+        id(s)
+        for s in wants_markers
+        if s.preconditions.launch_env.get("BAJUTSU_TOUCH_MARKERS") == "1"
+        and (id(s) in declines_channel or id(s) in channel_less)
+    }
+    channel_less_drops = channel_less - pinned_on
+    declines_drops = declines_channel - pinned_on
     if armed:
         typer.echo(
             "note: the scenario(s) whose verdict compares a screenshot need the in-app control "
@@ -698,24 +713,34 @@ def _apply_touch_markers(
             f"{', '.join(s.name for s in needs_channel if id(s) in armed)}",
             err=True,
         )
-    if channel_less:
+    if channel_less_drops:
         typer.echo(
             "note: --touch-markers stays off for the scenario(s) whose verdict compares a "
             "screenshot, since the actuator each of them resolved to cannot carry the in-app "
             "control channel that would hide the markers for that one capture (needs the "
             "xcuitest actuator with network collection on): "
-            f"{', '.join(s.name for s in needs_channel if id(s) in channel_less)}",
+            f"{', '.join(s.name for s in needs_channel if id(s) in channel_less_drops)}",
             err=True,
         )
-    if declines_channel:
-        declined_names = sorted(s.name for s in wants_markers if id(s) in declines_channel)
+    if declines_drops:
+        declined_names = sorted(s.name for s in wants_markers if id(s) in declines_drops)
         typer.echo(
             "note: --touch-markers stays off for the scenario(s) that pinned "
             "BAJUTSU_CONTROL_CHANNEL themselves, since nothing would then hide the markers for "
             f"the capture their `visual` verdict compares: {', '.join(declined_names)}",
             err=True,
         )
+    if pinned_on:
+        pinned_names = sorted(s.name for s in wants_markers if id(s) in pinned_on)
+        typer.echo(
+            "note: the scenario(s) that pinned BAJUTSU_TOUCH_MARKERS themselves keep drawing "
+            "markers even though nothing here can hide them for the capture their `visual` "
+            f"verdict compares: {', '.join(pinned_names)}",
+            err=True,
+        )
     for s in scenarios:
+        if id(s) in pinned_on:
+            continue  # already "1" by the scenario's own pin; setdefault below would be a no-op
         if id(s) in declines_channel or id(s) in channel_less:
             continue  # no channel to hide the markers: no markers, matching the notes above
         s.preconditions.launch_env.setdefault("BAJUTSU_TOUCH_MARKERS", "1")
