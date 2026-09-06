@@ -14,7 +14,7 @@ import subprocess
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
-from typing import TYPE_CHECKING, Protocol
+from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 from bajutsu.common.drivers import base
 from bajutsu.common.evidence import intervals
@@ -183,6 +183,62 @@ def write_screenshot(
     driver.screenshot(str(writer.reserve(name)))
     writer.record_unmasked(name)
     return name
+
+
+def begin_after_screenshot(
+    driver: base.Driver, writer: RunArtifactWriter, prefix: str
+) -> Callable[[], list[Artifact]]:
+    """Start the step's mandatory `after.png` now; the returned join finishes it (BE-0407 Unit 2).
+
+    The shot is a device round trip, so the run loop starts it right after the action and joins it at
+    the end of the same step, letting the post-step tree read run inside it. Whether it may actually
+    overlap is the backend's own answer, decided here (`start_after_screenshot` below decides the
+    sink's half): a backend that does not implement `base.BackgroundScreenshotProvider` is shot
+    synchronously, and its join only hands back the record, so nothing about its timing moves.
+
+    The pending shot never outlives its own step, which is what keeps this cheap: there is no capture
+    to cancel at a scenario boundary and nothing to await before the report is written, and a failure
+    surfaces out of the join with the same exception the synchronous shot would have raised, inside
+    the step that took it.
+
+    Returns:
+        The join, which completes the capture and returns the step's screenshot artifact record.
+    """
+
+    def record(name: str) -> list[Artifact]:
+        return [Artifact(name, "screenshot", "driver", _depicts(driver.name, "after"))]
+
+    # `write_screenshot`, not an inlined copy of it, so a later change to how a screenshot artifact is
+    # produced reaches `after.png` and `before.png` alike. Only the deferred branch below has to
+    # reserve the path itself, because it hands that path to the driver before there is anything to
+    # record.
+    if not isinstance(driver, base.BackgroundScreenshotProvider):
+        synchronous = record(write_screenshot(driver, writer, prefix))
+        return lambda: synchronous
+    name = f"{prefix}/after.png"
+    # Restricted up front, not only at the join: a screenshot can hold on-screen secrets, and the
+    # ordinary reserve/record pair would leave this one at the ambient umask for the whole overlap
+    # window rather than for no time at all (BE-0131).
+    reserved = writer.reserve_restricted(name)
+    wait = driver.screenshot_in_background(str(reserved))
+
+    def join() -> list[Artifact]:
+        try:
+            wait()
+        except Exception:
+            # The reservation pre-created the file, so a shot that never wrote would leave an empty
+            # `after.png` behind. No manifest names it — the artifact record below is never
+            # produced — but the run directory is shipped whole to an object store, so it would
+            # reach an investigator as a zero-byte screenshot of the very failure they opened the
+            # run for.
+            reserved.unlink(missing_ok=True)
+            raise
+        # Deferred with the bytes, not taken with the reservation: `record_unmasked` restricts the
+        # file the recorder wrote (BE-0131), so it has to run once that file actually exists.
+        writer.record_unmasked(name)
+        return record(name)
+
+    return join
 
 
 def reuse_screenshot(
@@ -426,6 +482,40 @@ class EvidenceSink(Protocol):
     ) -> list[Artifact]: ...
 
 
+@runtime_checkable
+class DeferredScreenshotSink(Protocol):
+    """A sink that can start the step's `after.png` and hand back a join for it (BE-0407 Unit 2).
+
+    The sink half of the overlap; `base.BackgroundScreenshotProvider` is the driver half, and
+    `start_after_screenshot` below defers only when both sides answer. Separate from `EvidenceSink`
+    so a sink that writes nothing, or one that only records what it was asked for, needs no opinion
+    about it — `start_after_screenshot` falls back to the ordinary `capture` call such a sink already
+    serves, which is the same shot at the same moment it took before this seam existed. The same
+    narrow opt-in the driver-side protocols use.
+    """
+
+    def begin_after_screenshot(
+        self, driver: base.Driver, step_id: str
+    ) -> Callable[[], list[Artifact]]: ...
+
+
+def start_after_screenshot(
+    sink: EvidenceSink, driver: base.Driver, step_id: str
+) -> Callable[[], list[Artifact]]:
+    """Begin the step's mandatory `after.png`; the returned join yields its artifact records.
+
+    Deferred — overlapping the shot with whatever the caller does before joining — only when the sink
+    can hand back a join *and* the backend says a second call may be in flight on its channel. This
+    decides the first half; `begin_after_screenshot` decides the second. A sink with no join takes the
+    ordinary capture call it already serves, which is the same shot at the same moment it was taken
+    before this seam existed (BE-0407 Unit 2).
+    """
+    if isinstance(sink, DeferredScreenshotSink):
+        return sink.begin_after_screenshot(driver, step_id)
+    shot = sink.capture(driver, step_id, ["screenshot.after"])
+    return lambda: shot
+
+
 class NullSink:
     """Default sink: capture nothing (keeps runs side-effect free unless asked)."""
 
@@ -533,6 +623,11 @@ class FileSink:
             elements_source=elements_source,
             reuse_before_screenshot=reuse_before_screenshot,
         )
+
+    def begin_after_screenshot(
+        self, driver: base.Driver, step_id: str
+    ) -> Callable[[], list[Artifact]]:
+        return begin_after_screenshot(driver, self._writer, step_id)
 
     def wait_diagnostic(
         self,

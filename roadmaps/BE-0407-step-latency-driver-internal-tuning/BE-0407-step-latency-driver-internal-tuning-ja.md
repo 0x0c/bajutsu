@@ -9,7 +9,7 @@
 | 提案者 | [@0x0c](https://github.com/0x0c) |
 | 状態 | **実装中** |
 | トラッキング Issue | [検索](https://github.com/bajutsu-e2e/bajutsu/issues?q=is%3Aissue+label%3Aroadmap-tracking+in%3Atitle+"BE-0407") |
-| 実装 PR | [#1897](https://github.com/bajutsu-e2e/bajutsu/pull/1897)（グループ 1、作業単位 1、3〜5）、[#1912](https://github.com/bajutsu-e2e/bajutsu/pull/1912)（グループ 1 の作業単位 6、グループ 2 の作業単位 7、9、10、11、12、13、そして 14 の半分） |
+| 実装 PR | [#1897](https://github.com/bajutsu-e2e/bajutsu/pull/1897)（グループ 1、作業単位 1、3〜5）、[#1912](https://github.com/bajutsu-e2e/bajutsu/pull/1912)（グループ 1 の作業単位 6、グループ 2 の作業単位 7、9、10、11、12、13、そして 14 の半分）、[#1925](https://github.com/bajutsu-e2e/bajutsu/pull/1925)（グループ 1 の作業単位 2。グループ 1 の完了） |
 | トピック | Platform support |
 | 関連 | [BE-0105](../BE-0105-xcuitest-single-snapshot-query/BE-0105-xcuitest-single-snapshot-query-ja.md)、[BE-0114](../BE-0114-driver-conformance-suite/BE-0114-driver-conformance-suite-ja.md)、[BE-0234](../BE-0234-adb-run-performance/BE-0234-adb-run-performance-ja.md)、[BE-0259](../BE-0259-assert-query-snapshot-reuse/BE-0259-assert-query-snapshot-reuse-ja.md)、[BE-0310](../BE-0310-ios-accessibility-screen-change-readiness/BE-0310-ios-accessibility-screen-change-readiness-ja.md)、[BE-0341](../BE-0341-pre-action-evidence-capture/BE-0341-pre-action-evidence-capture-ja.md)、[BE-0396](../BE-0396-ios-sfsafariviewcontroller-tree/BE-0396-ios-sfsafariviewcontroller-tree-ja.md)、[BE-0408](../BE-0408-step-latency-device-executor-protocol/BE-0408-step-latency-device-executor-protocol-ja.md)、[BE-0409](../BE-0409-step-latency-ios-device-executor/BE-0409-step-latency-ios-device-executor-ja.md)、[BE-0410](../BE-0410-step-latency-android-device-executor/BE-0410-step-latency-android-device-executor-ja.md) |
 <!-- /BE-METADATA -->
@@ -88,6 +88,10 @@ Android の常駐サーバーは、`POST /act` の大半を、`POSTDATE_BUDGET_M
 driver conformance suite
 （[BE-0114](../BE-0114-driver-conformance-suite/BE-0114-driver-conformance-suite-ja.md)）と
 トレーサーの再実行で検証します。
+
+**グループ 1 は完了です。** 作業単位 1 と 3〜6 は記述どおりに着地しました。作業単位 2 は
+`after.png` の側だけが着地しています。`elements.json` の側は取り下げました。その根拠となる
+実測は、下の進捗に記録しています。
 
 ### グループ 1 — 両バックエンド共通（orchestrator）
 
@@ -284,10 +288,18 @@ driver conformance suite
   `before.png` として再利用します（作業単位 1）。ステップが動作する前に `elements.json` を
   書き込むのをやめます（作業単位 3〜4）。ガードや割り込みハンドラが登録されていないときは、
   BE-0310 の静止待ち区間中にデバイスをポーリングしません（作業単位 5）。
-- [ ] グループ 1、作業単位 2——`after.png` と `elements.json` の書き込みをクリティカルパスの
-  外へ移します（非同期化）。見送りました：エラーの伝播とキャンセルの扱い、そしてシナリオの
-  レポートを生成する前に保留中の書き込みを待ち合わせる仕組みに、独立した設計検討が要ります。
-  詳細は本項目のログを参照してください。
+- [x] グループ 1、作業単位 2——ステップ必須の `after.png` を、ステップ後のツリー読み取りと
+  重ね合わせます。詳細設計の字面からは 2 点ずれていますが、どちらも議論ではなく実測で決めました。
+  まず `elements.json` の側は取り下げました。この書き込みは実機のツリーで 0.36 ミリ秒、
+  100〜1200 要素の合成ツリーでも 0.9〜8.7 ミリ秒にとどまります。1 ステップの 2％ に満たない量を
+  削るために、秘匿処理の経路へスレッドプールを持ち込む価値はありません。次に `after.png` の側は、
+  書き込みではなくデバイスとの往復でした。そのため非同期化ではなく重ね合わせとして実装しました。
+  しかも、バックエンド自身のチャネルが 2 つ目の呼び出しを同時に受け付けると宣言した場合に限ります
+  （新設の `base.BackgroundScreenshotProvider`）。adb は受け付けますが、XCUITest は意図的に
+  受け付けません。`APIHandler.serialized` があらゆる XCUITest 操作をランナーのメインスレッドへ
+  流し込んでおり、BE-0323 が記録した再入不可能性に反するからです。見送りの理由だった 3 つの設計課題は、
+  撮影が自分のステップを越えないことで解けました。ステップが戻る前の `finally` で待ち合わせるので、
+  シナリオの境界で取り消すものも、レポート生成の前に待つものもありません。
 - [x] グループ 1、作業単位 6——iOS の `drain_interruptions` を `/tap` 自身の応答へ畳み込みます。
   詳細設計が挙げていた「`/tap` または `/elements`」のうち、頻度の高い前者だけに絞りました。
   ドライバは tap の応答がすでに運んできた内容を蓄積します。その間に別の呼び出し（query や
@@ -397,6 +409,20 @@ driver conformance suite
   詳細はどちらも進捗の注記を参照してください。作業単位 14 の `MAX_WARM_REUSES` のほう、
   作業単位 16、作業単位 17〜24、そしてすでに見送っているグループ 1 の 2 つの作業単位は、
   後続の PR に残しています。
+- [#1925](https://github.com/bajutsu-e2e/bajutsu/pull/1925) — グループ 1 の作業単位 2 です。
+  これでグループ 1 は完了しました。書き込みを非同期化するのではなく、ステップ必須の `after.png` を
+  ステップ後のツリー読み取りと重ね合わせました。実測したところ、費用はデバイスとの往復のほうにあり、
+  書き込みは実機のツリーで 0.36 ミリ秒にすぎなかったためです。重ね合わせは、両側それぞれの狭い
+  オプトインで守っています。ドライバ側が `base.BackgroundScreenshotProvider`、シンク側が
+  `DeferredScreenshotSink` です。実行ループはバックエンド名で分岐せず、この 2 つを問い合わせます。
+  どちらも宣言しないバックエンドは、これまでどおり同期的に撮影します。ドライバ側を宣言するのは adb
+  だけです。iOS のランナーはあらゆる XCUITest 操作をメインスレッドへ直列化するので、重ねる余地が
+  ありません。保留中の撮影は、ステップが戻る前の `finally` で待ち合わせます。これが、この作業単位が
+  見送られていた 3 つの設計課題への答えです。詳細設計が挙げていなかった 3 つの帰結も、テストで
+  固定しました。撮影の失敗が、その原因となった失敗の身代わりになることはありません。予約したファイルは、
+  記録側が書き込む前に権限を絞ります。そして一度も書き込まれなかった撮影は、0 バイトの残骸を残しません。
+  API 34 のエミュレータ上で実際のドライバとシンクを通して計測したところ、撮影してから読み取るまでが
+  3361 ミリ秒から 2182 ミリ秒へ下がりました。
 
 ## 参考
 

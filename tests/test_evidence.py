@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import json
 import stat
+import threading
 import time
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -14,7 +16,9 @@ from bajutsu.common.drivers.fake import FakeDriver
 from bajutsu.common.evidence import (
     Artifact,
     FileSink,
+    NullSink,
     capture,
+    start_after_screenshot,
     write_elements,
     write_raw_tree,
     write_screenshot,
@@ -823,3 +827,97 @@ def test_the_text_paths_are_never_recorded_as_unmasked(tmp_path: Path) -> None:
     writer.write_screen_map("screenmap.json", {"stop_reason": "completed"})
     assert writer.scrub_reserved("device.log") is True
     assert writer.unmasked == []
+
+
+# --- the deferred `after.png` (BE-0407 Unit 2) ---------------------------------------------------
+
+
+class _BackgroundShotDriver(FakeDriver):
+    """A driver that declares its screenshot may overlap another call, and blocks until released.
+
+    Stands in for `AdbDriver`, whose shot is a `screencap` subprocess: what matters to the evidence
+    layer is only that the bytes land somewhere between the start and the join, which a gate proves
+    far more sharply than a real subprocess would.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.release = threading.Event()
+        self.started = threading.Event()
+        self.fail: Exception | None = None
+
+    def screenshot_in_background(self, path: str) -> Callable[[], None]:
+        def run() -> None:
+            self.started.set()
+            self.release.wait(timeout=5)
+            if self.fail is None:
+                Path(path).write_bytes(b"\x89PNG deferred")
+
+        thread = threading.Thread(target=run, daemon=True)
+        thread.start()
+
+        def join() -> None:
+            thread.join(timeout=5)
+            if self.fail is not None:
+                raise self.fail
+
+        return join
+
+
+def test_a_background_capable_backend_defers_the_shot_until_the_join(tmp_path: Path) -> None:
+    # The whole point of the unit: the round trip is still in flight while the caller gets on with
+    # the post-step tree read, and only the join waits for it.
+    driver = _BackgroundShotDriver()
+    sink = FileSink(tmp_path / "run1")
+    join = start_after_screenshot(sink, driver, "00-s/step0")
+    driver.started.wait(timeout=5)
+    shot = tmp_path / "run1" / "00-s" / "step0" / "after.png"
+    assert shot.read_bytes() == b""  # still in flight — the caller was not made to wait for it
+    # Restricted before the recorder writes, not at the join: the overlap window is exactly when a
+    # screenshot holding on-screen secrets would otherwise sit at the ambient umask (BE-0131).
+    assert stat.S_IMODE(shot.stat().st_mode) == 0o600
+
+    driver.release.set()
+    artifacts = join()
+
+    assert shot.read_bytes() == b"\x89PNG deferred"
+    assert [(a.name, a.kind, a.depicts) for a in artifacts] == [
+        ("00-s/step0/after.png", "screenshot", "fake:after")
+    ]
+    # `record_unmasked` ran only once the recorder's own bytes were there — it restricts the file it
+    # is told about, so a shot left at the ambient umask would mean it had run against nothing.
+    assert stat.S_IMODE(shot.stat().st_mode) == 0o600
+
+
+def test_a_deferred_shot_raises_its_own_failure_out_of_the_join(tmp_path: Path) -> None:
+    # A failed capture must still fail the step, with the same exception the synchronous shot would
+    # have raised — deferring moves the moment, never the outcome.
+    driver = _BackgroundShotDriver()
+    driver.fail = RuntimeError("screencap died")
+    sink = FileSink(tmp_path / "run1")
+    join = start_after_screenshot(sink, driver, "00-s/step0")  # the start itself stays quiet
+    driver.release.set()
+    with pytest.raises(RuntimeError, match="screencap died"):
+        join()
+
+
+def test_a_backend_without_the_seam_still_shoots_before_the_join(tmp_path: Path) -> None:
+    # The narrow opt-in: XCUITest and Playwright serialize their own channels, so they must keep
+    # paying the shot exactly where they always did rather than being deferred behind their backs.
+    driver = FakeDriver()
+    sink = FileSink(tmp_path / "run1")
+    join = start_after_screenshot(sink, driver, "00-s/step0")
+    assert driver.actions == [
+        ("screenshot", str(tmp_path / "run1" / "00-s" / "step0" / "after.png"))
+    ]  # already taken, before anything joined
+    # The same record the deferred path yields, so a consumer cannot tell which branch produced it.
+    assert [(a.name, a.kind, a.depicts) for a in join()] == [
+        ("00-s/step0/after.png", "screenshot", "fake:after")
+    ]
+
+
+def test_a_sink_that_captures_nothing_defers_nothing() -> None:
+    # A `NullSink` writes no evidence, so there is no shot to overlap and nothing pending; the join
+    # is simply what the caller calls either way.
+    join = start_after_screenshot(NullSink(), _BackgroundShotDriver(), "00-s/step0")
+    assert join() == []

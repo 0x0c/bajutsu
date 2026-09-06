@@ -9,7 +9,7 @@
 | Author | [@0x0c](https://github.com/0x0c) |
 | Status | **In progress** |
 | Tracking issue | [Search](https://github.com/bajutsu-e2e/bajutsu/issues?q=is%3Aissue+label%3Aroadmap-tracking+in%3Atitle+"BE-0407") |
-| Implementing PR | [#1897](https://github.com/bajutsu-e2e/bajutsu/pull/1897) (Group 1, units 1, 3-5), [#1912](https://github.com/bajutsu-e2e/bajutsu/pull/1912) (Group 1 unit 6, Group 2 units 7, 9, 10, 11, 12, 13, and half of 14) |
+| Implementing PR | [#1897](https://github.com/bajutsu-e2e/bajutsu/pull/1897) (Group 1, units 1, 3-5), [#1912](https://github.com/bajutsu-e2e/bajutsu/pull/1912) (Group 1 unit 6, Group 2 units 7, 9, 10, 11, 12, 13, and half of 14), [#1925](https://github.com/bajutsu-e2e/bajutsu/pull/1925) (Group 1 unit 2, completing Group 1) |
 | Topic | Platform support |
 | Related | [BE-0105](../BE-0105-xcuitest-single-snapshot-query/BE-0105-xcuitest-single-snapshot-query.md), [BE-0114](../BE-0114-driver-conformance-suite/BE-0114-driver-conformance-suite.md), [BE-0234](../BE-0234-adb-run-performance/BE-0234-adb-run-performance.md), [BE-0259](../BE-0259-assert-query-snapshot-reuse/BE-0259-assert-query-snapshot-reuse.md), [BE-0310](../BE-0310-ios-accessibility-screen-change-readiness/BE-0310-ios-accessibility-screen-change-readiness.md), [BE-0341](../BE-0341-pre-action-evidence-capture/BE-0341-pre-action-evidence-capture.md), [BE-0396](../BE-0396-ios-sfsafariviewcontroller-tree/BE-0396-ios-sfsafariviewcontroller-tree.md), [BE-0408](../BE-0408-step-latency-device-executor-protocol/BE-0408-step-latency-device-executor-protocol.md), [BE-0409](../BE-0409-step-latency-ios-device-executor/BE-0409-step-latency-ios-device-executor.md), [BE-0410](../BE-0410-step-latency-android-device-executor/BE-0410-step-latency-android-device-executor.md) |
 <!-- /BE-METADATA -->
@@ -82,6 +82,9 @@ below changes the `Driver` protocol, a scenario's YAML shape, or what a conditio
 is a redundant call removed or a fixed-cost internal reordered, verified against the driver
 conformance suite ([BE-0114](../BE-0114-driver-conformance-suite/BE-0114-driver-conformance-suite.md))
 and a rerun of the tracer.
+
+**Group 1 is complete.** Units 1 and 3–6 landed as described. Unit 2 landed as its `after.png`
+half alone; *Progress* below records the measurement behind dropping its `elements.json` half.
 
 ### Group 1 — common to both backends (orchestrator)
 
@@ -257,15 +260,24 @@ and a rerun of the tracer.
   `before.png` (Unit 1), stop writing `elements.json` before a step acts (Units 3–4), and stop
   polling the device during the BE-0310 settle quiescence window when no guard or interrupt
   handler is registered (Unit 5).
-- [ ] Group 1, unit 2 — move `after.png` and the `elements.json` write off the critical path
-  (async). Deferred: needs its own design pass for error propagation and cancellation, and for
-  joining pending writes before a scenario's report is generated — see the item's own Log.
-- [x] Group 1, unit 6 — fold iOS's `drain_interruptions` into `/tap`'s own reply. Scoped to `/tap`
-  alone (the higher-frequency of the "`/tap` or `/elements`" the design named) rather than every
-  actuation: the driver accumulates whatever a tap's own fold already carried and merges it with
-  an explicit `/interruptionPolicy/drain` whenever any other driver call happened in between (a
-  alone — the higher-frequency of the pair the design named, "`/tap` or `/elements`" — rather than every
-  dropped even when the fast path can't be taken.
+- [x] Group 1, unit 2 — overlap the step's mandatory `after.png` with the post-step tree read.
+  Two deviations from the literal design, both settled by measurement. We dropped the
+  `elements.json` half. That write costs 0.36ms on a real device tree, and 0.9–8.7ms across
+  100–1200 synthetic elements. Under 2 percent of a step does not pay for a thread pool on the
+  path that scrubs secrets. The other half, `after.png`, turned out to be a *device round trip*
+  rather than a write, so the run loop overlaps that shot instead of deferring a write. The
+  backend's own channel has to admit a second call in flight. Where it does not, the shot stays
+  synchronous. The new `base.BackgroundScreenshotProvider` declares that property: adb has it,
+  XCUITest does not, because `APIHandler` funnels every XCUITest operation onto the runner's main
+  thread — the non-re-entrancy BE-0323 records. The shot never outlives its own step, which
+  answers the three design questions this unit sat parked over: a `finally` joins the shot before
+  the step returns, so nothing waits at a scenario boundary and nothing waits before the report.
+- [x] Group 1, unit 6 — fold iOS's `drain_interruptions` into `/tap`'s own reply. The design named
+  "`/tap` or `/elements`". This covers `/tap` alone, the higher-frequency of the pair, rather than
+  every actuation. The driver accumulates whatever a tap's own fold already carried. When another
+  driver call — a query or a stale retry's re-resolve — intervenes in the meantime, the driver
+  merges that accumulation with an explicit `/interruptionPolicy/drain`, so a tap's reply loses
+  nothing even where the fast path does not apply.
 - [x] Group 2, unit 7 — batch the tap-path attribute reads into one `el.snapshot()` call; cache
   `app.frame` for the life of a resident lease (guarded against caching a transient `.zero` read).
 - [ ] Group 2, unit 8 — generalize BE-0396's coordinate tap beyond Safari. Attempted, then
@@ -354,6 +366,19 @@ Log:
   review and on-device verification found each unsafe as designed — see the Progress notes on
   both. Unit 14's `MAX_WARM_REUSES` half, unit 16, units 17–24, and the two Group 1 units already
   deferred remain for later PRs.
+- [#1925](https://github.com/bajutsu-e2e/bajutsu/pull/1925) — Group 1 unit 2, which completes Group 1.
+  Overlapped the step's `after.png` with the post-step tree read rather than deferring a write.
+  Measurement put the cost in the device round trip, not the write. That write comes in at 0.36ms on
+  a real device tree. Two narrow opt-ins gate the overlap, one per side.
+  `base.BackgroundScreenshotProvider` names the driver's half, `DeferredScreenshotSink` the sink's.
+  The run loop asks those two rather than branching on a backend name. A backend that declares
+  neither takes its shot synchronously, where it always did. adb alone declares the driver half. The
+  iOS runner serializes every XCUITest operation onto its main thread, so nothing overlaps there. A
+  `finally` joins the pending shot before the step returns. That answers the three design questions
+  this unit sat parked over. Tests pin three consequences the design left unlisted. A failing shot
+  never stands in for the fault that caused it. The reservation gets its owner-only mode before the
+  recorder writes into it. A shot that never wrote leaves no zero-byte husk. Measured on an API 34
+  emulator, through the real driver and sink. The shot-then-read pair fell from 3361ms to 2182ms.
 
 ## References
 

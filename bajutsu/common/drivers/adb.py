@@ -33,6 +33,7 @@ import logging
 import math
 import re
 import subprocess
+import threading
 import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
@@ -1701,6 +1702,40 @@ class AdbDriver(CoordinateTreeDriver):
 
     def screenshot(self, path: str) -> None:
         adb.Env(self.serial, run=self._run).screenshot(path)
+
+    def screenshot_in_background(self, path: str) -> Callable[[], None]:
+        """Start `screenshot` on a worker thread; the returned join waits for the PNG to land.
+
+        `base.BackgroundScreenshotProvider`'s side of the overlap. It runs the very same `screenshot`
+        rather than a second `screencap` call of its own, so the binary-capture seam
+        (`adb.Env._run_capture`) a test patches is still the one path pixels take.
+
+        Nothing here needs a lock: `screenshot` builds a throwaway `adb.Env` and shells out, reading
+        `self.serial` and `self._run` and touching no mutable driver state — unlike every other call
+        on this driver, which is why the overlap is safe on this backend alone. A failure crosses the
+        thread boundary and is re-raised, unchanged, out of the join, so the caller fails exactly as it
+        would have; the thread is a daemon so a caller that dies before joining cannot wedge the
+        interpreter on it.
+        """
+        failure: list[Exception] = []
+
+        def run() -> None:
+            try:
+                self.screenshot(path)
+            except Exception as exc:
+                # Deliberately broad, and not a swallow: whatever the synchronous `screenshot` would
+                # have raised is carried across the thread boundary and re-raised verbatim by `join`.
+                failure.append(exc)
+
+        thread = threading.Thread(target=run, name="bajutsu-adb-screenshot", daemon=True)
+        thread.start()
+
+        def join() -> None:
+            thread.join()
+            if failure:
+                raise failure[0]
+
+        return join
 
     def driver_interval(self, kind: str, path: Path) -> intervals.Interval | None:
         """A whole-scenario interval recording via adb, or None for an unsupported kind.
