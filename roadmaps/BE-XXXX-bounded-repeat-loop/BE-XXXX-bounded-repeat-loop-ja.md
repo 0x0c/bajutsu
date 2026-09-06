@@ -79,7 +79,7 @@ Repeat ::= { times: integer, as?: string, steps: list(<Step>) }                 
       - tap: { id: inbox.confirmDelete }
 ```
 
-### 終了保証を、助言ではなく構造にします
+### 終了保証は、助言ではなく構造で与える
 
 3 つの決定がそれを担います。どれも意図したものです。
 
@@ -100,10 +100,17 @@ Repeat ::= { times: integer, as?: string, steps: list(<Step>) }                 
 
 `_run_repeat` を `bajutsu/common/orchestrator/loop.py` の `_run_if` と `_run_for_each` の隣に置き、
 同じ `tuple[bool, str]` を返します。ステップのディスパッチには、`"if_"` と `"for_each"` の隣に
-`"repeat"` の枝が増えます（`loop.py:1281-1284`）。いま `_run_if` が行っている条件の評価、つまり
-`bindings` に対するアサーションの補間と `driver.query()` と評価は、`_eval_condition` という 1 つの
-ヘルパーに括り出します。`_run_if` と `_run_repeat` と割り込みガードがこれを共有するので、述語の
-経路は 1 つだけになります。分岐しうる 2 つ目は生まれません。
+`"repeat"` の枝が増えます（`loop.py:1281-1284`）。`_run_repeat` は `_run_if` の条件の経路、つまり
+`bindings` に対するアサーションの補間と `driver.query()` と評価を共有します。述語の経路は 1 つだけに
+なり、分岐しうる 2 つ目は生まれません。
+
+割り込みガードはこの共有から外します。`_InterruptGuard` は条件を評価のたびではなく `__post_init__` で
+一度だけ補間しており、その理由は `loop.py:1002-1005` に記録されています。「`observe` は wait の
+ティックごとに走るので、`${...}` を含まない条件をそこで補間し直すと、何も変わらないのに毎回直列化
+することになる」というものです。`_fire_once`（`:1012`）は自分で `driver.query()` を発行せず、ループが
+すでに持っているツリーに対して評価します（`:983-985`）。呼び出しごとに補間と問い合わせを行うヘルパーへ
+畳み込むと、wait のティックごとに直列化し直し、ポーリングの中に余計なツリー取得を足すことになります。
+ガードと共有しうるのは*評価*の半分だけで、補間と問い合わせは呼び出し側それぞれの都合の場所に残します。
 
 条件は `Assertion` なので、`while: { count: { sel: …, atLeast: 1 } }` も `while: { request: … }` も
 書けます。どこにもモデルは介在しません。`if` がすでに持っている性質です。入れ子は `_StepCounter` を
@@ -111,16 +118,21 @@ Repeat ::= { times: integer, as?: string, steps: list(<Step>) }                 
 
 ### 新しい枝を覚える必要のある 5 つの走査
 
-どれもすでに `if_` と `for_each` の対を持っています。1 つでも漏らすと、欠陥になります。
+ステップの入れ子に降りる走査は 5 つあり、どれもすでに `if_` と `for_each` の対を持っています。
+1 つでも漏らすと、欠陥になります。
 
 - `bajutsu/common/capability/capability_preflight.py` の `_walk_steps`（`:83-87`）です。漏らすと、
   ループ本体の未対応ステップがゲートをすり抜け、端末上で遅れて失敗します。
   [BE-0082](../BE-0082-capability-preflight-check/BE-0082-capability-preflight-check-ja.md) が
   まさに防ぐために存在するものです。
-- `bajutsu/analysis/audit.py` のセレクタと指摘の走査です。
-- `bajutsu/analysis/coverage.py` の通信の走査です。
-- `bajutsu/analysis/trace.py` の制御構文の判定です。
-- `bajutsu/codegen/common.py` の `_reject_runtime_only`（`:263`）です。
+- `bajutsu/analysis/audit.py` のセレクタの走査（`:130-137`）と指摘の走査（`:234-239`）です。別々の
+  関数で、それぞれが自分の対を持っています。
+- `bajutsu/analysis/coverage.py` の通信の走査（`:131-136`）です。
+- `bajutsu/analysis/trace.py` の制御構文の判定（`:291`）です。
+
+`bajutsu/codegen/common.py` の `_reject_runtime_only`（`:263`）は 6 つ目の箇所ですが、走査では
+ありません。平坦な拒否であり、出力側の作業 — 各ターゲットのステップ生成が `times` の展開を覚えること
+— は別の作業単位なので、下に単独で挙げます。
 
 ### ループをまたぐ `audit` と `impact`
 
@@ -133,7 +145,7 @@ Repeat ::= { times: integer, as?: string, steps: list(<Step>) }                 
 そうなっているのと同じなので、`StepRef` に変更は要りません。`coverage` は本体が参照する id と
 エンドポイントを、これまでどおり折り込みます。
 
-### codegen は `times` を出力し、`while` を拒否します
+### codegen は `times` を出力し、`while` を拒否する
 
 `if` と `forEach` と `extract` がいま拒否されるのは、静的なテストにそれらを再現する実行時がないから
 です（[BE-0297](../BE-0297-codegen-xcuitest-dsl-coverage/BE-0297-codegen-xcuitest-dsl-coverage-ja.md)）。
@@ -147,8 +159,9 @@ Kotlin でも、回数付きループにそのまま写ります。**`times` は
 1. **文法**（`bajutsu/common/scenario/models/`）です。`Repeat` モデル、`times` と `while` の XOR
    バリデータ、1〜100 の上限、`maxIterations` の必須化、
    [dsl-grammar](../../docs/ja/dsl-grammar.md) の §2・§4・§5 と英語版を書きます。
-2. **条件評価の括り出し**です。`_eval_condition` を `_run_if` と `_run_repeat` と割り込みガードで
-   共有し、`if` の既存の振る舞いが変わらないことを示します。
+2. **条件評価の共有**です。`_run_if` と `_run_repeat` が 1 つの経路を使い、`if` の既存の振る舞いが
+   変わらないことを示します。割り込みガードは、一度だけの補間と呼び出し側から渡されるツリーを
+   そのまま保ちます。
 3. **`_run_repeat` とディスパッチ**です。両方の形、`as` の束縛、理由に回数を書く上限失敗、
    `_StepCounter` による入れ子を実装します。
 4. **プリフライトの走査**です。`_walk_steps` が `repeat.steps` に再帰し、ループ本体の未対応ステップが

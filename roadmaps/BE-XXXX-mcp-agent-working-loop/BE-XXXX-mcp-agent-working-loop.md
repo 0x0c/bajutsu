@@ -15,8 +15,8 @@
 
 ## Introduction
 
-The MCP server exposes two tools — `bajutsu_run` and `bajutsu_doctor`
-(`bajutsu/mcp/tools.py:54`, `:82`) — against a command surface of twenty. Both return a rendered
+The MCP server exposes two tools — `bajutsu_doctor` and `bajutsu_run`
+(`bajutsu/mcp/tools.py:55`, `:83`) — against a command surface of twenty. Both return a rendered
 string. An agent connected over the Model Context Protocol (MCP) can therefore start an expensive
 device run and score a screen, but cannot validate a draft, read the grammar, or grade what it wrote.
 This item exposes the Claude-free command set through the classification that already enumerates it,
@@ -26,7 +26,7 @@ and returns structured data where the command already computes it.
 
 The five things an agent does while authoring a scenario are: read the grammar, draft, validate the
 draft, grade the selectors it chose, and — after a run — read the failure. Over MCP it can do the
-fourth-from-last only by starting a device run, and the rest not at all. So the agent falls back to a
+fourth only by starting a device run, and the rest not at all. So the agent falls back to a
 shell: it writes the draft to a file, runs `bajutsu lint <path>`, and reads the words `ok` off
 standard output. Every one of those steps is a place the MCP integration was supposed to remove.
 
@@ -210,6 +210,6 @@ Open questions to settle while building:
   — `audit`'s three modes, two of which stay path-shaped over MCP.
 - [BE-0174 — Contain scenario component and data refs within the suite root](../BE-0174-scenario-ref-path-containment/BE-0174-scenario-ref-path-containment.md)
   — the containment rule the new scenario-path parameters reuse.
-- `bajutsu/mcp/tools.py` (`:28` the verdict re-parse, `:54`/`:82` the two tools),
+- `bajutsu/mcp/tools.py` (`:28` the verdict re-parse, `:55` `bajutsu_doctor`, `:83` `bajutsu_run`),
   `bajutsu/mcp/resources.py:12-48` (path containment),
   `bajutsu/common/capability/capabilities.py:41`, `tests/test_capabilities.py:24`.

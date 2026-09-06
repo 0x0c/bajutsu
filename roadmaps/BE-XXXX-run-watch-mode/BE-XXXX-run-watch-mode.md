@@ -80,12 +80,21 @@ their `use:` components and `dataFile` CSVs. That set is already computed exactl
 touched rather than guessing at a glob. When a file is added to the suite directory under a
 directory-shaped invocation, it joins the set on the next iteration's load.
 
-Change detection is a modification-time and size poll over that set, in the standard library.
-Nothing in the tree watches files today, and a native watcher would be a new dependency on the
-deterministic path for a feature that has to poll for correctness anyway — a save that rewrites a
-file in place can leave the modification time unchanged within a coarse clock, so the size is
-compared too. The poll interval is a flag with a small default, debounced so a multi-file save is
-one iteration rather than several.
+Change detection polls that set from the standard library. Nothing in the tree watches files today,
+and a native watcher would be a new dependency on the deterministic path for a feature that has to
+poll anyway.
+
+The comparison is a content hash, not a timestamp. `serve` already keys a config cache on
+`(st_mtime_ns, st_size)` and records what that misses (`bajutsu/serve/helpers.py:132`): "an edit that
+preserves both (a same-size rewrite that also keeps the timestamp) won't be noticed, which is
+acceptable for an operator-edited config." It is not acceptable here. The commonest edit in an
+authoring loop is one character of a selector — `id: a.b` to `id: a.c` — which is same-size, so on a
+coarse-timestamp filesystem the loop would reprint the previous iteration's verdict while the author
+believed the new file ran. A hash over a few dozen small YAML files at a human's editing cadence
+costs nothing worth saving. The stat pair is still read first, as a cheap filter before hashing.
+
+The poll interval is a flag with a small default, debounced so a multi-file save is one iteration
+rather than several.
 
 ### An invalid file does not end the session
 
@@ -103,7 +112,7 @@ them rather than to add a watch-specific recovery.
 `run --watch` runs until interrupted; its exit status reports whether the watch shut down cleanly and
 never encodes pass or fail. The per-iteration verdict line and each iteration's manifest are the
 verdict, exactly as today. CI invokes `bajutsu run`, never `--watch`, and the flag is refused
-alongside the flags that only make sense for a single archived run (`--zip-run`, `--upload-exec`), so
+alongside the flags that only make sense for a single archived run (`--zip`, `--upload-exec`), so
 the shape cannot be mistaken for a gate. Prime directive 1 is untouched — no model is anywhere near
 this, and nothing about how a verdict is reached changes.
 
@@ -130,8 +139,8 @@ line named.
    both paths, with no behavioral change.
 2. **The watched set** — recorded from the paths ref resolution touched, including a directory-shaped
    invocation's newly added files.
-3. **The poll and debounce** — standard-library change detection, the interval flag, and the
-   multi-file save collapsing to one iteration.
+3. **The poll and debounce** — the stat filter, the content hash behind it, the interval flag, and
+   the multi-file save collapsing to one iteration.
 4. **The iteration loop** — verdict line, run directory, and run id per iteration; a load error
    reported without ending the session.
 5. **Flag guards and exit status** — refusal alongside the single-run archival flags, and an exit
@@ -151,8 +160,8 @@ line named.
   also cannot keep the session alive across a syntax error, because the process it restarts is the
   one that failed.
 - **Add a native file-watching dependency.** Rejected: it puts a compiled dependency on the base
-  install for a loop that must poll anyway to be correct about in-place saves, and the standard
-  library covers a suite of a few dozen files at a human's editing cadence without one.
+  install for a loop the standard library already covers at a human's editing cadence, over a suite
+  of a few dozen files.
 - **Build it into `serve` only.** Rejected: it would tie an authoring convenience to running a web
   server, and the terminal loop is where a scenario is most often edited. Sharing the seam gives the
   editor the same benefit without making the terminal path depend on the browser.
@@ -165,7 +174,7 @@ line named.
 
 - [ ] The lifted pool seam, with no behavioral change.
 - [ ] The watched set, recorded from ref resolution.
-- [ ] The poll, the interval flag, and debouncing.
+- [ ] The poll — stat filter, content hash, interval flag, and debouncing.
 - [ ] The iteration loop, including load errors that do not end the session.
 - [ ] Flag guards and the exit status.
 - [ ] Documentation in both languages.
@@ -198,4 +207,6 @@ Open questions to settle while building:
 - [BE-0174 — Contain scenario component and data refs within the suite root](../BE-0174-scenario-ref-path-containment/BE-0174-scenario-ref-path-containment.md)
   — the ref resolution that already computes the watched set exactly.
 - `bajutsu/common/runner/pool.py:92` (`device_pool`), `:142` (the `(lease, shutdown)` pair), `:263`
-  (BE-0291's cached environment), `bajutsu/common/scenario/load_expanded.py:21` (`contained_ref`).
+  (BE-0291's cached environment), `bajutsu/common/scenario/load_expanded.py:21` (`contained_ref`),
+  `bajutsu/serve/helpers.py:132` (the stat-pair cache key and the hole it accepts),
+  `bajutsu/run/cli.py:1336` (`--zip`).

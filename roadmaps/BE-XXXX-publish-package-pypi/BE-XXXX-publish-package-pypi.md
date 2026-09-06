@@ -115,8 +115,11 @@ macOS-platform wheel carrying the runner alone, pulled by a new `ios` extra so a
 
 ### The Android UI Automator server
 
-Already optional and already degrading: the Android environment falls back to a coordinate-only path
-when the server is not built. A pip install therefore works for Android today at reduced fidelity.
+Already optional and already degrading: when the resident server is not built, the Android
+environment reads the tree with `uiautomator dump` instead
+(`bajutsu/common/platform_lifecycle/environments/android.py:174`) — slower per read, but a complete
+accessibility tree. A pip install therefore works for Android today at reduced speed rather than
+reduced reach.
 The server's build outputs are architecture-independent data, so including them keeps the wheel
 `py3-none-any`, with a Gradle step in the release workflow. This is its own unit, so it can be
 deferred to a second release without blocking the first.
@@ -132,7 +135,7 @@ the first time.
 its evidence.
 
 Two packaging-metadata repairs land with them. `readme = "DESIGN.md"` (`:5`) points a package index's
-project page at a 54 KB Japanese design document; it should be the README, whose relative links must
+project page at a 56 KB Japanese design document; it should be the README, whose relative links must
 become absolute documentation-site links, since a package index renders relative links as broken and
 that page is the first thing an evaluator sees. And `[project.urls]` is absent entirely: homepage,
 documentation, repository, issues.
@@ -224,4 +227,5 @@ Open questions to settle while building:
   and [BE-0173 — Slim Linux web-worker container image](../BE-0173-slim-web-worker-image/BE-0173-slim-web-worker-image.md)
   — what a fresh install still needs beyond the wheel, and the worker's runtime closure extras.
 - `pyproject.toml` (`:3` version, `:5` readme, `:31`/`:41`/`:45`/`:70` the self-referential extras),
-  `bajutsu/__init__.py:3`, `README.md:167`, `docs/getting-started/index.md:49`.
+  `bajutsu/__init__.py:3`, `README.md:167`, `docs/getting-started/index.md:49`,
+  `bajutsu/common/platform_lifecycle/environments/android.py:174` (the `uiautomator dump` fallback).

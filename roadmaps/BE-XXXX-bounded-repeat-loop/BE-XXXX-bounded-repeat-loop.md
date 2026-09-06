@@ -102,10 +102,18 @@ the author asked, which is the failure mode `scroll`'s fail-at-a-bound already r
 
 `_run_repeat` joins `_run_if` and `_run_for_each` in
 `bajutsu/common/orchestrator/loop.py`, returning the same `tuple[bool, str]`, and the step dispatch
-gains a `"repeat"` arm beside `"if_"` and `"for_each"` (`loop.py:1281-1284`). The condition
-evaluation `_run_if` performs today — interpolate the assertion against `bindings`, `driver.query()`,
-evaluate — is factored into one `_eval_condition` helper shared by `_run_if`, `_run_repeat`, and the
-interrupt guard, so one predicate path exists rather than two that can diverge.
+gains a `"repeat"` arm beside `"if_"` and `"for_each"` (`loop.py:1281-1284`). `_run_repeat` shares
+`_run_if`'s condition path — interpolate the assertion against `bindings`, `driver.query()`,
+evaluate — so one predicate path exists rather than two that can diverge.
+
+The interrupt guard stays out of that hoist. `_InterruptGuard` interpolates every condition once in
+`__post_init__` rather than per evaluation, for the reason recorded at `loop.py:1002-1005`
+("`observe` runs every wait tick, and re-interpolating a `${...}`-free condition there re-serializes
+it each time for no change"), and `_fire_once` (`:1012`) evaluates against a tree the loop already
+holds rather than issuing its own `driver.query()` (`:983-985`). Folding it into a helper that
+interpolates and queries per call would re-serialize on every wait tick and add a redundant tree
+fetch inside the poll loop. If any part is shared with the guard it is the *evaluate* half alone,
+with the interpolation and the query left where each caller wants them.
 
 A condition is an `Assertion`, so `while: { count: { sel: …, atLeast: 1 } }` and `while: { request:
 … }` both work, and no model is consulted anywhere — the property `if` already has. Nesting reuses
@@ -114,16 +122,21 @@ evidence is special-cased.
 
 ### The five walks that must learn the new arm
 
-Each already carries an `if_` / `for_each` pair. Missing one is a defect, not an omission:
+Five walks descend into a step's nested steps, and each already carries an `if_` / `for_each` pair.
+Missing one is a defect, not an omission:
 
 - `bajutsu/common/capability/capability_preflight.py` `_walk_steps` (`:83-87`). Without it an
   unsupported step inside a loop body escapes the gate and fails late on a device — the exact thing
   [BE-0082](../BE-0082-capability-preflight-check/BE-0082-capability-preflight-check.md) exists to
   prevent.
-- `bajutsu/analysis/audit.py`'s selector and finding walks.
-- `bajutsu/analysis/coverage.py`'s request walk.
-- `bajutsu/analysis/trace.py`'s control-flow predicate.
-- `bajutsu/codegen/common.py` `_reject_runtime_only` (`:263`).
+- `bajutsu/analysis/audit.py`'s selector walk (`:130-137`) and its finding walk (`:234-239`) — two
+  separate functions, each with its own pair.
+- `bajutsu/analysis/coverage.py`'s request walk (`:131-136`).
+- `bajutsu/analysis/trace.py`'s control-flow predicate (`:291`).
+
+`bajutsu/codegen/common.py` `_reject_runtime_only` (`:263`) is a sixth site but not a walk: it is a
+flat refusal, and the emitting work — each target's step emitter learning to unroll `times` — is a
+separate unit, listed on its own below.
 
 ### `audit` and `impact` across a loop
 
@@ -150,8 +163,9 @@ it can is the same reason the loop is safe.
 1. **Grammar** (`bajutsu/common/scenario/models/`). The `Repeat` model, the `times` XOR `while`
    validator, the 1–100 caps, `maxIterations` required, and
    [dsl-grammar](../../docs/dsl-grammar.md) §2 / §4 / §5 with the Japanese mirror.
-2. **Condition-evaluation hoist**. `_eval_condition` shared by `_run_if`, `_run_repeat`, and the
-   interrupt guard, with `if`'s existing behaviour proven unchanged.
+2. **Shared condition evaluation**. One path used by `_run_if` and `_run_repeat`, with `if`'s
+   existing behaviour proven unchanged. The interrupt guard keeps its once-interpolation and its
+   caller-supplied tree.
 3. **`_run_repeat` and dispatch**. Both forms, the `as` binding, fail-at-bound with the count in the
    reason, and `_StepCounter` nesting.
 4. **Preflight walk**. `_walk_steps` recurses into `repeat.steps`, with a test that an unsupported

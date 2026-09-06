@@ -23,7 +23,7 @@ every static analysis see the resolved selector and learn nothing new.
 
 ## Motivation
 
-In the showcase suite, `id: search.field` is written 25 times across 9 files, and `id: log.submit`
+In the showcase suite, the identifier `search.field` is written 25 times across 9 files, and `log.submit`
 13 times. Every one of those is a copy of the same fact — *this is the search field* — and when the
 application renames the identifier, all 25 must change together or the suite half-breaks.
 
@@ -97,9 +97,16 @@ by reading a single line.
 
 ### Expansion at load time, so nothing downstream changes
 
-Resolution is a new pass in `bajutsu/common/scenario/expand.py`, running **before**
-`expand_components` — so a component's steps may use `ref`, and a `${params.*}` binding cannot
-fabricate a name that was not written in the source. After the pass, no `ref` remains.
+Resolution runs wherever a file's steps first enter the model, which is two places rather than one.
+`expand_components` (`bajutsu/common/scenario/expand.py:29`) does not receive component steps — it
+receives a `resolve` callback and loads each component file lazily as it expands
+(`bajutsu/common/scenario/load_expanded.py:84`). So a pass placed before it would never see a
+component's steps, and a `ref` written inside a component would survive untouched.
+
+Resolution therefore attaches to the load: the scenario file's own steps are resolved before
+`expand_components` runs, and each component's steps are resolved inside the `resolve` callback, as
+that component is read. Both happen before any `${params.*}` binding is substituted, so a binding
+cannot fabricate a name that was not written in the source, and after expansion no `ref` remains.
 
 Every device-free reader routes through `load_expanded_scenarios`
 (`bajutsu/common/scenario/load_expanded.py:63`), so `audit`, `coverage`, `impact`, `trace --explain`,
@@ -139,8 +146,8 @@ should say so plainly rather than let a reader hope otherwise.
 2. **The `selectors:` file-level key**, resolved through `contained_ref`, and the schema bump.
 3. **`Selector.ref`** and the exclusivity validator, with the load errors for an unknown name and a
    chained entry.
-4. **The expansion pass**, ordered before component expansion, in both the device-free loader and
-   `run`'s.
+4. **The resolution pass** — on the scenario file's own steps before component expansion, and
+   inside the component `resolve` callback — in both the device-free loader and `run`'s.
 5. **The Author editor's refusal** and its message.
 6. **Migration of the showcase suite** — the repeated identifiers moved into dictionaries, which is
    also the item's verifiable outcome.
@@ -185,7 +192,7 @@ should say so plainly rather than let a reader hope otherwise.
 - [ ] The dictionary file, its model, and the naming rule.
 - [ ] The `selectors:` file-level key and the schema bump.
 - [ ] `Selector.ref`, the exclusivity validator, and the load errors.
-- [ ] The expansion pass in both loaders.
+- [ ] The resolution pass in both loaders, on both entry points.
 - [ ] The Author editor's refusal.
 - [ ] Showcase suite migration.
 - [ ] Documentation in both languages.
@@ -219,6 +226,6 @@ Open questions to settle while building:
   — the two identifier readers that stay unchanged because expansion precedes them.
 - `bajutsu/common/scenario/models/scenario.py:294` (`Component`), `:314` (`schema_version`),
   `bajutsu/common/scenario/models/selector.py:39` (`_non_empty`),
-  `bajutsu/common/scenario/expand.py:17` (`_interp_steps`),
-  `bajutsu/common/scenario/load_expanded.py:21` (`contained_ref`), `:63`,
+  `bajutsu/common/scenario/expand.py:17` (`_interp_steps`), `:29` (`expand_components`'s `resolve`
+  callback), `bajutsu/common/scenario/load_expanded.py:21` (`contained_ref`), `:63`, `:84`,
   `bajutsu/triage/heuristic.py:170` and `bajutsu/triage/cli.py:292` (the per-file rename).

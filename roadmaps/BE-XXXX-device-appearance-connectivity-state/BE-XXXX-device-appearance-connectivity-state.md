@@ -140,9 +140,14 @@ actually wants is "this screen renders its dark theme", and the grammar reaches 
 a `visual` assertion against a per-appearance baseline, element-scoped since BE-0171, or an ordinary
 `exists` / `selected` / `label` assertion on whatever the theme changes.
 
-Adding one would also be the only assertion in the grammar resolving against neither the element tree
-nor the network, the two axes [selectors](../../docs/selectors.md) documents. The cross-appearance
-matrix then falls out of composition, with no new grammar at all:
+There is a precedent worth naming rather than hiding: `clipboard`
+(`bajutsu/common/scenario/models/assertions.py:250`) reads device state back over the same control
+channel, and it was accepted. So "it reads the device rather than the screen" is not on its own a
+reason to refuse a kind — six kinds already resolve against neither the element tree nor the network
+([selectors](../../docs/selectors.md)). What separates `appearance` from `clipboard` is that the
+clipboard's contents are what the test is about, whereas an appearance read-back only restates the
+`setAppearance` that preceded it. The tautology is the whole objection. The cross-appearance matrix
+then falls out of composition, with no new grammar at all:
 
 ```yaml
 - name: home renders in both appearances
@@ -204,11 +209,12 @@ business, waited for with an ordinary `wait: { for: … }`. Nothing here is a se
 
 ## Alternatives considered
 
-- **Add an `appearance` assertion kind.** Rejected: it reads the device setting, which after
-  `setAppearance` is nearly tautological and says nothing about the application; it would be the
-  grammar's only assertion resolving against neither the element tree nor the network; and the claim
-  authors want is already expressible with `visual` plus a per-appearance baseline. The read-back it
-  would have used is kept, as the runner's settle condition.
+- **Add an `appearance` assertion kind.** Rejected on one ground only: it reads the device setting,
+  which after `setAppearance` is nearly tautological and says nothing about the application, and the
+  claim authors want is already expressible with `visual` plus a per-appearance baseline. The
+  rejection deliberately does *not* rest on "it would not resolve a selector" — `clipboard` does not
+  either, and it was accepted. The read-back this kind would have used is kept, as the runner's
+  settle condition.
 - **Approximate each state from inside the application**, through a launch environment variable or a
   deeplink such as `UI_TEST_FORCE_DARK=1`. Rejected on the grounds BE-0035 already used: it works per
   application and breaks app-agnosticism, so the tool would behave differently depending on which
