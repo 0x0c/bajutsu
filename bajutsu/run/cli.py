@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 import sys
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Any
@@ -626,7 +626,11 @@ def _visual_asserting_scenarios(scenarios: list[Scenario]) -> set[int]:
 
 
 def _apply_touch_markers(
-    scenarios: list[Scenario], enabled: bool, *, channel_available: Callable[[Scenario], bool]
+    scenarios: list[Scenario],
+    enabled: bool,
+    *,
+    channel_available: Callable[[Scenario], bool],
+    target_launch_env: Mapping[str, str] | None = None,
 ) -> None:
     """Ask BajutsuKit to draw a marker at each touch the app receives, via the launch env.
 
@@ -655,10 +659,12 @@ def _apply_touch_markers(
     ([`docs/evidence.md`](../../docs/evidence.md) — a relaunched process is unaffected by another
     scenario's own launch env either way).
 
-    Where these partitions read a launch env they read the scenario's own alone, the same half
-    `_hides_touch_markers` reads: a target-level `launchEnv` is out of scope for unit 3, so a target
-    that pins the marker key for every scenario keeps drawing markers whatever this function decides
-    or announces.
+    Where these partitions read a launch env they read `target_launch_env` merged with the
+    scenario's own, the same merge `_hides_touch_markers` performs and the same order the launch
+    itself merges them in — so a target that pins the marker key for every scenario is decided for
+    here exactly as the app that launches sees it, not as if every scenario had pinned nothing.
+    `target_launch_env` is the target's own `launchEnv` (`Effective.launch_env`); a caller that
+    omits it sees only each scenario's own launch env, as before.
 
     Every internal decision here is keyed by scenario object identity, never by `.name`: nothing
     enforces unique scenario names across a multi-file run, and a name-keyed lookup would let two
@@ -681,19 +687,25 @@ def _apply_touch_markers(
     """
     if not enabled:
         return
+    target_env = target_launch_env or {}
+
+    def _env(s: Scenario) -> Mapping[str, str]:
+        # Same merge and order the launch itself performs, so a target-level pin reads here
+        # exactly as the app that launches sees it, not as a scenario that pinned nothing.
+        return {**target_env, **s.preconditions.launch_env}
+
     visual_scenarios = _visual_asserting_scenarios(scenarios)
-    # A scenario that pinned its own marker value to "0" (like the mocks above, `setdefault`
-    # leaves it alone) draws no markers at all, so it needs neither the channel nor the note below
-    # — arming either for it would start the app-side poll timer for a scenario that opted out of
-    # the very thing the channel exists to correct (golden_xcuitest.yaml does exactly this pin).
+    # A scenario (or its target) that pinned the marker value to "0" draws no markers at all, so it
+    # needs neither the channel nor the note below — arming either for it would start the app-side
+    # poll timer for a scenario that opted out of the very thing the channel exists to correct
+    # (golden_xcuitest.yaml pins this on the scenario itself). This is also what the write loop at
+    # the bottom skips: `setdefault` is a no-op once the scenario's own dict already carries "0",
+    # but a target-only "0" leaves that dict empty, so the loop has to check the merged value
+    # itself rather than lean on `setdefault`'s own idempotence.
+    merged_off = {id(s) for s in scenarios if _env(s).get("BAJUTSU_TOUCH_MARKERS", "1") != "1"}
     # Every partition below is keyed by `id(scenario)`, for the same reason
     # `_visual_asserting_scenarios` is: two scenarios can share a `.name` across a multi-file run.
-    wants_markers = [
-        s
-        for s in scenarios
-        if id(s) in visual_scenarios
-        and s.preconditions.launch_env.get("BAJUTSU_TOUCH_MARKERS", "1") == "1"
-    ]
+    wants_markers = [s for s in scenarios if id(s) in visual_scenarios and id(s) not in merged_off]
     wants_marker_ids = {id(s) for s in wants_markers}
     # A scenario can decline the channel the same way, by pinning BAJUTSU_CONTROL_CHANNEL itself.
     # Drawing markers with no channel to hide them would fail its `visual` comparison silently and
@@ -702,19 +714,17 @@ def _apply_touch_markers(
     # markers at all, announced below, rather than markers arming a channel bajutsu was told not
     # to use.
     declines_channel = {
-        id(s)
-        for s in wants_markers
-        if s.preconditions.launch_env.get("BAJUTSU_CONTROL_CHANNEL", "1") != "1"
+        id(s) for s in wants_markers if _env(s).get("BAJUTSU_CONTROL_CHANNEL", "1") != "1"
     }
     needs_channel = [s for s in wants_markers if id(s) not in declines_channel]
     armed = {id(s) for s in needs_channel if channel_available(s)}
     # Both partitions can be non-empty in one run: availability follows the actuator each scenario
     # resolved to, so a `--backend ios,web` run can arm one scenario and skip the next.
     channel_less = {id(s) for s in needs_channel if id(s) not in armed}
-    # `setdefault` below never overrides a key a scenario already set, so a scenario that pinned
-    # `BAJUTSU_TOUCH_MARKERS: "1"` itself keeps drawing markers regardless of what this function
-    # decides. What that actually leads to still depends on `BAJUTSU_CONTROL_CHANNEL`, which
-    # `_hides_touch_markers` (`orchestrator/loop.py`) reads from the launch env alone, with no
+    # `setdefault` below never overrides a key a scenario already set, so a scenario (or target)
+    # that pinned `BAJUTSU_TOUCH_MARKERS: "1"` keeps drawing markers regardless of what this
+    # function decides. What that actually leads to still depends on `BAJUTSU_CONTROL_CHANNEL`,
+    # which `_hides_touch_markers` (`orchestrator/loop.py`) reads from the same merged env, with no
     # memory of this function's own prediction:
     #   - pinned `"1"` and declined (`declines_channel`), or pinned `"1"` with the channel unset
     #     and unavailable (`channel_less`): the channel is never invoked (one of its two keys is
@@ -724,15 +734,9 @@ def _apply_touch_markers(
     #     anyway, and `apply_capability` fails the scenario loudly against a collector that
     #     structurally cannot answer — this function's own "can't carry it" verdict never reaches
     #     the launch env to stop it.
-    touch_pinned_on = {
-        id(s)
-        for s in wants_markers
-        if s.preconditions.launch_env.get("BAJUTSU_TOUCH_MARKERS") == "1"
-    }
+    touch_pinned_on = {id(s) for s in wants_markers if _env(s).get("BAJUTSU_TOUCH_MARKERS") == "1"}
     channel_pinned_on = {
-        id(s)
-        for s in wants_markers
-        if s.preconditions.launch_env.get("BAJUTSU_CONTROL_CHANNEL") == "1"
+        id(s) for s in wants_markers if _env(s).get("BAJUTSU_CONTROL_CHANNEL") == "1"
     }
     channel_less_will_fail = channel_less & touch_pinned_on & channel_pinned_on
     # A scenario with no `visual` verdict is in none of the partitions above, so the loop below would
@@ -746,8 +750,8 @@ def _apply_touch_markers(
         id(s)
         for s in scenarios
         if id(s) not in wants_marker_ids
-        and "BAJUTSU_TOUCH_MARKERS" not in s.preconditions.launch_env
-        and s.preconditions.launch_env.get("BAJUTSU_CONTROL_CHANNEL") == "1"
+        and "BAJUTSU_TOUCH_MARKERS" not in _env(s)
+        and _env(s).get("BAJUTSU_CONTROL_CHANNEL") == "1"
     }
     pinned_unhidden = (touch_pinned_on & declines_channel) | (
         touch_pinned_on & (channel_less - channel_less_will_fail)
@@ -813,6 +817,11 @@ def _apply_touch_markers(
             continue  # no channel to hide the markers: no markers, matching the notes above
         if id(s) in marker_would_arm_unasked:
             continue  # setting the marker key here is what would arm the channel: leave it unset
+        if id(s) in merged_off:
+            # The merged env already resolves the marker key to "0" — the scenario's own pin (a
+            # `setdefault` below would be a no-op anyway) or, since BE-0365 unit 3, a target-level
+            # one with nothing of the scenario's own to make `setdefault` a no-op against.
+            continue
         s.preconditions.launch_env.setdefault("BAJUTSU_TOUCH_MARKERS", "1")
         if id(s) in armed:
             s.preconditions.launch_env.setdefault("BAJUTSU_CONTROL_CHANNEL", "1")
@@ -1429,7 +1438,10 @@ def run(
         # `backends`, never the run-level `actuator` resolved above: the predicate has to ask the
         # same selector the run loop resolves each scenario's actuator with (`_channel_available_for`).
         _apply_touch_markers(
-            scenarios, touch_markers, channel_available=_channel_available_for(backends, network)
+            scenarios,
+            touch_markers,
+            channel_available=_channel_available_for(backends, network),
+            target_launch_env=eff.launch_env,
         )
         baselines_dir, schemas_dir, gc = _resolve_evidence_dirs(
             baselines, schemas, goldens, eff, files[0]

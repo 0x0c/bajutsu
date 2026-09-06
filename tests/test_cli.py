@@ -1902,6 +1902,42 @@ def test_touch_markers_stay_off_for_a_non_visual_scenario_that_pinned_the_channe
     assert "plain one" in err
 
 
+def test_touch_markers_respects_a_target_level_pin_turning_markers_off() -> None:
+    """A target's own `launchEnv` counts the same as a scenario's own pin (BE-0365 unit 3 gap).
+
+    `demos/showcase/scenarios/golden/golden_xcuitest.yaml` pins `BAJUTSU_TOUCH_MARKERS: "0"` on
+    the scenario itself to opt out; a target can pin the same value for every scenario instead
+    (`targets.<name>.launchEnv`). Before `target_launch_env` existed, this function read only the
+    scenario's own launch env, so a scenario that set neither key itself was treated as wanting
+    markers by default — the opposite of what the target asked for.
+    """
+    scenario = _touch_marker_scenario("visual one")
+    scenario.expect = [Assertion(visual=VisualMatch(baseline="home.png"))]
+    _apply_touch_markers(
+        [scenario],
+        True,
+        channel_available=_channel_always,
+        target_launch_env={"BAJUTSU_TOUCH_MARKERS": "0"},
+    )
+    assert "BAJUTSU_TOUCH_MARKERS" not in scenario.preconditions.launch_env
+    assert "BAJUTSU_CONTROL_CHANNEL" not in scenario.preconditions.launch_env
+
+
+def test_touch_markers_a_scenario_own_pin_overrides_the_target_level_one() -> None:
+    """The scenario's own launch env still wins: the merge matches the launch's own precedence."""
+    scenario = _touch_marker_scenario("visual one")
+    scenario.expect = [Assertion(visual=VisualMatch(baseline="home.png"))]
+    scenario.preconditions.launch_env["BAJUTSU_TOUCH_MARKERS"] = "1"
+    _apply_touch_markers(
+        [scenario],
+        True,
+        channel_available=_channel_always,
+        target_launch_env={"BAJUTSU_TOUCH_MARKERS": "0"},
+    )
+    assert scenario.preconditions.launch_env["BAJUTSU_TOUCH_MARKERS"] == "1"
+    assert scenario.preconditions.launch_env["BAJUTSU_CONTROL_CHANNEL"] == "1"
+
+
 def test_touch_markers_stay_off_for_a_non_visual_pinned_channel_when_available() -> None:
     """Availability does not make it this flag's business to arm a channel nobody asked for.
 

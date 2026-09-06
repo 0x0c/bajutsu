@@ -605,7 +605,9 @@ def _dispatch_after(
     return failure, verdict
 
 
-def _hides_touch_markers(scenario: Scenario) -> bool:
+def _hides_touch_markers(
+    scenario: Scenario, target_launch_env: Mapping[str, str] | None = None
+) -> bool:
     """Whether this scenario's `visual` capture has to hide the in-app touch markers (BE-0365).
 
     Both launch-env keys, never either alone: the markers are what would land in the compared image,
@@ -615,16 +617,15 @@ def _hides_touch_markers(scenario: Scenario) -> bool:
     the marker key itself on a run that armed no channel for it, say — is left alone rather than
     failed for a capture it never asked bajutsu to correct.
 
-    The scenario's own `preconditions.launch_env` is the whole input. A target's `launchEnv`, which
-    the launch merges *underneath* it (`environments/xcuitest.py`'s `_launch_params`), is out of
-    scope for unit 3: neither this predicate nor `_apply_touch_markers` (`run/cli.py`) reads that
-    half, so a target pinning `BAJUTSU_TOUCH_MARKERS` for every scenario reads to both as a scenario
-    that pinned nothing. Under `--touch-markers` that costs it nothing — such a scenario is armed and
-    its markers hidden like any other the channel is available for — but wherever the marker key is
-    left unset (the flag off, or one of `_apply_touch_markers`'s fallbacks) the target draws markers
-    into the compared image with nothing here to hide them, exactly as before BE-0365.
+    `target_launch_env` is the target's own `launchEnv`, which the launch merges *underneath* the
+    scenario's (`environments/xcuitest.py`'s `_launch_params`); this predicate merges the same two
+    layers, in the same order, before reading either key — so a target pinning
+    `BAJUTSU_TOUCH_MARKERS` for every scenario is seen here exactly as the app that actually launched
+    sees it, matching `_apply_touch_markers` (`run/cli.py`), which reads the same merge. A caller
+    that passes `None` (a test constructing a scenario directly) sees the unchanged
+    scenario-launch-env-only behavior.
     """
-    env = scenario.preconditions.launch_env
+    env = {**(target_launch_env or {}), **scenario.preconditions.launch_env}
     return env.get("BAJUTSU_TOUCH_MARKERS") == "1" and env.get("BAJUTSU_CONTROL_CHANNEL") == "1"
 
 
@@ -670,6 +671,7 @@ def run_scenario(
     capture: list[str] | None = None,
     cancelled: CancelSource = not_cancelled,
     channel: Collector | None = None,
+    target_launch_env: Mapping[str, str] | None = None,
 ) -> RunResult:
     """Run one scenario deterministically, firing capturePolicy rules into `sink`.
 
@@ -703,10 +705,13 @@ def run_scenario(
     `channel` (BE-0365) is the run's collector, carried here only so a `visual` verdict can hide the
     in-app touch markers for the capture it compares and restore them after. It is `None` on every
     caller that has no collector, and that is *not* inert: the toggle is attempted whenever this
-    scenario's launch env sets both `BAJUTSU_TOUCH_MARKERS` and `BAJUTSU_CONTROL_CHANNEL` to `"1"`
-    and its `expect` phase has a `visual` capture to take — which a scenario pinning the pair itself
-    reaches whether or not `run --touch-markers` was passed — so a `None` channel there fails the
-    scenario loudly rather than skipping the suspension.
+    scenario's effective launch env — `target_launch_env` merged with the scenario's own, the same
+    order the launch itself merges them in — sets both `BAJUTSU_TOUCH_MARKERS` and
+    `BAJUTSU_CONTROL_CHANNEL` to `"1"` and its `expect` phase has a `visual` capture to take — which a
+    scenario or target pinning the pair reaches whether or not `run --touch-markers` was passed — so
+    a `None` channel there fails the scenario loudly rather than skipping the suspension.
+    `target_launch_env` is the target's own `launchEnv` (`Effective.launch_env`); a caller that omits
+    it (a test constructing a scenario directly) sees only the scenario's own launch env, as before.
 
     `cancelled` (BE-0370) makes a cancelled run land as an ordinary failed scenario: it is read at
     each step boundary and inside the poll loops that back every condition wait, and the resulting
@@ -719,7 +724,7 @@ def run_scenario(
     sink = sink or NullSink()
     ctx = ctx or EvalContext()
     sid = scenario_id or scenario_slug(scenario.name)
-    hide_markers = _hides_touch_markers(scenario)
+    hide_markers = _hides_touch_markers(scenario, target_launch_env)
     recordings = sink.start_scenario_intervals(sid, requested_intervals(scenario, capture))
     wants_screen_changed = any(r.on.event == "screenChanged" for r in scenario.capture_policy)
     outcomes: list[StepOutcome] = []

@@ -442,11 +442,13 @@ nothing. The scenario then fails naming both gates, rather than comparing an ima
 markers.
 
 The run loop reads those two launch-environment keys and nothing else, so it cannot tell a pair
-the flag armed from one a scenario assembled itself. That is why `--touch-markers` leaves a
-scenario with no `visual` verdict unmarked when its own launch environment already sets
-`BAJUTSU_CONTROL_CHANNEL=1`: adding the marker key there would complete the pair, and any such
-scenario whose `expect` runs against a baselines directory would then enter the channel it never
-asked for. Such a scenario keeps its markers off, and the run says so on stderr.
+the flag armed from one a scenario assembled itself. It reads them from the scenario's *effective*
+launch environment. That environment merges the target's own `launchEnv` with the scenario's own.
+The merge follows the same order the launch itself uses. A target-level pin counts here the same
+as a scenario's own pin. `--touch-markers` leaves a scenario with no `visual` verdict unmarked when
+that environment already sets `BAJUTSU_CONTROL_CHANNEL=1`. Adding the marker key there would
+complete the pair. A scenario whose `expect` runs against a baselines directory would then enter
+that channel unasked. Such a scenario keeps its markers off, and the run says so on stderr.
 
 ## Sinks (where evidence goes)
 
