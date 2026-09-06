@@ -425,6 +425,13 @@ Compiled in, the channel stays inert without `BAJUTSU_CONTROL_CHANNEL=1` on the 
 nothing. The scenario then fails naming both gates, rather than comparing an image carrying the
 markers.
 
+The run loop reads those two launch-environment keys and nothing else, so it cannot tell a pair
+the flag armed from one a scenario assembled itself. That is why `--touch-markers` leaves a
+scenario with no `visual` verdict unmarked when its own launch environment already sets
+`BAJUTSU_CONTROL_CHANNEL=1`: adding the marker key there would complete the pair, and any such
+scenario whose `expect` runs against a baselines directory would then enter the channel it never
+asked for. Such a scenario keeps its markers off, and the run says so on stderr.
+
 ## Sinks (where evidence goes)
 
 ```python

@@ -1879,6 +1879,74 @@ def test_touch_markers_arm_the_channel_for_a_scenario_that_compares_a_screenshot
     assert scenario.preconditions.launch_env["BAJUTSU_CONTROL_CHANNEL"] == "1"
 
 
+def test_touch_markers_stay_off_for_a_non_visual_scenario_that_pinned_the_channel(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The flag must never *create* the pair the run loop acts on for a scenario it never decided for.
+
+    A scenario with no `visual` verdict falls outside every partition, so the marker key would be
+    written like any other. Where that scenario pinned `BAJUTSU_CONTROL_CHANNEL` to `"1"` itself,
+    writing it completes the pair `_hides_touch_markers` reads — and that function reads the launch
+    env alone, never `visual` — so the run loop would invoke the channel and `apply_capability`
+    would fail a scenario that asked for neither the markers' hiding nor the channel.
+    """
+    scenario = _touch_marker_scenario("plain one")
+    scenario.preconditions.launch_env["BAJUTSU_CONTROL_CHANNEL"] = "1"
+
+    _apply_touch_markers([scenario], True, channel_available=_channel_never)
+
+    assert "BAJUTSU_TOUCH_MARKERS" not in scenario.preconditions.launch_env
+    assert scenario.preconditions.launch_env["BAJUTSU_CONTROL_CHANNEL"] == "1"
+    err = capsys.readouterr().err
+    assert "no `visual` verdict to correct" in err
+    assert "plain one" in err
+
+
+def test_touch_markers_stay_off_for_a_non_visual_pinned_channel_when_available() -> None:
+    """Availability does not make it this flag's business to arm a channel nobody asked for.
+
+    The pair would work on an `xcuitest` run — but only against an app built with
+    `-DBAJUTSU_ENABLE_CONTROL_CHANNEL`, a gate the armed scenarios take on deliberately and this
+    one never did. So the answer is the same one the unavailable case gives.
+    """
+    scenario = _touch_marker_scenario("plain one")
+    scenario.preconditions.launch_env["BAJUTSU_CONTROL_CHANNEL"] = "1"
+
+    _apply_touch_markers([scenario], True, channel_available=_channel_always)
+
+    assert "BAJUTSU_TOUCH_MARKERS" not in scenario.preconditions.launch_env
+
+
+def test_touch_markers_still_reach_a_visual_scenario_that_pinned_the_channel_on() -> None:
+    """The guard must not swallow a scenario that *does* compare a screenshot and asked for it.
+
+    That one is armed, and withholding its markers would lose the very evidence the flag exists to
+    produce while printing the "stays off" note beside the armed note — two contradictory answers
+    for one scenario.
+    """
+    scenario = _touch_marker_scenario("visual one")
+    scenario.expect = [Assertion(visual=VisualMatch(baseline="home.png"))]
+    scenario.preconditions.launch_env["BAJUTSU_CONTROL_CHANNEL"] = "1"
+    _apply_touch_markers([scenario], True, channel_available=_channel_always)
+    assert scenario.preconditions.launch_env["BAJUTSU_TOUCH_MARKERS"] == "1"
+
+
+def test_touch_markers_still_land_on_a_non_visual_scenario_that_pinned_the_channel_off() -> None:
+    """Only a `"1"` pin can complete the pair, so a scenario declining the channel keeps its markers.
+
+    `_hides_touch_markers` requires both keys to read `"1"`, so writing the marker key beside a
+    channel pinned to `"0"` arms nothing — and withholding the markers there would cost the
+    investigator the evidence for no reason at all.
+    """
+    scenario = _touch_marker_scenario("plain one")
+    scenario.preconditions.launch_env["BAJUTSU_CONTROL_CHANNEL"] = "0"
+
+    _apply_touch_markers([scenario], True, channel_available=_channel_never)
+
+    assert scenario.preconditions.launch_env["BAJUTSU_TOUCH_MARKERS"] == "1"
+    assert scenario.preconditions.launch_env["BAJUTSU_CONTROL_CHANNEL"] == "0"
+
+
 def test_touch_markers_arm_the_channel_for_a_step_level_visual_assertion() -> None:
     scenario = _touch_marker_scenario()
     scenario.steps = [

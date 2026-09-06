@@ -654,14 +654,19 @@ def _apply_touch_markers(
     same-named scenarios that resolve to different actuators share one verdict on whether either
     can carry the channel — arming it on one that structurally cannot.
 
-    Every outcome says so on stderr, since all five are silent in the evidence otherwise: where
+    Every outcome says so on stderr, since all six are silent in the evidence otherwise: where
     the channel is available, one of its two gates is a build setting bajutsu cannot see from
     here, so this says what an app that answers nothing will fail with; where it is unavailable or
     declined, the markers an investigator asked for simply do not appear — unless the scenario
     pinned `BAJUTSU_TOUCH_MARKERS` to `"1"` itself, which `setdefault` never overrides. That one
     keeps drawing markers nothing here can hide, *unless* it also pinned `BAJUTSU_CONTROL_CHANNEL`
     to `"1"` on a run that cannot carry it — the run loop reads both keys with no memory of this
-    function's own prediction, so that combination fails the scenario loudly instead.
+    function's own prediction, so that combination fails the scenario loudly instead. The sixth is
+    the mirror of that one: a scenario with no `visual` verdict that pinned `BAJUTSU_CONTROL_CHANNEL`
+    to `"1"` *and left the marker key unset* gets none from here, since writing it is what would
+    complete the pair and hand that same failure to a scenario this function was never deciding for.
+    One that pinned both keys itself is outside this guard — the pair already exists, nothing here
+    made it, and there is no note.
     """
     if not enabled:
         return
@@ -678,6 +683,7 @@ def _apply_touch_markers(
         if id(s) in visual_scenarios
         and s.preconditions.launch_env.get("BAJUTSU_TOUCH_MARKERS", "1") == "1"
     ]
+    wants_marker_ids = {id(s) for s in wants_markers}
     # A scenario can decline the channel the same way, by pinning BAJUTSU_CONTROL_CHANNEL itself.
     # Drawing markers with no channel to hide them would fail its `visual` comparison silently and
     # for a reason that has nothing to do with the app — the one failure mode this channel exists
@@ -718,6 +724,20 @@ def _apply_touch_markers(
         if s.preconditions.launch_env.get("BAJUTSU_CONTROL_CHANNEL") == "1"
     }
     channel_less_will_fail = channel_less & touch_pinned_on & channel_pinned_on
+    # A scenario with no `visual` verdict is in none of the partitions above, so the loop below would
+    # `setdefault` its marker key like any other. That is wrong for one of them: a scenario that
+    # pinned `BAJUTSU_CONTROL_CHANNEL` to `"1"` itself already carries half the pair
+    # `_hides_touch_markers` reads, and it reads the launch env alone — it never consults `visual`.
+    # Writing the marker key would complete that pair and make the run loop invoke the channel on a
+    # scenario that asked for neither, failing it against a collector that may carry none. Nothing
+    # here can take the scenario's own pin back, so the markers stay off instead, announced below.
+    marker_would_arm_unasked = {
+        id(s)
+        for s in scenarios
+        if id(s) not in wants_marker_ids
+        and "BAJUTSU_TOUCH_MARKERS" not in s.preconditions.launch_env
+        and s.preconditions.launch_env.get("BAJUTSU_CONTROL_CHANNEL") == "1"
+    }
     pinned_unhidden = (touch_pinned_on & declines_channel) | (
         touch_pinned_on & (channel_less - channel_less_will_fail)
     )
@@ -765,11 +785,23 @@ def _apply_touch_markers(
             f"{', '.join(failing_names)}",
             err=True,
         )
+    if marker_would_arm_unasked:
+        unasked_names = sorted(s.name for s in scenarios if id(s) in marker_would_arm_unasked)
+        typer.echo(
+            "note: --touch-markers stays off for the scenario(s) that pinned "
+            "BAJUTSU_CONTROL_CHANNEL themselves but have no `visual` verdict to correct, since "
+            "adding the marker key would complete the pair the run loop reads and invoke the "
+            "channel on any such scenario whose `expect` runs against a baselines directory, "
+            f"which asked for neither: {', '.join(unasked_names)}",
+            err=True,
+        )
     for s in scenarios:
         if id(s) in pinned_unhidden or id(s) in channel_less_will_fail:
             continue  # already set by the scenario's own pin; setdefault below would be a no-op
         if id(s) in declines_channel or id(s) in channel_less:
             continue  # no channel to hide the markers: no markers, matching the notes above
+        if id(s) in marker_would_arm_unasked:
+            continue  # setting the marker key here is what would arm the channel: leave it unset
         s.preconditions.launch_env.setdefault("BAJUTSU_TOUCH_MARKERS", "1")
         if id(s) in armed:
             s.preconditions.launch_env.setdefault("BAJUTSU_CONTROL_CHANNEL", "1")
