@@ -208,6 +208,12 @@ colliding or regressing each other. Full guide: [`docs/ai-development.md`](docs/
   `gh pr create --draft`, then keep pushing fixes until `make check` and CI are both green before
   marking it ready for review (`gh pr ready`). Never mark a Claude-Code-created PR ready while any
   check is red.
+- **Mark a PR ready for review only once CI is fully green and every comment thread is resolved.**
+  Before running `gh pr ready` (or otherwise moving a Claude-Code-created PR out of Draft), confirm
+  both: every CI check on the current head is passing, and every review comment/conversation on the
+  PR is resolved (per **Handling PR Activity Events** above — reply or push a fix, then resolve the
+  thread). A PR with a red check or an open conversation stays in Draft; keep iterating (`pr-followup`
+  / the paced `/loop`) until both conditions hold before opening it for review.
 - **Exception — documentation-only PRs open Ready for review.** A PR whose changes are purely
   documentation/prose (`docs/`, roadmap `*.md`/`*-ja.md` prose, `CLAUDE.md`/`CONTRIBUTING`, and
   other prose-only changes) is opened **Ready for review, not Draft**, with the `steering-committee`
