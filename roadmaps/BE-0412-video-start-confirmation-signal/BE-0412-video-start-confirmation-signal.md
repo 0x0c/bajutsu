@@ -6,7 +6,7 @@
 | Field | Value |
 |---|---|
 | Proposal | [BE-0412](BE-0412-video-start-confirmation-signal.md) |
-| Author | [@akiramatsuda](https://github.com/akiramatsuda) |
+| Author | [@0x0c](https://github.com/0x0c) |
 | Status | **Implemented** |
 | Tracking issue | [Search](https://github.com/bajutsu-e2e/bajutsu/issues?q=is%3Aissue+label%3Aroadmap-tracking+in%3Atitle+"BE-0412") |
 | Implementing PR | [#1901](https://github.com/bajutsu-e2e/bajutsu/pull/1901) |
