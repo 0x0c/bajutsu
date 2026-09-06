@@ -716,9 +716,9 @@ def _apply_touch_markers(
     if channel_less_drops:
         typer.echo(
             "note: --touch-markers stays off for the scenario(s) whose verdict compares a "
-            "screenshot, since the actuator each of them resolved to cannot carry the in-app "
-            "control channel that would hide the markers for that one capture (needs the "
-            "xcuitest actuator with network collection on): "
+            "screenshot, since the in-app control channel that would hide the markers for that "
+            "one capture is not available here (it needs the xcuitest actuator, resolved per "
+            "scenario, with network collection on): "
             f"{', '.join(s.name for s in needs_channel if id(s) in channel_less_drops)}",
             err=True,
         )
