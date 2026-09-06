@@ -674,16 +674,18 @@ def _apply_touch_markers(
     Every outcome says so on stderr, since all six are silent in the evidence otherwise: where
     the channel is available, one of its two gates is a build setting bajutsu cannot see from
     here, so this says what an app that answers nothing will fail with; where it is unavailable or
-    declined, the markers an investigator asked for simply do not appear — unless the scenario
-    pinned `BAJUTSU_TOUCH_MARKERS` to `"1"` itself, which `setdefault` never overrides. That one
-    keeps drawing markers nothing here can hide, *unless* it also pinned `BAJUTSU_CONTROL_CHANNEL`
-    to `"1"` on a run that cannot carry it — the run loop reads both keys with no memory of this
-    function's own prediction, so that combination fails the scenario loudly instead. The sixth is
-    the mirror of that one: a scenario with no `visual` verdict that pinned `BAJUTSU_CONTROL_CHANNEL`
-    to `"1"` *and left the marker key unset* gets none from here, since writing it is what would
-    complete the pair and hand that same failure to a scenario this function was never deciding for.
-    One that pinned both keys itself is outside this guard — the pair already exists, nothing here
-    made it, and there is no note.
+    declined, the markers an investigator asked for simply do not appear — unless the merged env
+    already pins `BAJUTSU_TOUCH_MARKERS` to `"1"` (the scenario's own pin, which `setdefault` never
+    overrides, or its target's, which the write loop below skips outright since there is nothing
+    of the scenario's own for `setdefault` to leave alone). That one keeps drawing markers nothing
+    here can hide, *unless* the merged env also pins `BAJUTSU_CONTROL_CHANNEL` to `"1"` on a run
+    that cannot carry it — the run loop reads both keys off that same merged env with no memory of
+    this function's own prediction, so that combination fails the scenario loudly instead. The
+    sixth is the mirror of that one: a scenario with no `visual` verdict whose merged env pins
+    `BAJUTSU_CONTROL_CHANNEL` to `"1"` *and leaves the marker key unset* gets none from here, since
+    writing it is what would complete the pair and hand that same failure to a scenario this
+    function was never deciding for. One whose merged env already pins both keys is outside this
+    guard — the pair already exists, nothing here made it, and there is no note.
     """
     if not enabled:
         return
@@ -707,12 +709,12 @@ def _apply_touch_markers(
     # `_visual_asserting_scenarios` is: two scenarios can share a `.name` across a multi-file run.
     wants_markers = [s for s in scenarios if id(s) in visual_scenarios and id(s) not in merged_off]
     wants_marker_ids = {id(s) for s in wants_markers}
-    # A scenario can decline the channel the same way, by pinning BAJUTSU_CONTROL_CHANNEL itself.
-    # Drawing markers with no channel to hide them would fail its `visual` comparison silently and
-    # for a reason that has nothing to do with the app — the one failure mode this channel exists
-    # to rule out — so a decline here falls back the same way an unavailable channel does: no
-    # markers at all, announced below, rather than markers arming a channel bajutsu was told not
-    # to use.
+    # A scenario (or its target) can decline the channel the same way, by pinning
+    # BAJUTSU_CONTROL_CHANNEL to anything but "1". Drawing markers with no channel to hide them
+    # would fail its `visual` comparison silently and for a reason that has nothing to do with the
+    # app — the one failure mode this channel exists to rule out — so a decline here falls back the
+    # same way an unavailable channel does: no markers at all, announced below, rather than markers
+    # arming a channel bajutsu was told not to use.
     declines_channel = {
         id(s) for s in wants_markers if _env(s).get("BAJUTSU_CONTROL_CHANNEL", "1") != "1"
     }
@@ -740,12 +742,13 @@ def _apply_touch_markers(
     }
     channel_less_will_fail = channel_less & touch_pinned_on & channel_pinned_on
     # A scenario with no `visual` verdict is in none of the partitions above, so the loop below would
-    # `setdefault` its marker key like any other. That is wrong for one of them: a scenario that
-    # pinned `BAJUTSU_CONTROL_CHANNEL` to `"1"` itself already carries half the pair
-    # `_hides_touch_markers` reads, and it reads the launch env alone — it never consults `visual`.
-    # Writing the marker key would complete that pair and make the run loop invoke the channel on a
-    # scenario that asked for neither, failing it against a collector that may carry none. Nothing
-    # here can take the scenario's own pin back, so the markers stay off instead, announced below.
+    # `setdefault` its marker key like any other. That is wrong for one of them: a scenario whose
+    # merged env already pins `BAJUTSU_CONTROL_CHANNEL` to `"1"` (on the scenario itself or its
+    # target) already carries half the pair `_hides_touch_markers` reads, and that predicate reads
+    # the merged launch env alone — it never consults `visual`. Writing the marker key would
+    # complete that pair and make the run loop invoke the channel on a scenario that asked for
+    # neither, failing it against a collector that may carry none. Nothing here can take that pin
+    # back, so the markers stay off instead, announced below.
     marker_would_arm_unasked = {
         id(s)
         for s in scenarios
@@ -778,41 +781,47 @@ def _apply_touch_markers(
     if declines_drops:
         declined_names = sorted(s.name for s in wants_markers if id(s) in declines_drops)
         typer.echo(
-            "note: --touch-markers stays off for the scenario(s) that pinned "
-            "BAJUTSU_CONTROL_CHANNEL themselves, since nothing would then hide the markers for "
-            f"the capture their `visual` verdict compares: {', '.join(declined_names)}",
+            "note: --touch-markers stays off for the scenario(s) whose effective launch "
+            "environment already declines BAJUTSU_CONTROL_CHANNEL (a pin on the scenario itself "
+            "or its target), since nothing would then hide the markers for the capture their "
+            f"`visual` verdict compares: {', '.join(declined_names)}",
             err=True,
         )
     if pinned_unhidden:
         pinned_names = sorted(s.name for s in wants_markers if id(s) in pinned_unhidden)
         typer.echo(
-            "note: the scenario(s) that pinned BAJUTSU_TOUCH_MARKERS themselves keep drawing "
-            "markers even though nothing here can hide them for the capture their `visual` "
-            f"verdict compares: {', '.join(pinned_names)}",
+            "note: the scenario(s) whose effective launch environment already pins "
+            "BAJUTSU_TOUCH_MARKERS (on the scenario itself or its target) keep drawing markers "
+            "even though nothing here can hide them for the capture their `visual` verdict "
+            f"compares: {', '.join(pinned_names)}",
             err=True,
         )
     if channel_less_will_fail:
         failing_names = sorted(s.name for s in wants_markers if id(s) in channel_less_will_fail)
         typer.echo(
-            "note: the scenario(s) that pinned both BAJUTSU_TOUCH_MARKERS and "
-            "BAJUTSU_CONTROL_CHANNEL themselves will fail: the run loop reads both keys and tries "
-            "the channel regardless of this run's own actuator, which cannot carry it: "
-            f"{', '.join(failing_names)}",
+            "note: the scenario(s) whose effective launch environment already pins both "
+            "BAJUTSU_TOUCH_MARKERS and BAJUTSU_CONTROL_CHANNEL (on the scenario itself or its "
+            "target) will fail: the run loop reads both keys and tries the channel regardless of "
+            f"this run's own actuator, which cannot carry it: {', '.join(failing_names)}",
             err=True,
         )
     if marker_would_arm_unasked:
         unasked_names = sorted(s.name for s in scenarios if id(s) in marker_would_arm_unasked)
         typer.echo(
-            "note: --touch-markers stays off for the scenario(s) that pinned "
-            "BAJUTSU_CONTROL_CHANNEL themselves but have no `visual` verdict to correct, since "
-            "adding the marker key would complete the pair the run loop reads and invoke the "
-            "channel on any such scenario whose `expect` runs against a baselines directory, "
-            f"which asked for neither: {', '.join(unasked_names)}",
+            "note: --touch-markers stays off for the scenario(s) whose effective launch "
+            "environment already pins BAJUTSU_CONTROL_CHANNEL (on the scenario itself or its "
+            "target) but have no `visual` verdict to correct, since adding the marker key would "
+            "complete the pair the run loop reads and invoke the channel on any such scenario "
+            "whose `expect` runs against a baselines directory, which asked for neither: "
+            f"{', '.join(unasked_names)}",
             err=True,
         )
     for s in scenarios:
         if id(s) in pinned_unhidden or id(s) in channel_less_will_fail:
-            continue  # already set by the scenario's own pin; setdefault below would be a no-op
+            # The merged env already pins the marker key to "1": a scenario's own pin makes
+            # `setdefault` below a no-op, and a target-only pin needs nothing written to the
+            # scenario at all, so either way there is nothing to do here.
+            continue
         if id(s) in declines_channel or id(s) in channel_less:
             continue  # no channel to hide the markers: no markers, matching the notes above
         if id(s) in marker_would_arm_unasked:
