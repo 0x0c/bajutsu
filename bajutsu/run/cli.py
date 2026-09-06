@@ -26,7 +26,7 @@ from bajutsu.cli._shared import (
     resolve_system_alert_handling_flag,
 )
 from bajutsu.common.assertions import GoldenContext
-from bajutsu.common.backends import select_actuator_for_scenario
+from bajutsu.common.backends import default_available, select_actuator_for_scenario
 from bajutsu.common.cancellation import CancelSource, graceful_sigterm
 from bajutsu.common.config import WEB_ENGINES, Effective, IosConfig
 from bajutsu.common.deprecations import warn_once
@@ -723,6 +723,32 @@ def _apply_touch_markers(
             s.preconditions.launch_env.setdefault("BAJUTSU_CONTROL_CHANNEL", "1")
 
 
+def _channel_available_for(
+    backends: list[str], network: bool, available: Callable[[str], bool] = default_available
+) -> Callable[[Scenario], bool]:
+    """`_apply_touch_markers`'s `channel_available`: can *this* scenario carry BE-0365's channel?
+
+    The channel rides the network collector and the app-side poll loop BajutsuKit ships only for a
+    real Simulator process — the `xcuitest` actuator, not `fake`, whose collector nothing ever
+    polls, and not `adb`/`playwright`, which observe network a different way entirely
+    (`_hides_touch_markers`, `orchestrator/loop.py`).
+
+    Asked through `select_actuator_for_scenario`, the same selector the run loop resolves each
+    scenario's actuator with (BE-0240), and given the requested `backends` rather than the
+    run-level first choice: a multi-candidate `--backend` lets a scenario escalate away from
+    `xcuitest` on its own, and arming the channel on it would demand an acknowledgement its
+    collector will never send. `network` is the first conjunct so `--no-network` short-circuits
+    before the selector runs; the selector cannot newly raise here, since `_select_actuator_or_exit`
+    already ran `select_actuator(backends)` with the same `available` and converted its
+    `RuntimeError` into `Exit(2)`.
+
+    Args:
+        available: injected by the tests, the way `select_actuator_for_scenario` takes it — the
+            real predicate gates on tooling the host running the suite has no reason to carry.
+    """
+    return lambda s: network and select_actuator_for_scenario(backends, s, available) == "xcuitest"
+
+
 def _resolve_evidence_dirs(
     baselines: str, schemas: str, goldens: str, eff: Effective, scenario_file: Path
 ) -> tuple[Path, Path, GoldenContext | None]:
@@ -1287,21 +1313,10 @@ def run(
         # `request` waits.
         network = _resolve_network(network, eff.run_defaults.network)
         _apply_mocks(scenarios, network)
-        # The control channel BE-0365 uses to hide the markers rides the network collector, and
-        # needs the app-side poll loop BajutsuKit ships only for a real Simulator process — the
-        # `xcuitest` actuator, not `fake`, whose collector nothing ever polls, and not `adb`/
-        # `playwright`, which observe network a different way entirely (`_hides_touch_markers`,
-        # `orchestrator/loop.py`). A scenario needing the channel elsewhere, or with network
-        # collection off, falls back to the pre-BE-0365 skip rather than a wait no app will answer.
-        # Asked per scenario, and through the same selector the run loop resolves each scenario's
-        # actuator with (BE-0240), since `actuator` above is only the run-level first choice: a
-        # multi-candidate `--backend` lets a scenario escalate away from `xcuitest` on its own.
+        # `backends`, never the run-level `actuator` resolved above: the predicate has to ask the
+        # same selector the run loop resolves each scenario's actuator with (`_channel_available_for`).
         _apply_touch_markers(
-            scenarios,
-            touch_markers,
-            channel_available=lambda s: (
-                network and select_actuator_for_scenario(backends, s) == "xcuitest"
-            ),
+            scenarios, touch_markers, channel_available=_channel_available_for(backends, network)
         )
         baselines_dir, schemas_dir, gc = _resolve_evidence_dirs(
             baselines, schemas, goldens, eff, files[0]

@@ -21,7 +21,7 @@ from bajutsu.common.config import Effective, IosConfig, WebConfig, load_config, 
 from bajutsu.common.scenario import Scenario
 from bajutsu.common.scenario.models.assertions import Assertion, VisualMatch
 from bajutsu.common.scenario.models.steps import Step
-from bajutsu.run.cli import _apply_touch_markers
+from bajutsu.run.cli import _apply_touch_markers, _channel_available_for
 from bajutsu.serve import _cli_flags as cli_flags
 
 runner = CliRunner()
@@ -1901,6 +1901,65 @@ def test_touch_markers_keeps_same_named_scenarios_independent() -> None:
     assert carries.preconditions.launch_env["BAJUTSU_CONTROL_CHANNEL"] == "1"
     assert "BAJUTSU_TOUCH_MARKERS" not in escalates.preconditions.launch_env
     assert "BAJUTSU_CONTROL_CHANNEL" not in escalates.preconditions.launch_env
+
+
+def test_channel_available_says_yes_for_an_ios_run_with_network_collection_on() -> None:
+    """The predicate `run` actually passes, against the real selector — not an injected stand-in.
+
+    Every `_apply_touch_markers` test above injects its own `channel_available`, so this is the only
+    place the production answer is pinned. It has to be the real `select_actuator_for_scenario`:
+    a rename of the `xcuitest` actuator would otherwise leave the channel silently never armed, and
+    `--touch-markers` back at the pre-BE-0365 skip with nothing on stderr saying why.
+    """
+    assert _channel_available_for(["ios"], True, lambda a: True)(_touch_marker_scenario())
+
+
+def test_channel_available_says_no_for_a_backend_whose_collector_carries_no_channel() -> None:
+    """`playwright` observes network a different way, with no app-side poll loop to answer a wait."""
+    assert not _channel_available_for(["web"], True, lambda a: True)(_touch_marker_scenario())
+
+
+def test_channel_available_says_no_when_network_collection_is_off() -> None:
+    """The channel rides the collector, so `--no-network` leaves nothing for it to ride.
+
+    Dropping this conjunct arms the channel on a run with no collector at all, and *every*
+    screenshot-comparing scenario then fails on a wait nothing can answer. The selector must not
+    even be consulted: `network` short-circuits first.
+    """
+    asked: list[str] = []
+
+    def _record(actuator: str) -> bool:
+        asked.append(actuator)
+        return True
+
+    predicate = _channel_available_for(["ios"], False, _record)
+
+    assert not predicate(_touch_marker_scenario())
+    assert asked == []
+
+
+def test_channel_available_asks_the_requested_backends_for_each_scenario(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The selector is given `--backend`, not the run-level actuator, and is asked per scenario.
+
+    Passing the already-resolved run-level actuator is the defect an earlier round of review caught
+    here: a multi-candidate `--backend` lets one scenario escalate away from `xcuitest` while
+    another stays, so a single run-level answer arms the channel on a scenario whose collector
+    deliberately carries none.
+    """
+    asked: list[tuple[list[str], str]] = []
+
+    def _fake_select(backends: list[str], scenario: Scenario, *_: Any) -> str:
+        asked.append((backends, scenario.name))
+        return "xcuitest" if scenario.name == "stays on ios" else "playwright"
+
+    monkeypatch.setattr("bajutsu.run.cli.select_actuator_for_scenario", _fake_select)
+    predicate = _channel_available_for(["ios", "web"], True)
+
+    assert predicate(_touch_marker_scenario("stays on ios"))
+    assert not predicate(_touch_marker_scenario("escalates to web"))
+    assert asked == [(["ios", "web"], "stays on ios"), (["ios", "web"], "escalates to web")]
 
 
 def test_touch_markers_announce_a_scenario_that_declined_the_channel(
