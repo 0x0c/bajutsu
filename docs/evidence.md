@@ -404,6 +404,13 @@ of its own, and the collector's per-run token guards the commands. The run loop 
 acknowledgement rather than pausing for a fixed interval. That wait is what makes the capture
 correct instead of hopeful.
 
+The markers stay off the verdict path. The channel that hides them does not. Once armed, the
+channel fails a scenario whose app never acknowledges a command. The second command is no
+exception. That command restores the markers after a capture that already succeeded. Both edges
+wait for an acknowledgement on purpose. The run loop must never report an unconfirmed state as a
+confirmed one. From the moment the run loop arms the channel, `--touch-markers` bears on a
+verdict.
+
 The channel needs a real Simulator process, since that is where BajutsuKit's poll loop runs. So
 carrying it takes the `xcuitest` actuator with network collection on. A `fake` run starts a
 collector, but nothing ever polls it. `playwright` observes network through the driver, so it
@@ -411,9 +418,14 @@ starts no such collector at all. `adb` reports to the same host receiver iOS doe
 one — but nothing on the device answers a command, which is why the actuator check, rather than the
 shape of the collector, is what keeps the channel to `xcuitest`. Where both of those hold — the
 `xcuitest` actuator, with network collection on — `--touch-markers` activates the channel for a
-scenario whose verdict reads a screenshot. Everywhere else, such a scenario keeps the pre-BE-0365
-behavior and draws no markers. The investigator loses the touch evidence for that one scenario.
-That is the same trade-off this channel exists to remove, where it can.
+scenario whose verdict reads a screenshot. Everywhere else, a screenshot-comparing scenario keeps
+the pre-BE-0365 behavior. It draws no markers. The investigator loses the touch evidence for that
+one scenario. That is the same trade-off this channel exists to remove, where it can.
+
+A multi-candidate `--backend` has to meet the actuator condition twice over. The run pre-starts
+its collectors from the run-level actuator. Each scenario then resolves an actuator of its own
+(BE-0240). Under `--backend web,ios` the run pre-starts no collector at all. A scenario escalating
+to `xcuitest` within that run finds nothing to carry a command. That scenario stays unmarked too.
 
 That fallback stays local to the scenario that took it. One scenario can arm the channel while the
 next stays unmarked. Between scenarios, the run relaunches the app with **each scenario's own**

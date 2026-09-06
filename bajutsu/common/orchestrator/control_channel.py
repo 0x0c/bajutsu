@@ -117,7 +117,13 @@ def capability_suspended(
     Raises:
         ControlChannelError: Turning the capability off failed, or turning it back on failed after a
             body that itself succeeded. A restore that fails while the body is already failing is
-            logged instead, so the body's own failure stays the one the caller reports.
+            logged instead, so the body's own failure stays the one the caller reports. The second
+            of those is deliberately verdict-affecting and worth stating, since `--touch-markers`
+            advertises itself as evidence only: once the channel is armed, an acknowledgement lost
+            in flight on the restore edge (`drain_commands` does not redeliver a lost reply) fails a
+            scenario whose assertions all passed and whose compared image was already captured
+            correctly. Both edges raise so that neither is silently unconfirmed; narrowing the
+            restore edge to a warning would be a change of verdict semantics, not a cleanup.
         RunCancelled: The run was cancelled while an edge was still waiting for an acknowledgement.
             A cancellation observed while restoring after a failing body is logged like any other
             restore failure, not raised, for the same reason — the body's own failure wins.

@@ -2103,11 +2103,34 @@ def test_channel_available_asks_the_requested_backends_for_each_scenario(
         return "xcuitest" if scenario.name == "stays on ios" else "playwright"
 
     monkeypatch.setattr("bajutsu.run.cli.select_actuator_for_scenario", _fake_select)
-    predicate = _channel_available_for(["ios", "web"], True)
+    # `["ios", "web"]` resolves run-level to `xcuitest` under this `available`, so the run-level
+    # conjunct is satisfied and what the per-scenario selector answers is what decides each one.
+    predicate = _channel_available_for(["ios", "web"], True, lambda a: True)
 
     assert predicate(_touch_marker_scenario("stays on ios"))
     assert not predicate(_touch_marker_scenario("escalates to web"))
     assert asked == [(["ios", "web"], "stays on ios"), (["ios", "web"], "escalates to web")]
+
+
+def test_channel_available_says_no_when_a_scenario_escalates_toward_an_unprovisioned_xcuitest(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The run-level actuator has to be `xcuitest` too: it is what decides a collector exists.
+
+    `runner/pool.py` pre-starts one collector per device from the *run-level* actuator only (`if
+    network and not pool_env.observes_network_via_driver()`), so `--backend web,ios` leaves that
+    dict empty. A scenario escalating the other way — toward `xcuitest` — then leases
+    `collectors.get(udid)` → `None`. Arming it on the per-scenario answer alone hands that scenario
+    a channel with no collector behind it at all, turning a run that previously just went unmarked
+    into a red one, and announcing a build setting that is not the cause.
+    """
+    monkeypatch.setattr(
+        "bajutsu.run.cli.select_actuator_for_scenario", lambda *_a, **_k: "xcuitest"
+    )
+
+    assert not _channel_available_for(["web", "ios"], True, lambda a: True)(
+        _touch_marker_scenario()
+    )
 
 
 def test_touch_markers_announce_a_scenario_that_declined_the_channel(

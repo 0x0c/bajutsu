@@ -26,7 +26,11 @@ from bajutsu.cli._shared import (
     resolve_system_alert_handling_flag,
 )
 from bajutsu.common.assertions import GoldenContext
-from bajutsu.common.backends import default_available, select_actuator_for_scenario
+from bajutsu.common.backends import (
+    default_available,
+    select_actuator,
+    select_actuator_for_scenario,
+)
 from bajutsu.common.cancellation import CancelSource, graceful_sigterm
 from bajutsu.common.config import WEB_ENGINES, Effective, IosConfig
 from bajutsu.common.deprecations import warn_once
@@ -643,7 +647,9 @@ def _apply_touch_markers(
     takes a scenario rather than a run-level bool because the actuator itself is chosen per scenario
     once `--backend` resolves to more than one candidate (BE-0240, `select_actuator_for_scenario`):
     a run-level answer would arm the channel on a scenario that escalated to a backend whose
-    collector deliberately carries none, failing it on a wait no app there will ever answer.
+    collector deliberately carries none, failing it on a wait no app there will ever answer. The
+    caller's own answer has to stay run-aware as well as per-scenario, since the collectors
+    themselves are provisioned from the run-level actuator — see `_channel_available_for`.
     Where the channel cannot be carried, this reverts to the pre-BE-0365 behavior instead: that
     scenario's markers stay off, at the same per-scenario granularity
     ([`docs/evidence.md`](../../docs/evidence.md) — a relaunched process is unaffected by another
@@ -824,20 +830,33 @@ def _channel_available_for(
     command. That last one is why this selector, rather than the collector's shape, is what keeps
     the channel to `xcuitest` (`_hides_touch_markers`, `orchestrator/loop.py`).
 
-    Asked through `select_actuator_for_scenario`, the same selector the run loop resolves each
-    scenario's actuator with (BE-0240), and given the requested `backends` rather than the
-    run-level first choice: a multi-candidate `--backend` lets a scenario escalate away from
-    `xcuitest` on its own, and arming the channel on it would demand an acknowledgement its
-    collector will never send. `network` is the first conjunct so `--no-network` short-circuits
-    before the selector runs; the selector cannot newly raise here, since `_select_actuator_or_exit`
-    already ran `select_actuator(backends)` with the same `available` and converted its
-    `RuntimeError` into `Exit(2)`.
+    Both selectors have to answer `xcuitest`, because a multi-candidate `--backend` can disagree
+    with itself in either direction and only one of the two answers provisions a collector.
+    `select_actuator_for_scenario` is the per-scenario one the run loop resolves each actuator with
+    (BE-0240), given the requested `backends` rather than the run-level first choice, so a scenario
+    escalating *away* from `xcuitest` is not armed for an acknowledgement its collector will never
+    send. `select_actuator` is the run-level one `runner/pool.py` pre-starts the collectors from
+    (`if network and not pool_env.observes_network_via_driver()`): a scenario escalating *toward*
+    `xcuitest` under a run whose first choice observes network through the driver — `--backend
+    web,ios` — leases a `None` collector out of that never-filled dict, so arming it there would
+    fail the scenario on a channel that structurally cannot exist. The conjunct is deliberately
+    stricter than that one condition: requiring `xcuitest` at both levels keeps this predicate from
+    having to track a provisioning decision made in another module from another actuator.
+
+    `network` is the first conjunct so `--no-network` short-circuits before either selector runs;
+    neither can newly raise here, since `_select_actuator_or_exit` already ran
+    `select_actuator(backends)` with the same `available` and converted its `RuntimeError` into
+    `Exit(2)`.
 
     Args:
         available: injected by the tests, the way `select_actuator_for_scenario` takes it — the
             real predicate gates on tooling the host running the suite has no reason to carry.
     """
-    return lambda s: network and select_actuator_for_scenario(backends, s, available) == "xcuitest"
+    return lambda s: (
+        network
+        and select_actuator(backends, available) == "xcuitest"
+        and select_actuator_for_scenario(backends, s, available) == "xcuitest"
+    )
 
 
 def _resolve_evidence_dirs(
@@ -1247,11 +1266,12 @@ def run(
         "--touch-markers/--no-touch-markers",
         help="draw a marker at each touch the app receives, so the recorded video and each step's "
         "screenshot show where the gesture landed. Needs an app that links BajutsuKit; the marker "
-        "is a layer, never an accessibility element, so no selector can see it. Evidence only — no "
-        "assertion reads the markers. A scenario carrying a `visual` assertion hides them for that "
-        "one capture over the in-app control channel, which the app must be built to carry; where "
-        "that channel is unavailable (no network collection, or a non-xcuitest actuator) this flag "
-        "draws no markers for that scenario at all",
+        "is a layer, never an accessibility element, so no selector can see it. No assertion reads "
+        "the markers. A scenario carrying a `visual` assertion hides them for that one capture over "
+        "the in-app control channel, which the app must be built to carry; where that channel is "
+        "unavailable (no network collection, or a run or scenario on a non-xcuitest actuator) this "
+        "flag draws no markers for that scenario at all. Not verdict-neutral where the channel is "
+        "armed: a command the app never acknowledges fails that scenario",
     ),
     # --- Baseline / schema / golden directory overrides ---
     baselines: str = typer.Option(

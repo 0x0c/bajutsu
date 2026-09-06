@@ -200,7 +200,9 @@ Log:
   around both. A command that cannot prove it took effect becomes an ordinary scenario failure.
   `--touch-markers` no longer skips a screenshot-comparing scenario outright. It arms the channel
   for each scenario that can carry one — the `xcuitest` actuator with network collection on — and
-  asks per scenario, since BE-0240 chooses the actuator per scenario too. Everywhere else — a
+  requires both actuator selectors to answer `xcuitest`. BE-0240 chooses the actuator per scenario,
+  while the collectors the channel rides are pre-started from the run-level actuator, so a
+  multi-candidate `--backend` has to answer `xcuitest` twice over. Everywhere else — a
   scenario that resolved to another backend, network off, or one that declined the channel by
   pinning `BAJUTSU_CONTROL_CHANNEL` to anything but `"1"` — it falls back to the pre-BE-0365 skip,
   except where a scenario pinned `BAJUTSU_TOUCH_MARKERS: "1"` itself: `setdefault` cannot turn
