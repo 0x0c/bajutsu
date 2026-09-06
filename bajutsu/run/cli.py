@@ -655,9 +655,9 @@ def _apply_touch_markers(
     can carry the channel — arming it on one that structurally cannot.
 
     Every outcome says so on stderr, since all three are silent in the evidence otherwise: where
-    the channel is available the second gate is a build setting bajutsu cannot see from here, so
-    this says what an app that answers nothing will fail with; where it is unavailable or declined,
-    the markers an investigator asked for simply do not appear.
+    the channel is available, one of its two gates is a build setting bajutsu cannot see from
+    here, so this says what an app that answers nothing will fail with; where it is unavailable
+    or declined, the markers an investigator asked for simply do not appear.
     """
     if not enabled:
         return

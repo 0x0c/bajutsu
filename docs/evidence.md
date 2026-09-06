@@ -417,7 +417,7 @@ next stays unmarked. Between scenarios, the run relaunches the app with **each s
 launch env. An unmarked scenario runs in a process the marker variable never reached. The rest of
 the same run still draws its markers.
 
-Where the channel is active, the app side gates it twice, and the second gate is a build setting.
+Where the channel is active, the app side gates it twice, and one of the two is a build setting.
 `BajutsuKit` compiles the channel out unless the build passes `-DBAJUTSU_ENABLE_CONTROL_CHANNEL`.
 Compiled in, the channel stays inert without `BAJUTSU_CONTROL_CHANNEL=1` on the launch environment.
 `--touch-markers` supplies that key. An app built without the compilation setting acknowledges
