@@ -390,8 +390,8 @@ plain `bajutsu run`. The repository's own iOS lanes do pass it: `.github/actions
 and the showcase's `run-swiftui` / `run-uikit` targets run with the markers on, so a failure
 there shows where the gesture landed. That is safe because `visual` is the only assertion kind
 fed by a screenshot; every other kind reads the accessibility tree, the network exchanges, or
-the clipboard. Neither lane's build passes `-DBAJUTSU_ENABLE_CONTROL_CHANNEL` today. Adding a
-`visual` scenario to either fails until the build gains that setting (below).
+the clipboard. No lane here builds its app with `-DBAJUTSU_ENABLE_CONTROL_CHANNEL` today. Adding a
+`visual` scenario to any of them fails until that build gains the setting (below).
 
 The run loop hides the markers for the one capture a scenario's `visual` verdict compares,
 because that assertion reads the very image the markers are drawn into. It asks the running app
@@ -406,15 +406,15 @@ of its own, and the collector's per-run token guards the commands. The run loop 
 acknowledgement rather than pausing for a fixed interval. That wait is what makes the capture
 correct instead of hopeful.
 
-The markers stay off the verdict path. The channel that hides them does not. Once armed, the
+The markers themselves never reach the verdict path. The channel that hides them does. Once armed, the
 channel fails a scenario whose app never acknowledges a command. The second command is no
 exception. That command restores the markers after a capture that already succeeded. Both edges
 wait for an acknowledgement on purpose. The run loop must never report an unconfirmed state as a
 confirmed one. From the moment the run loop arms the channel, `--touch-markers` bears on a
 verdict.
 
-The channel needs a real Simulator process, since that is where BajutsuKit's poll loop runs. So
-carrying it takes the `xcuitest` actuator with network collection on. A `fake` run starts a
+The channel needs a real Simulator process, since that is where BajutsuKit's poll loop runs.
+Carrying it takes the `xcuitest` actuator with network collection on. A `fake` run starts a
 collector, but nothing ever polls it. `playwright` observes network through the driver, so it
 starts no such collector at all. `adb` reports to the same host receiver iOS does, so it does start
 one — but nothing on the device answers a command, which is why the actuator check, rather than the
