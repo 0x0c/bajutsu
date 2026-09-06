@@ -9,7 +9,7 @@
 | Author | [@0x0c](https://github.com/0x0c) |
 | Status | **In progress** |
 | Tracking issue | [Search](https://github.com/bajutsu-e2e/bajutsu/issues?q=is%3Aissue+label%3Aroadmap-tracking+in%3Atitle+"BE-0365") |
-| Implementing PR | [#1699](https://github.com/bajutsu-e2e/bajutsu/pull/1699) (unit 1), [#1788](https://github.com/bajutsu-e2e/bajutsu/pull/1788) (unit 2) |
+| Implementing PR | [#1699](https://github.com/bajutsu-e2e/bajutsu/pull/1699) (unit 1), [#1788](https://github.com/bajutsu-e2e/bajutsu/pull/1788) (unit 2), [#1916](https://github.com/bajutsu-e2e/bajutsu/pull/1916) (unit 3) |
 | Topic | Driver & backend architecture |
 | Related | [BE-0364](../BE-0364-in-app-control-channel/BE-0364-in-app-control-channel.md) |
 <!-- /BE-METADATA -->
@@ -167,7 +167,7 @@ tested and splitting it changes what is under test.
 
 - [x] Unit 1 — the collector's command queue, authenticated drain, and acknowledgement endpoint
 - [x] Unit 2 — the app-side poll loop and command dispatch, env-gated and inert by default
-- [ ] Unit 3 — the acknowledgement condition wait, and the touch-visualization toggle as the first command
+- [x] Unit 3 — the acknowledgement condition wait, and the touch-visualization toggle as the first command
 - [ ] Unit 4 — mid-scenario stub-table replacement as the second command
 - [ ] Unit 5 — bilingual documentation, including the release-build gating this makes mandatory
 
@@ -192,6 +192,25 @@ Log:
   drain schedules no main-thread work, and a drain answered `401` or `404` ends the loop rather than
   leaving a timer running in the app for the rest of the process's life. The Swift gate now builds and
   tests both configurations, the unflagged one first, since that is what an adopter links.
+
+- [#1916](https://github.com/bajutsu-e2e/bajutsu/pull/1916) — unit 3: the acknowledgement condition
+  wait, `orchestrator/control_channel.py`. It sits on the existing `deadline_ticks` skeleton.
+  The touch-visualization toggle is the first command. A `visual` capture happens in two places:
+  the initial `expect` capture, and the post-alert-dismiss retry. `run_scenario` hides the markers
+  around both. A command that cannot prove it took effect becomes an ordinary scenario failure.
+  `--touch-markers` no longer skips a screenshot-comparing scenario outright. It arms the channel
+  for each scenario that can carry one — the `xcuitest` actuator with network collection on — and
+  requires both actuator selectors to answer `xcuitest`. BE-0240 chooses the actuator per scenario,
+  while the collectors the channel rides are pre-started from the run-level actuator, so a
+  multi-candidate `--backend` has to answer `xcuitest` twice over. Everywhere else — a
+  scenario that resolved to another backend, network off, or one that declined the channel by
+  pinning `BAJUTSU_CONTROL_CHANNEL` to anything but `"1"` — it falls back to the pre-BE-0365 skip,
+  except where a scenario pinned `BAJUTSU_TOUCH_MARKERS: "1"` itself: `setdefault` cannot turn
+  those markers off, so that scenario keeps drawing them, and one that pinned
+  `BAJUTSU_CONTROL_CHANNEL: "1"` alongside them on a run that cannot carry the channel fails
+  outright. A scenario with no `visual` verdict that pinned only the channel key gets no marker
+  key at all, since writing one would complete the pair the run loop reads and arm a channel it
+  never asked for. Which of the six outcomes applied is named on stderr.
 
 ## References
 

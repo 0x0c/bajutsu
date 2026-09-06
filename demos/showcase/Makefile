@@ -145,8 +145,10 @@ SIM ?= $(shell xcrun simctl list devices booted | sed -nE 's/.*\(([0-9A-F-]{36})
 
 # `--touch-markers` draws each touch the app receives into the video and the step screenshots, the
 # iOS counterpart of the `show_touches` / `pointer_location` settings android/Makefile turns on for
-# its own runs. These targets already exclude the `visual` tag, and `run` skips a screenshot-comparing
-# scenario anyway, so the markers reach no assertion that reads pixels.
+# its own runs. These targets already exclude the `visual` tag, which is why they carry no
+# -DBAJUTSU_ENABLE_CONTROL_CHANNEL build setting: since BE-0365, a `visual` scenario needs that
+# channel to hide the markers for its capture, and one added here would fail until the build gains
+# the setting.
 run-swiftui: swiftui-build runner-build
 	cd $(ROOT) && uv run bajutsu run --target showcase-swiftui --udid $(SIM) --backend ios --exclude xcuitest,systemalert,visual,android,browser --config $(CONFIG) --touch-markers
 run-uikit: uikit-build runner-build

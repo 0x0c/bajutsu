@@ -377,27 +377,76 @@ Three properties matter before turning the flag on.
   `UIView`, which is the only way a marker could gain an accessibility representation at all.
 - **A gesture's marks stay until the next gesture starts.** No timer removes them, which is what
   keeps them in the step's screenshot, and equally why a run with the flag on produces screenshots
-  that differ from a run without it. Leave the flag off for any pixel comparison, the way the
-  Android lanes leave the operating system's `show_touches` and `pointer_location` settings off for
-  theirs (`demos/showcase/android/Makefile`).
+  that differ from a run without it. Where the in-app control channel is available (below), a
+  `visual` assertion gets its own capture with the markers hidden, so the flag and a pixel
+  comparison can share a run; everywhere else, leave the flag off for a pixel comparison. Android
+  has no such channel:
+  its scenario lanes turn `show_touches` and `pointer_location` on device-wide, and the
+  tree-comparing and pixel-comparing lanes turn the pair back off by hand instead
+  (`demos/showcase/android/Makefile`).
 
 The markers are evidence only — no assertion reads them — and the flag is off by default for a
 plain `bajutsu run`. The repository's own iOS lanes do pass it: `.github/actions/bajutsu-e2e`
 and the showcase's `run-swiftui` / `run-uikit` targets run with the markers on, so a failure
 there shows where the gesture landed. That is safe because `visual` is the only assertion kind
 fed by a screenshot; every other kind reads the accessibility tree, the network exchanges, or
-the clipboard.
+the clipboard. No lane here builds its app with `-DBAJUTSU_ENABLE_CONTROL_CHANNEL` today. Adding a
+`visual` scenario to any of them fails until that build gains the setting (below).
 
-One combination turns itself off: a scenario whose verdict compares a screenshot. A `visual`
-assertion reads the very image the markers are drawn into, so `--touch-markers` skips that scenario
-and says which on stderr, rather than letting a baseline fail for a reason that has nothing to do
-with the app. Masking cannot rescue the case, because the marker follows the gesture instead of
-sitting in a fixed region. The skip costs the rest of the run nothing: the app is terminated and
-relaunched with **each scenario's own** launch env, so a skipped scenario runs in a process where
-the hook was never installed while every other scenario in the same run still draws its markers.
-Narrowing further — markers for a scenario's gestures but not for its `visual` step — is not
-possible today, since the launch environment is the only channel into the app and it is fixed for
-the life of the process.
+The run loop hides the markers for the one capture a scenario's `visual` verdict compares,
+because that assertion reads the very image the markers are drawn into. It asks the running app
+to take the markers down, waits for the app to confirm, fires the shutter, then sends a second
+command putting them back. Masking cannot rescue the case, because the marker follows the
+gesture instead of sitting in a fixed region.
+
+The request travels the in-app control channel
+([BE-0365](../roadmaps/BE-0365-in-app-control-channel/BE-0365-in-app-control-channel.md)).
+That channel is a command queue on the collector the app already reports to. The app opens no socket
+of its own, and the collector's per-run token guards the commands. The run loop waits for the app's
+acknowledgement rather than pausing for a fixed interval. That wait is what makes the capture
+correct instead of hopeful.
+
+The markers themselves never reach the verdict path. The channel that hides them does. Once armed, the
+channel fails a scenario whose app never acknowledges a command. The second command is no
+exception. That command restores the markers after a capture that already succeeded. Both edges
+wait for an acknowledgement on purpose. The run loop must never report an unconfirmed state as a
+confirmed one. From the moment the run loop arms the channel, `--touch-markers` bears on a
+verdict.
+
+The channel needs a real Simulator process, since that is where BajutsuKit's poll loop runs.
+Carrying it takes the `xcuitest` actuator with network collection on. A `fake` run starts a
+collector, but nothing ever polls it. `playwright` observes network through the driver, so it
+starts no such collector at all. `adb` reports to the same host receiver iOS does, so it does start
+one — but nothing on the device answers a command, which is why the actuator check, rather than the
+shape of the collector, is what keeps the channel to `xcuitest`. Where both of those hold — the
+`xcuitest` actuator, with network collection on — `--touch-markers` activates the channel for a
+scenario whose verdict reads a screenshot. Everywhere else, a screenshot-comparing scenario keeps
+the pre-BE-0365 behavior. It draws no markers. The investigator loses the touch evidence for that
+one scenario. That is the same trade-off this channel exists to remove, where it can.
+
+A multi-candidate `--backend` has to meet the actuator condition twice over. The run pre-starts
+its collectors from the run-level actuator. Each scenario then resolves an actuator of its own
+(BE-0240). Under `--backend web,ios` the run pre-starts no collector at all. A scenario escalating
+to `xcuitest` within that run finds nothing to carry a command. That scenario stays unmarked too.
+
+That fallback stays local to the scenario that took it. One scenario can arm the channel while the
+next stays unmarked. Between scenarios, the run relaunches the app with **each scenario's own**
+launch env. An unmarked scenario runs in a process the marker variable never reached. The rest of
+the same run still draws its markers.
+
+Where the channel is active, the app side gates it twice, and one of the two is a build setting.
+`BajutsuKit` compiles the channel out unless the build passes `-DBAJUTSU_ENABLE_CONTROL_CHANNEL`.
+Compiled in, the channel stays inert without `BAJUTSU_CONTROL_CHANNEL=1` on the launch environment.
+`--touch-markers` supplies that key. An app built without the compilation setting acknowledges
+nothing. The scenario then fails naming both gates, rather than comparing an image carrying the
+markers.
+
+The run loop reads those two launch-environment keys and nothing else, so it cannot tell a pair
+the flag armed from one a scenario assembled itself. That is why `--touch-markers` leaves a
+scenario with no `visual` verdict unmarked when its own launch environment already sets
+`BAJUTSU_CONTROL_CHANNEL=1`: adding the marker key there would complete the pair, and any such
+scenario whose `expect` runs against a baselines directory would then enter the channel it never
+asked for. Such a scenario keeps its markers off, and the run says so on stderr.
 
 ## Sinks (where evidence goes)
 

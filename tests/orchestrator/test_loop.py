@@ -10,14 +10,20 @@ import pytest
 from _orch import FakeClock, _scenario
 from conftest import el, guard_rule
 
+from bajutsu.common.assertions import EvalContext
 from bajutsu.common.drivers import base
 from bajutsu.common.drivers.fake import FakeDriver
 from bajutsu.common.evidence import Artifact, FileSink, step_view
 from bajutsu.common.evidence.intervals import Interval
+from bajutsu.common.evidence.network import (
+    AppCommandReport,
+    NetworkExchange,
+    ScreenTransition,
+)
 from bajutsu.common.orchestrator import AlertGuardConfig, RunResult, run_scenario
 from bajutsu.common.orchestrator.waits import WaitTrace
 from bajutsu.common.report.format import video_seconds
-from bajutsu.common.scenario import Interrupt, Relaunch
+from bajutsu.common.scenario import Interrupt, Relaunch, Scenario
 
 
 class _QueryLoggingDriver(FakeDriver):
@@ -251,6 +257,188 @@ def test_step_level_assert_drops_visual_context(tmp_path: Path) -> None:
     )
     assert not result.ok
     assert result.failure is not None and "no visual context" in result.failure
+
+
+class _RecordingChannel:
+    """A control channel that logs its commands into the driver's own action log (BE-0365).
+
+    Sharing the driver's log is the point: the ordering this pins is "markers off, *then* shutter,
+    then markers on", which two separate logs could not express.
+    """
+
+    def __init__(self, driver: FakeDriver, *, applies: bool = True, reason: str = "") -> None:
+        self._driver = driver
+        self._applies = applies
+        self._reason = reason
+        self._issued = 0
+
+    def enqueue_command(self, capability: object, *, enabled: bool) -> str:
+        self._issued += 1
+        self._driver.actions.append(("command", enabled))
+        return f"c{self._issued}"
+
+    def report_for(self, command_id: str) -> AppCommandReport:
+        return AppCommandReport(id=command_id, applied=self._applies, reason=self._reason)
+
+    # The rest of `Collector`, unexercised here (the ordering assertions read the driver's action
+    # log, not these) — present only so this fake structurally satisfies `Collector | None`.
+    def snapshot(self) -> list[NetworkExchange]:
+        return []
+
+    def snapshot_timed(self) -> list[tuple[NetworkExchange, float]]:
+        return []
+
+    def transitions_snapshot_timed(self) -> list[tuple[ScreenTransition, float]]:
+        return []
+
+    def clear(self) -> None:
+        pass
+
+    def stop(self) -> None:
+        pass
+
+
+def _visual_scenario(launch_env: dict[str, str]) -> Scenario:
+    return _scenario(
+        {
+            "name": "visual one",
+            "preconditions": {"launchEnv": launch_env},
+            "steps": [],
+            "expect": [{"visual": {"baseline": "home.png"}}],
+        }
+    )
+
+
+def _visual_ctx(tmp_path: Path) -> EvalContext:
+    from bajutsu.common.assertions import VisualContext
+    from bajutsu.common.evidence.redaction import Redactor
+    from bajutsu.common.evidence.sink import RunArtifactWriter
+
+    return EvalContext(
+        visual=VisualContext(
+            screenshot_path=tmp_path / "00-s" / "shot.png",
+            baselines_dir=tmp_path / "baselines",
+            writer=RunArtifactWriter(tmp_path, Redactor(None)),
+            prefix="00-s",
+        )
+    )
+
+
+def test_a_visual_capture_hides_the_touch_markers_and_restores_them(tmp_path: Path) -> None:
+    """The shutter fires between an acknowledged off and an acknowledged on (BE-0365 unit 3).
+
+    This is the whole point of the channel: until it existed, a scenario comparing a screenshot had
+    to run with the markers off from launch, costing the investigator the touch evidence for exactly
+    the scenario they were looking at.
+    """
+    driver = FakeDriver([el("home.title", "ホーム")])
+    (tmp_path / "00-s").mkdir(parents=True)
+    run_scenario(
+        driver,
+        _visual_scenario({"BAJUTSU_TOUCH_MARKERS": "1", "BAJUTSU_CONTROL_CHANNEL": "1"}),
+        clock=FakeClock(),
+        ctx=_visual_ctx(tmp_path),
+        channel=_RecordingChannel(driver),
+    )
+    ordered = [k for k, _ in driver.actions if k in {"command", "screenshot"}]
+    assert ordered == ["command", "screenshot", "command"]
+    assert [arg for k, arg in driver.actions if k == "command"] == [False, True]
+
+
+def test_a_visual_capture_issues_no_command_when_the_scenario_did_not_arm_the_channel(
+    tmp_path: Path,
+) -> None:
+    """Markers alone are not the trigger: an adopter's own launch env must not start commanding.
+
+    The channel runs a timer inside the app under test, so bajutsu drives it only for the runs that
+    asked for it — which `run --touch-markers` signals by setting both keys.
+    """
+    driver = FakeDriver([el("home.title", "ホーム")])
+    (tmp_path / "00-s").mkdir(parents=True)
+    run_scenario(
+        driver,
+        _visual_scenario({"BAJUTSU_TOUCH_MARKERS": "1"}),
+        clock=FakeClock(),
+        ctx=_visual_ctx(tmp_path),
+        channel=_RecordingChannel(driver),
+    )
+    assert [k for k, _ in driver.actions if k == "command"] == []
+
+
+def test_a_collector_with_no_channel_fails_the_scenario_rather_than_capturing_anyway(
+    tmp_path: Path,
+) -> None:
+    """The command is not skipped: capturing anyway would compare an image carrying the markers."""
+    driver = FakeDriver([el("home.title", "ホーム")])
+    (tmp_path / "00-s").mkdir(parents=True)
+    result = run_scenario(
+        driver,
+        _visual_scenario({"BAJUTSU_TOUCH_MARKERS": "1", "BAJUTSU_CONTROL_CHANNEL": "1"}),
+        clock=FakeClock(),
+        ctx=_visual_ctx(tmp_path),
+        channel=None,
+    )
+    assert not result.ok
+    assert result.failure is not None and "control channel" in result.failure
+    assert [k for k, _ in driver.actions if k == "screenshot"] == []
+
+
+def test_a_refused_command_fails_the_scenario_naming_the_apps_own_reason(tmp_path: Path) -> None:
+    """A refusal reaches the scenario's own verdict, carrying the app's own reason end to end."""
+    driver = FakeDriver([el("home.title", "ホーム")])
+    (tmp_path / "00-s").mkdir(parents=True)
+    result = run_scenario(
+        driver,
+        _visual_scenario({"BAJUTSU_TOUCH_MARKERS": "1", "BAJUTSU_CONTROL_CHANNEL": "1"}),
+        clock=FakeClock(),
+        ctx=_visual_ctx(tmp_path),
+        channel=_RecordingChannel(
+            driver, applies=False, reason="touch_visualization is compiled out"
+        ),
+    )
+    assert not result.ok
+    assert result.failure is not None and "touch_visualization is compiled out" in result.failure
+    assert [k for k, _ in driver.actions if k == "screenshot"] == []
+
+
+def test_a_visual_capture_hides_the_markers_on_the_post_alert_dismiss_retry_too(
+    tmp_path: Path,
+) -> None:
+    """The `expect` phase captures twice when a blocking alert clears mid-check, and both need it.
+
+    A prompt over the screen fails the first `exists` check, so the guard dismisses it and the
+    retry runs its own capture (`loop.py`'s second `_capture_visual_actual` call site) — that
+    capture must hide the markers exactly as the first one does, or a scenario that recovers from
+    a prompt would compare an image the first capture's suspension never touched.
+    """
+    from conftest import AlertingDriver
+
+    driver = AlertingDriver(on_dismiss=lambda d: setattr(d, "screen", [el("home.title", "ホーム")]))
+    (tmp_path / "00-s").mkdir(parents=True)
+    channel = _RecordingChannel(driver)
+    result = run_scenario(
+        driver,
+        _scenario(
+            {
+                "name": "visual after alert",
+                "preconditions": {
+                    "launchEnv": {"BAJUTSU_TOUCH_MARKERS": "1", "BAJUTSU_CONTROL_CHANNEL": "1"}
+                },
+                "steps": [],
+                "expect": [{"exists": {"id": "home.title"}}],
+            }
+        ),
+        clock=FakeClock(),
+        ctx=_visual_ctx(tmp_path),
+        channel=channel,
+        alert_guard=AlertGuardConfig(rules=[guard_rule()]),
+    )
+    assert result.ok, result.failure
+    # Two captures: the first attempt (blocked by the prompt) and the post-dismiss retry, each its
+    # own off/shutter/on triple.
+    ordered = [k for k, _ in driver.actions if k in {"command", "screenshot"}]
+    assert ordered == ["command", "screenshot", "command"] * 2
+    assert [arg for k, arg in driver.actions if k == "command"] == [False, True, False, True]
 
 
 def test_step_level_assert_drops_schema_context() -> None:

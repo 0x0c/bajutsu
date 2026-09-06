@@ -750,6 +750,10 @@ class _ScenarioRunner:
                 # A cancel request reaches the step loop and its condition waits (BE-0370), so this
                 # scenario stops at its next safe boundary and comes back as an ordinary failure.
                 cancelled=self.cancelled,
+                # The collector itself, not one of its callables: the control channel (BE-0365) is
+                # the one direction that runs *into* the app, so it has no snapshot to hand over.
+                # A collector that carries no channel is caught at the command, not skipped here.
+                channel=lz.collector,
             )
             result.sid = sid  # the evidence-dir slug, so the matrix links to the real dir (BE-0076)
             result.device = lz.udid  # attribute the scenario to the device that ran it
