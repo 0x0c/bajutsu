@@ -554,7 +554,11 @@ class BackgroundScreenshotProvider(Protocol):
 
     # Start the capture and return the join that finishes it. The join must wait for the bytes to land
     # at `path` and re-raise, unchanged, whatever the synchronous `screenshot()` would have raised — the
-    # caller's error handling is the same either way, only its moment moves.
+    # caller's error handling is the same either way, only its moment moves. Write *into* `path`
+    # rather than replacing it (no temp file plus rename): the caller pre-creates it owner-only
+    # with `RunArtifactWriter.reserve_restricted`, so a shot holding on-screen secrets is never at
+    # the ambient umask for the overlap window; a replacing write would hand that window back
+    # (BE-0131).
     def screenshot_in_background(self, path: str) -> Callable[[], None]: ...
 
 
