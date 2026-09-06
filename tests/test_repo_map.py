@@ -238,14 +238,38 @@ def test_methods_map_walks_every_file_under_a_package(tmp_path: Path) -> None:
 
 
 def test_methods_map_survives_an_unparseable_file(tmp_path: Path) -> None:
-    """One broken file must not stop the rest of a directory from mapping."""
+    """One broken file must not stop the rest of a directory from mapping — and must not vanish
+    from the map either, or a session reads "this file defines nothing" instead of "this file
+    could not be parsed"."""
     pkg = tmp_path / "bajutsu"
     _write(pkg / "broken.py", "def (\n")
     _write(pkg / "ok.py", "def fine() -> None:\n    pass\n")
 
     rows = rm.iter_methods(pkg)
 
-    assert [row.name for row in rows] == ["fine"]
+    assert [row.name for row in rows] == ["broken", "fine"]
+    assert [row.size for row in rows if row.name == "broken"] == ["unparsed"]
+
+
+def test_methods_map_finds_a_class_nested_inside_a_function(tmp_path: Path) -> None:
+    """A factory function's closure class is part of the file's method surface too, and its name
+    is qualified so two same-named closures from different factories stay distinguishable."""
+    _write(
+        tmp_path / "s.py",
+        "def make_control() -> object:\n"
+        "    class _Control:\n"
+        "        def act(self) -> None:\n"
+        "            pass\n"
+        "    return _Control\n",
+    )
+
+    rows = rm.iter_methods(tmp_path / "s.py")
+
+    assert [(row.size, row.name) for row in rows] == [
+        ("def", "make_control"),
+        ("class", "make_control._Control"),
+        ("def", "make_control._Control.act"),
+    ]
 
 
 def test_methods_map_rejects_a_missing_target(tmp_path: Path) -> None:

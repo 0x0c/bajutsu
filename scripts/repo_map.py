@@ -311,14 +311,21 @@ def _def_row(
     )
 
 
-def _class_rows(cls: ast.ClassDef, file_path: str) -> list[Row]:
-    """One row for a class (with its bases) and one for each method it defines, in source order."""
+def _class_rows(cls: ast.ClassDef, file_path: str, *, qualifier: str = "") -> list[Row]:
+    """One row for a class (with its bases) and one for each method it defines, in source order.
+
+    ``qualifier`` prefixes the class's own name with the dotted path of the function/class it is
+    nested inside (empty for a module-level class) — two functions can each return their own
+    same-named closure class, and the qualifier is what keeps their rows distinguishable by name,
+    not only by ``file:line``.
+    """
     bases = ", ".join(ast.unparse(base) for base in cls.bases)
+    display_name = f"{qualifier}{cls.name}"
     rows = [
         Row(
             path=f"{file_path}:{cls.lineno}",
             size="class",
-            name=f"{cls.name}({bases})" if bases else cls.name,
+            name=f"{display_name}({bases})" if bases else display_name,
             detail=_doc_summary(cls),
         )
     ]
@@ -326,29 +333,58 @@ def _class_rows(cls: ast.ClassDef, file_path: str) -> list[Row]:
         if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
             drop_first = not _is_staticmethod(node)
             rows.append(
-                _def_row(node, file_path, name=f"{cls.name}.{node.name}", drop_first=drop_first)
+                _def_row(node, file_path, name=f"{display_name}.{node.name}", drop_first=drop_first)
             )
     return rows
 
 
-def _file_method_rows(path: Path) -> list[Row]:
-    """Every class/method and top-level function one file defines, in source order.
+def _nested_classes(node: ast.AST, qualifier: str) -> list[tuple[str, ast.ClassDef]]:
+    """Every ``ClassDef`` under ``node``, at any nesting depth, paired with its qualifier.
 
-    A module that does not parse contributes no rows, matching :func:`_declarations`: the map is a
-    navigation aid, and one unparseable file should not stop the rest of a package from mapping.
+    A class is not always module-level: a factory function returning a backend-specific
+    implementation defines its class inside the function body, and that class is still part of
+    the file's method surface — skipping it would silently hide the methods that carry the
+    behavior. The qualifier is the dotted path of enclosing functions/classes down to (not
+    including) ``node`` itself, e.g. ``"make_control."`` for a class defined inside
+    ``make_control``.
+    """
+    found: list[tuple[str, ast.ClassDef]] = []
+    for child in ast.iter_child_nodes(node):
+        if isinstance(child, ast.ClassDef):
+            found.append((qualifier, child))
+            found.extend(_nested_classes(child, f"{qualifier}{child.name}."))
+        elif isinstance(child, ast.FunctionDef | ast.AsyncFunctionDef):
+            found.extend(_nested_classes(child, f"{qualifier}{child.name}."))
+        else:
+            found.extend(_nested_classes(child, qualifier))
+    return found
+
+
+def _file_method_rows(path: Path) -> list[Row]:
+    """Every class/method (at any nesting depth) and top-level function one file defines, in
+    source order.
+
+    An unparseable module still contributes one row naming the file, so it stays visible in the
+    map: :func:`iter_code` keeps such a module's row too (only its ``detail`` goes empty), and a
+    file that disappears instead reads as "this file defines nothing" rather than "this file could
+    not be read".
     """
     try:
         tree = ast.parse(path.read_text(encoding="utf-8"))
     except (OSError, SyntaxError):
-        return []
+        return [Row(path=path.as_posix(), size="unparsed", name=path.stem, detail="")]
     file_path = path.as_posix()
     rows: list[Row] = []
-    for node in tree.body:
-        if isinstance(node, ast.ClassDef):
-            rows.extend(_class_rows(node, file_path))
-        elif isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
-            rows.append(_def_row(node, file_path, name=node.name, drop_first=False))
-    return rows
+    for qualifier, cls in _nested_classes(tree, ""):
+        rows.extend(_class_rows(cls, file_path, qualifier=qualifier))
+    rows.extend(
+        _def_row(node, file_path, name=node.name, drop_first=False)
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef)
+    )
+    # Classes and top-level functions were collected in two separate passes, so restore the
+    # single-pass source order the docstring promises.
+    return sorted(rows, key=lambda row: int(row.path.rsplit(":", 1)[1]))
 
 
 def iter_methods(target: Path) -> list[Row]:
