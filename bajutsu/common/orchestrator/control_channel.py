@@ -63,12 +63,19 @@ def apply_capability(
         RunCancelled: The run was cancelled while this wait was still polling.
     """
     if not isinstance(channel, ControlChannel):
+        # `None` is the `--no-network` shape — no collector at all, rather than one of the wrong
+        # kind — so naming its type would put a bare "NoneType" in the scenario's own failure,
+        # which reads as a bajutsu bug rather than as "network collection is off".
+        which = (
+            "this run has no collector at all"
+            if channel is None
+            else f"this run's collector ({type(channel).__name__}) carries no control channel"
+        )
         raise ControlChannelError(
-            f"cannot set {capability.value}={str(enabled).lower()}: this run's collector "
-            f"({type(channel).__name__}) carries no control channel. The channel rides the HTTP "
-            "collector the app POSTs to, so it reaches an app bajutsu launched with "
-            "BAJUTSU_COLLECTOR — not a collector that observes network through the driver, as the "
-            "web backend's does, and a run with network collection off has no collector at all."
+            f"cannot set {capability.value}={str(enabled).lower()}: {which}. The channel rides "
+            "the HTTP collector the app POSTs to, so it reaches an app bajutsu launched with "
+            "BAJUTSU_COLLECTOR — never a collector that observes network through the driver "
+            "instead, as the web backend's does."
         )
     command_id = channel.enqueue_command(capability, enabled=enabled)
     for _ in deadline_ticks(timeout, _ACK_POLL_INIT, _ACK_POLL_MAX):

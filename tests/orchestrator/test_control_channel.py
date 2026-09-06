@@ -95,8 +95,12 @@ def test_a_collector_with_no_channel_fails_loudly_rather_than_skipping() -> None
 
 def test_no_collector_at_all_fails_the_same_way() -> None:
     """`None` is the common shape of "this run has no collector", and it is not a licence to skip."""
-    with pytest.raises(ControlChannelError):
+    with pytest.raises(ControlChannelError) as err:
         apply_capability(None, _TOUCH, enabled=False, timeout=_QUICK)
+    # A bare "NoneType" would read as a bajutsu bug rather than as "network collection is off" —
+    # the `--no-network` shape this branch actually names.
+    assert "no collector at all" in str(err.value)
+    assert "NoneType" not in str(err.value)
 
 
 def test_an_applied_command_releases_the_wait() -> None:
