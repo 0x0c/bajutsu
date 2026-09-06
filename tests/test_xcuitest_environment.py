@@ -465,7 +465,8 @@ def test_cold_spawn_pins_the_system_locale_and_reboots_for_it(
     # boot (the initial one) -> bootstatus (waiting it out, BE-0359) -> list (recording the device
     # type a replacement would be cloned from) -> spawn (the read, then the two writes) -> shutdown
     # -> list (confirming the device went down) -> boot (the one that re-renders SpringBoard) ->
-    # bootstatus (waiting that one out too) -> spawn (the read-back that verifies it took).
+    # bootstatus (waiting that one out too) -> spawn (the read-back that verifies it took) -> privacy
+    # (the default `reinstall: clean` resets permissions on every prepare, not just a warm resume).
     assert _verbs(simctl_calls) == [
         "boot",
         "bootstatus",
@@ -478,6 +479,7 @@ def test_cold_spawn_pins_the_system_locale_and_reboots_for_it(
         "boot",
         "bootstatus",
         "spawn",
+        "privacy",
     ]
 
 
@@ -1325,10 +1327,33 @@ def test_clean_reinstall_resets_permissions_even_when_the_scenario_names_none(
     assert reset_calls, f"expected a `simctl privacy reset all` call, got: {simctl_calls}"
     reset_call = reset_calls[0]
     assert reset_call[-1] == "com.x"  # scoped to this bundle id, not every app on the device
-    verbs = [c[2] for c in simctl_calls if len(c) >= 3 and c[:2] == ["xcrun", "simctl"]]
+    verbs = _verbs(simctl_calls)
     # uninstall, then install, then reset — the reset targets the bundle this `clean` reinstall just
-    # (re)installed, the same order `adb.Env`'s uninstall → install → `pm clear` mirror uses.
-    assert verbs.index("uninstall") < verbs.index("install") < simctl_calls.index(reset_call)
+    # (re)installed, the same order `adb.Env`'s uninstall → install → `pm clear` mirror uses. All
+    # three indices come from `verbs` (not a mix with `simctl_calls`): `permissions` is `None` here,
+    # so the first (and only) `privacy` verb is unambiguously this reset, already pinned above to
+    # `reset all … com.x` rather than a `grant`/`revoke`.
+    assert verbs.index("uninstall") < verbs.index("install") < verbs.index("privacy")
+
+
+def test_clean_reinstall_resets_permissions_with_no_app_path(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # A provider that hands over an already-installed build (no `appPath` here, BE-0236) skips
+    # install/uninstall entirely — but the bundle it names was installed by some earlier lease, and
+    # `clean` still promises that lease a known permission state, so the reset must not be nested
+    # inside the `appPath` branch the way the install/uninstall calls are.
+    popen_argvs, simctl_calls, run = _fake_toolchain(monkeypatch)
+    env = XcuitestEnvironment("xcuitest", "UDID", env_run=run)
+    eff = _sim_eff(test_runner=str(_write_runner(tmp_path)))  # app_path=None
+    env.start(eff, Preconditions())  # cold spawn
+    simctl_calls.clear()
+    env.start(eff, Preconditions())  # warm resume, reinstall defaults to "clean", no permissions
+    assert len(popen_argvs) == 1  # no respawn — the runner was reused
+    assert "install" not in _verbs(simctl_calls)  # nothing to (re)install without an appPath
+    reset_calls = [c for c in simctl_calls if c[2:3] == ["privacy"] and c[4:6] == ["reset", "all"]]
+    assert reset_calls, f"expected a reset even with no appPath, got: {simctl_calls}"
+    assert reset_calls[0][-1] == "com.x"
 
 
 def test_overwrite_reinstall_does_not_reset_permissions(

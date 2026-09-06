@@ -1337,22 +1337,24 @@ class XcuitestEnvironment(_DeviceEnvironment):
                     resolved = simctl.device_type_of(self._udid, self._run)
                     self._device_type_id, self._device_runtime_id = resolved or (None, None)
                 self._pin_system_locale(e, pre.resolved_locale(eff.locale))
+            clean_reinstall = pre.reinstall == "clean" and not pre.erase
             if ios.app_path:
                 if not Path(ios.app_path).exists():
                     raise simctl.DeviceError(
                         f"appPath not found: {ios.app_path} (build the app first)"
                     )
-                clean_reinstall = pre.reinstall == "clean" and not pre.erase
                 if clean_reinstall:
                     e.uninstall(ios.bundle_id)
                 e.install(ios.app_path)
-                if clean_reinstall:
-                    # Neither the uninstall above nor this install touches TCC.db — verified
-                    # on-device, only `erase` above does — so `clean` must reset permissions itself,
-                    # against the bundle it just (re)installed, to make good on this method's "known
-                    # state" promise, the same way `adb.Env.clear` resets grants on the equivalent
-                    # Android path.
-                    e.reset_permissions(ios.bundle_id)
+            if clean_reinstall:
+                # Neither `uninstall` nor `install` touches TCC.db — verified on-device, only
+                # `erase` above does — so `clean` must reset permissions itself, the same way
+                # `adb.Env.clear` resets grants on the equivalent Android path (also run at this
+                # level, independent of whether an install happened this lease). A target with no
+                # `appPath` here (an already-installed build a provider handed over) still needs
+                # this: the bundle it names was installed by some earlier lease, and `clean` still
+                # promises a known permission state for it.
+                e.reset_permissions(ios.bundle_id)
             # Set permission state after install (the grant targets an installed bundle) but before
             # the app launches, so a prompt never blocks it (BE-0276). `reinstall: overwrite` never
             # resets permissions on its own (nor does `erase` re-grant anything) — a scenario that
