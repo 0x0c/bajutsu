@@ -160,16 +160,24 @@ def _step_run_row(
     from_: str | None = None,
 ) -> dict[str, Any]:
     """One executed step's row. `at` is its already-derived seconds into the recording (BE-0348)."""
+    at_text = f"{at:.1f}s"
+    # The step's own end instant — its `before`/`after` moment in the recording, not the
+    # scenario-level `before`/`after` phases this table sits beside. A second jump target only
+    # when it reads differently from the start: a near-instant tap would otherwise show two
+    # identical-looking buttons.
+    end_text = f"{at + max(0.0, out.duration_s):.1f}s"
     return {
         "rowcls": f"srow {'ok' if out.ok else 'ng'}",
         "data_t": f"{at:.3f}",
+        "data_t_end": f"{at + max(0.0, out.duration_s):.3f}" if end_text != at_text else None,
         "title": f"jump to {at:.1f}s in the recording",
         "num": str(i),
         "numcls": None,
         "result": {"cls": "ok" if out.ok else "ng", "text": "PASS" if out.ok else "FAIL"},
         "action": _action_data(step_def, out.action),
         "detail": _step_detail(step_def, from_),
-        "at": f"{at:.1f}s",
+        "at": at_text,
+        "at_end": end_text if end_text != at_text else None,
         "view": _view_data(out, run_dir),
         "reason": out.reason if (not out.ok and out.reason) else None,
         "expand": None,
@@ -229,6 +237,7 @@ def _step_skip_row(
     return {
         "rowcls": "skip",
         "data_t": None,
+        "data_t_end": None,
         "title": None,
         "num": str(i),
         "numcls": None,
@@ -236,6 +245,7 @@ def _step_skip_row(
         "action": _action_data(step_def, None),
         "detail": _step_detail(step_def, from_),
         "at": "",
+        "at_end": None,
         "view": None,
         "reason": None,
         "expand": None,
@@ -460,6 +470,9 @@ def _after_rows(
                 row = _step_run_row(i, step_def, out, run_dir, at, shown_from[i])
                 row["num"] = f"{on}·{out.index}"
                 stopped = not out.ok
+            # The rule word makes this `#` cell wider than a plain index ever gets (`success·12`),
+            # so it needs the `#` column's own width/wrap rule rather than the numeric default.
+            row["numcls"] = "nphase"
             rows.append(row)
     return rows
 

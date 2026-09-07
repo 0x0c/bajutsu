@@ -312,31 +312,92 @@
   ROOT.querySelectorAll('.player').forEach(function(p){
     var v = p.querySelector('video'), btn = p.querySelector('.vplay');
     var seek = p.querySelector('.vseek'), time = p.querySelector('.vtime');
-    var marks = p.querySelector('.vmarks'), scn = p.closest('.scn');
+    var marks = p.querySelector('.vmarks'), segs = p.querySelector('.vsegs'), scn = p.closest('.scn');
+    var knob = p.querySelector('.vknob');
+    function moveKnob(){
+      if(!knob || !isFinite(v.duration) || v.duration <= 0) return;
+      knob.style.left = Math.max(0, Math.min(100, v.currentTime / v.duration * 100)) + '%';
+    }
     if(!v || !btn || !seek || !time) return;
     function paint(){ btn.textContent = v.paused ? '▶' : '❚❚'; }
     function clock(){ time.textContent = fmtT(v.currentTime) + ' / ' + fmtT(v.duration); }
+    function bands(){
+      // The `before` band runs from the recording's start to the first main step (or, lacking
+      // one, its own last step); the `after` band runs from its first step to the recording's
+      // end — an approximation (steps mark starts, not phase boundaries) good enough to show
+      // roughly where setup/teardown sit relative to the scenario's own steps.
+      if(!segs || !scn || !isFinite(v.duration) || v.duration <= 0) return;
+      var before = [], main = [], after = [];
+      scn.querySelectorAll('tr.srow[data-t]').forEach(function(r){
+        var t = parseFloat(r.getAttribute('data-t')); if(isNaN(t)) return;
+        var phase = r.getAttribute('data-phase');
+        (phase === 'before' ? before : phase === 'after' ? after : main).push(t);
+      });
+      var html = '';
+      function band(cls, label, from, to){
+        if(to == null || from == null || to <= from) return;
+        var l = Math.max(0, Math.min(100, from / v.duration * 100));
+        var w = Math.max(0, Math.min(100 - l, (to - from) / v.duration * 100));
+        html += '<span class="vseg ' + cls + '" style="left:' + l.toFixed(3) + '%;width:' + w.toFixed(3)
+          + '%" title="' + label + ' · ' + fmtT(from) + '–' + fmtT(to) + '"></span>';
+      }
+      if(before.length) band('vseg-before', 'before', 0, main.length ? main[0] : before[before.length - 1]);
+      if(after.length) band('vseg-after', 'after', after[0], v.duration);
+      segs.innerHTML = html;
+    }
     function ticks(){
-      // One tick per executed step, placed at its recording offset (data-t seconds).
-      // Each carries a hover bubble (step number + time) and seeks there on click.
+      // One mark per executed step, placed at its recording offset (data-t seconds). A step
+      // whose end reads differently from its start (data-t-end, the same threshold rows.py used
+      // to decide whether to show a separate jump button) draws as a short bar spanning the two
+      // instead of a single line, so the start/end an action took is visible on the scrubber
+      // itself, not only in the step row's own jump buttons. Each carries a hover bubble (step
+      // number + time, or time range) and seeks to the start on click.
       if(!marks || !scn || !isFinite(v.duration) || v.duration <= 0) return;
       var html = '';
       scn.querySelectorAll('tr.srow[data-t]').forEach(function(r){
         var t = parseFloat(r.getAttribute('data-t')); if(isNaN(t)) return;
+        var endAttr = r.getAttribute('data-t-end');
+        var tEnd = endAttr !== null ? parseFloat(endAttr) : NaN;
         var pct = Math.max(0, Math.min(100, t / v.duration * 100));
         var td = r.querySelector('td'), num = td ? td.textContent.trim() : '';
-        html += '<span class="vmark" data-t="' + t + '" style="left:' + pct.toFixed(3) + '%">'
-          + '<span class="vmtip">Step ' + esc(num) + ' · ' + fmtT(t) + '</span></span>';
+        if(!isNaN(tEnd) && tEnd > t){
+          var pctEnd = Math.max(0, Math.min(100, tEnd / v.duration * 100));
+          var w = Math.max(0.5, pctEnd - pct);   // floor so a short step's bar stays visible/clickable
+          html += '<span class="vmark vmark-range" data-t="' + t + '" data-t-end="' + tEnd
+            + '" style="left:' + pct.toFixed(3) + '%;width:' + w.toFixed(3) + '%">'
+            + '<span class="vmtip">Step ' + esc(num) + ' · ' + fmtT(t) + '–' + fmtT(tEnd) + '</span></span>';
+        } else {
+          html += '<span class="vmark" data-t="' + t + '" style="left:' + pct.toFixed(3) + '%">'
+            + '<span class="vmtip">Step ' + esc(num) + ' · ' + fmtT(t) + '</span></span>';
+        }
       });
       marks.innerHTML = html;
     }
-    function meta(){ if(isFinite(v.duration)) seek.max = v.duration; clock(); ticks(); if(scn) syncResultHeight(scn); }
+    function meta(){ if(isFinite(v.duration)) seek.max = v.duration; clock(); ticks(); bands(); moveKnob(); if(scn) syncResultHeight(scn); }
     function toggle(){ if(v.paused) v.play(); else v.pause(); }
     btn.addEventListener('click', toggle);
     v.addEventListener('click', toggle);   // clicking the frame itself plays/pauses
-    if(marks) marks.addEventListener('click', function(e){   // clicking a tick seeks to that step
+    if(marks) marks.addEventListener('click', function(e){
+      // A point tick has one instant to seek to. A range bar has two — its exact start and end
+      // — plus everything between, so a fixed-width hit zone at each edge (not a fraction of the
+      // bar's own width, which would shrink to nothing on a short step) snaps a click there to
+      // the exact boundary; a click elsewhere in the bar interpolates to the time under it,
+      // rather than always snapping to the start regardless of where the bar itself was clicked.
       var m = e.target.closest('.vmark'); if(!m) return;
-      var t = parseFloat(m.getAttribute('data-t')); if(!isNaN(t)) v.currentTime = t;
+      var t = parseFloat(m.getAttribute('data-t')); if(isNaN(t)) return;
+      var endAttr = m.getAttribute('data-t-end');
+      var tEnd = endAttr !== null ? parseFloat(endAttr) : NaN;
+      if(!isNaN(tEnd) && tEnd > t){
+        var EDGE = 6, rect = m.getBoundingClientRect(), x = e.clientX - rect.left;
+        if(x <= EDGE){ /* exact start */ }
+        else if(x >= rect.width - EDGE){ t = tEnd; }
+        else{
+          var span = Math.max(1, rect.width - 2 * EDGE);
+          var frac = Math.max(0, Math.min(1, (x - EDGE) / span));
+          t = t + frac * (tEnd - t);
+        }
+      }
+      v.currentTime = t;
     });
     v.addEventListener('play', paint);
     v.addEventListener('pause', paint);
@@ -344,8 +405,9 @@
     v.addEventListener('timeupdate', function(){
       if(!seek.matches(':active')) seek.value = v.currentTime;   // don't fight an active drag
       clock();
+      moveKnob();
     });
-    seek.addEventListener('input', function(){ v.currentTime = parseFloat(seek.value); });
+    seek.addEventListener('input', function(){ v.currentTime = parseFloat(seek.value); moveKnob(); });
     paint(); meta();   // handle the case where metadata is already cached (event won't fire)
   });
   // Sync each scenario's recording with its step rows: click a step to seek there (or
@@ -365,10 +427,21 @@
     var box = scn.querySelector('.rich-scroll'), lastCur = null;
     rows.forEach(function(r){
       r.addEventListener('click', function(e){
-        // links / tree button / screenshot handled elsewhere (the screenshot opens the lightbox)
-        if(e.target.closest('a') || e.target.closest('.treebtn') || e.target.closest('.shot')) return;
+        // links / tree button / screenshot / the step's own jump buttons handled elsewhere
+        // (a jump button seeks to its own instant instead of the row's default start).
+        if(e.target.closest('a') || e.target.closest('.treebtn') || e.target.closest('.shot') || e.target.closest('.stepjump')) return;
         var t = parseFloat(r.getAttribute('data-t'));
         // Seek only: keep playing if already playing, stay paused if paused.
+        if(!isNaN(t)){ v.currentTime = t; }
+      });
+    });
+    // A step's own start/end jump buttons (its `before`/`after` moment) — stop the click from
+    // also firing the row handler above, which would otherwise re-seek to the row's start right
+    // after the end button just seeked past it.
+    scn.querySelectorAll('.stepjump').forEach(function(btn){
+      btn.addEventListener('click', function(e){
+        e.stopPropagation();
+        var t = parseFloat(btn.getAttribute('data-t'));
         if(!isNaN(t)){ v.currentTime = t; }
       });
     });
