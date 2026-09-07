@@ -98,11 +98,12 @@ def test_html_expectations_block() -> None:
     assert 'class="expects"' in out
     assert "class='extbl'" in out  # a table, not a list
     # target / comparison are split into their own cells.
-    assert "<th>result</th><th>kind</th><th>target</th><th>comparison</th><th>reason</th>" in out
+    assert "<th>result</th><th>kind</th><th>target</th><th>comparison</th>" in out
+    assert "<th>reason</th>" not in out  # reason is a conditional row, not a mostly-empty column
     assert 'class="exst ok">PASS' in out
     assert 'class="exst ng">FAIL' in out
-    assert 'act-assert">exists' in out  # the assertion kind pill
-    assert 'class="exreason"' in out  # the failing expect shows its reason
+    assert 'act-kind">exists' in out  # the assertion kind pill (outlined, distinct from an action)
+    assert "class='exreasonrow'><td colspan='4'><span class=\"exreason\"" in out  # its own row
 
 
 def test_expectations_tokenized_from_definition() -> None:
@@ -134,8 +135,8 @@ def test_expectations_request_kind_rendered() -> None:
         network=lambda: [NetworkExchange(method="GET", path="/x", status=200)],
     )
     out = html_report("run9", [result], definitions=[definition])
-    assert 'act-assert">request' in out  # the kind pill, not "?"
-    assert 'act-assert">?' not in out
+    assert 'act-kind">request' in out  # the kind pill, not "?"
+    assert 'act-kind">?' not in out
     assert '<span class="tk kw">GET</span>' in out
     assert 'status == <span class="tk num">200</span>' in out
 
@@ -192,9 +193,17 @@ def test_merged_steps_show_rich_definition() -> None:
     out = html_report("run9", [_passing()], definitions=[definition])
     assert 'data-tab="scenario"' not in out  # merged into the Steps tab
     assert 'data-tab="steps"' in out
-    # Steps are a table parallel to the expectations table: result / action / detail.
+    # Steps are a table parallel to the expectations table: result / action / detail — position
+    # carries the column now (no header row; report.css's `.sttbl` grid places and labels each
+    # cell purely by nth-child), so it's this exact sequence, not just presence, that matters:
+    # swapping the result/action cells in `steprow` would still pass an "in out" existence check
+    # while mislabeling both in the rendered grid.
     assert "class='sttbl'" in out
-    assert "<th>#</th><th>result</th><th>action</th><th>detail</th>" in out
+    assert (
+        '<td role="cell"><span class="exst ok">PASS</span></td>'
+        '<td role="cell"><span class="act act-tap">tap</span></td>'
+        "<td role=\"cell\" class='adesc'>" in out
+    )
     # Selectors and string literals are tokenized (distinct from the action badges).
     assert '<span class="tk id">#counter.increment</span>' in out
     assert (

@@ -46,10 +46,12 @@ def test_html_embeds_scenario_video() -> None:
         artifacts=[Artifact("00-s1/scenario.mp4", "video", "simctl")],
     )
     out = html_report("run9", [r])
-    assert "<video" in out
+    assert "<video " in out
     assert 'src="00-s1/scenario.mp4"' in out
-    # A scenario with no video artifact embeds no player.
-    assert "<video" not in html_report("run9", [_passing()])
+    # A scenario with no video artifact embeds no player. The bare "<video" substring (no
+    # trailing space) is not enough on its own — the inlined stylesheet mentions "<video>" in a
+    # comment on every page, video or not.
+    assert "<video " not in html_report("run9", [_passing()])
 
 
 def test_html_step_rows_carry_video_offset() -> None:
@@ -70,6 +72,42 @@ def test_html_step_rows_carry_video_offset() -> None:
     # …and the JS seeks the video and highlights the playing step.
     assert "v.currentTime = t" in out
     assert "timeupdate" in out and "playing" in out
+
+
+def test_html_step_row_carries_its_own_end_instant_when_it_differs_from_the_start() -> None:
+    # A step long enough that its end reads differently from its start (rounded to .1s) gets a
+    # second jump target — the `data-t-end` the row carries, and the "→" button report.js turns
+    # it into.
+    r = RunResult(
+        scenario="s1",
+        ok=True,
+        steps=[StepOutcome(index=0, action="wait", ok=True, duration_s=1.1, started_at=1.5)],
+        expect_results=[],
+        artifacts=[Artifact("00-s1/scenario.mp4", "video", "simctl")],
+    )
+    out = html_report("run1", [r])
+    assert "data-t='1.500'" in out and "data-t-end='2.600'" in out
+    assert ">→2.6s<" in out
+
+
+def test_html_step_row_omits_the_end_instant_when_rounding_matches_the_start() -> None:
+    # A near-instant action's end rounds to the same display text as its start — no second jump
+    # target, since it would seek to (in effect) the same instant the row's own start already does.
+    r = RunResult(
+        scenario="s1",
+        ok=True,
+        steps=[StepOutcome(index=0, action="tap", ok=True, duration_s=0.02, started_at=1.5)],
+        expect_results=[],
+        artifacts=[Artifact("00-s1/scenario.mp4", "video", "simctl")],
+    )
+    out = html_report("run1", [r])
+    assert "data-t='1.500'" in out
+    # Single-quoted: the row's own attribute, not the (double-quoted) JS source that builds the
+    # seekbar's range-bar markup for rows that *do* have one, which is present on every page.
+    assert "data-t-end='" not in out
+    # The class name alone is a substring of the inlined stylesheet's own rules (present on every
+    # page); the rendered button element is what actually depends on this step's own duration.
+    assert 'class="stepjump stepjump-end"' not in out
 
 
 def test_html_derives_the_video_offset_from_absolute_timestamps() -> None:
