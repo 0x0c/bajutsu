@@ -373,6 +373,17 @@ Log:
   Splitting them per class would re-partition the suite rather than
   mirror the source.
 
+  A twelfth defect surfaced in CI alone. `.gitignore` carries an unanchored `uploads/` pattern.
+  It exists for the bundle directories `serve` extracts at run time.
+  `bajutsu/serve/uploads.py` became a directory and walked straight into it.
+  `git add` then skipped all six generated files in silence.
+  Every local check still passed, because the working tree held the package.
+  CI cloned a branch that had lost the module with nothing in its place.
+  The pattern now re-includes that one source path by name.
+  The script also refuses a package path Git already ignores, before it writes anything.
+  A collision between a module's name and an ignore pattern hides from every local check.
+  The refusal has to come from the tool that creates the directory.
+
 ## References
 
 - [BE-0385 — Coverage floor continuous ratchet](../BE-0385-coverage-floor-continuous-ratchet/BE-0385-coverage-floor-continuous-ratchet.md) — defines `coverage-floors.json`, the per-file mechanism this item's final step regenerates.
