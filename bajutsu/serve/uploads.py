@@ -26,6 +26,7 @@ import zlib
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
+from typing import Any
 
 from bajutsu.common.config import load_config, resolve
 
@@ -132,12 +133,39 @@ class Upload:
     # still comes from the config. A single-YAML `scenarios` leg's name also salts the composition
     # cache key, so replaying it on resume needs the same string the picker sent the first time.
     artifact_names: dict[str, str] | None = None
+    # The `scenarios_filename` this bind actually passed to `materialize_composition`, which decides
+    # where a single-YAML `scenarios` leg lands in the composed tree. Distinct from
+    # `artifact_names["scenarios"]`, which is provenance for the picker and carries a synthesized
+    # default when the request supplied no name — composing against that default would build a
+    # *different* tree under the same composition id. None for a single-zip bind, for a zip
+    # `scenarios` leg (whose names live inside the zip), and for the reactivation path.
+    scenarios_name: str | None = None
 
     @property
     def root(self) -> Path:
         """The bundle root — the config's directory, used as the runs' working directory so the
         config's relative entries (appPath / scenarios / baselines / build) resolve against it."""
         return self.config.parent
+
+    @property
+    def worker_ref(self) -> dict[str, Any]:
+        """What a remote worker needs to rebuild this bundle's tree for itself.
+
+        A worker shares no filesystem with the control plane, so a run off an uploaded bundle would
+        otherwise start against an ``appPath`` binary only the control plane holds. ``id`` names the
+        tree (this bind's `sha256`) and doubles as the worker's own extraction key. ``artifacts`` is
+        None for a single-zip bind, whose whole tree is one stored zip; for a composed triple it
+        names each supplied leg, which the worker fetches and re-composes with
+        `materialize_composition` — the same assembly this bind ran — so object storage keeps
+        BE-0268's per-leg dedup instead of holding a whole-tree copy per composition.
+        ``scenarios_filename`` is `scenarios_name` — the very value this bind composed with — so the
+        worker's tree matches the control plane's by construction rather than by agreement.
+        """
+        return {
+            "id": self.sha256,
+            "artifacts": dict(self.artifact_shas) if self.artifact_shas is not None else None,
+            "scenarios_filename": self.scenarios_name,
+        }
 
     @property
     def provenance(self) -> dict[str, str]:

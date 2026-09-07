@@ -72,6 +72,10 @@ def job_spec(job: Job) -> dict[str, Any]:
         # run: the spawned run answers a cancel cooperatively (BE-0370), so the worker registers its
         # spawn the same way the control plane does and passes the grace window down to it.
         "graceful_cancel": job.graceful_cancel,
+        # The uploaded bundle this run needs on disk (`Upload.worker_ref`). The lease signs a GET
+        # per stored object it names, and the worker rebuilds the tree and runs from its root — the
+        # only way an uploaded `appPath` binary reaches a worker. None for a local/Git config.
+        "bundle": dict(job.bundle) if job.bundle is not None else None,
         # The run's org, so the worker reads/writes this org's object-store prefix (BE-0015).
         "org": job.org,
         # Who started the run, so the worker can attribute the recorded run to the user (BE-0015).

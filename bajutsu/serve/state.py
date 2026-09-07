@@ -110,6 +110,11 @@ class Job:
     # Provenance to record into the produced run's manifest.json after it finishes (the bound bundle's
     # filename + zip sha256 + size). None for a normal run. Set for a run off an uploaded bundle (BE-0073).
     provenance: dict[str, str] | None = None
+    # The uploaded bundle this job runs off (`Upload.worker_ref`): its identity, and — for a composed
+    # triple (BE-0268) — the per-leg shas to fetch. Travels in the job spec so a remote worker, which
+    # has no project on disk, rebuilds the tree its config's relative `appPath` resolves against.
+    # None for a local-file or Git-sourced config, whose tree the worker resolves for itself.
+    bundle: dict[str, Any] | None = None
     # Per-run key prefix for evidence upload, under the server's --evidence-store base (BE-0110). CI
     # sets it via the /api/run body to pick the cloud lifecycle policy; travels in the job spec so the
     # worker relays it back when requesting presigned PUT URLs. Empty = key directly under the base.

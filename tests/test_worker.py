@@ -250,6 +250,55 @@ def test_worker_runs_one_iteration(monkeypatch: pytest.MonkeyPatch, tmp_path: Pa
     }
 
 
+def test_worker_runs_a_bundle_job_from_the_bundles_own_tree(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A job off an uploaded bundle runs from the bundle's tree, not the worker's bare directory.
+
+    The loop hands that one workspace to the run, the console log, and the evidence upload alike.
+    Leaving any of the three on the worker's own directory would upload an empty tree and lose every
+    artifact for uploaded-bundle runs, with nothing else in the suite noticing.
+    """
+    monkeypatch.chdir(tmp_path)
+    tree = tmp_path / "extracted"
+    tree.mkdir()
+    seen: dict[str, Any] = {}
+    leases = 0
+
+    def fake_post(url: str, body: dict[str, Any], *, token: str | None = None) -> tuple[int, Any]:
+        nonlocal leases
+        if url.endswith("/lease"):
+            leases += 1
+            if leases == 1:
+                return 200, {
+                    "job_id": "j1",
+                    "spec": {"cmd": "run", "bundle": {"id": "a" * 64}},
+                    "bundle_urls": {"bundle": "https://signed/bundle"},
+                }
+            raise _StopLoop
+        return 200, {}
+
+    monkeypatch.setattr(worker_mod, "_post_json", fake_post)
+    monkeypatch.setattr(worker_mod, "_bundle_workspace", lambda *_a, **_k: tree)
+    monkeypatch.setattr(
+        worker_mod, "_write_console_log", lambda work, *_a: seen.setdefault("log", work)
+    )
+    monkeypatch.setattr(
+        worker_mod, "_upload_evidence", lambda work, *_a, **_k: seen.setdefault("evidence", work)
+    )
+
+    def fake_execute(spec: dict[str, Any], **kwargs: Any) -> _FakeJob:
+        seen["run"] = kwargs["cwd"]
+        return _FakeJob()
+
+    monkeypatch.setattr(worker_mod, "execute_job_spec", fake_execute)
+
+    with pytest.raises(_StopLoop):
+        worker(server_url="http://cp", poll_interval=1, heartbeat_interval=5, worker_id="w1")
+
+    assert seen == {"run": tree, "log": tree, "evidence": tree}
+
+
 def test_advertised_capabilities_splits_platforms_and_falls_back_to_env(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

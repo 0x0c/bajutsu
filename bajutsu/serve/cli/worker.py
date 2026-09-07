@@ -13,8 +13,10 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import shutil
 import subprocess
+import tempfile
 import threading
 import time
 from pathlib import Path
@@ -32,7 +34,11 @@ from bajutsu.common.run_meta.files import DEFAULT_RUNS_DIR
 from bajutsu.common.run_meta.object_store import content_type_for
 from bajutsu.serve import InMemoryLogBus
 from bajutsu.serve.capabilities import WORKER_CAPABILITIES_ENV, worker_capabilities
+from bajutsu.serve.helpers import valid_sha256
+from bajutsu.serve.operations.composition import materialize_composition
 from bajutsu.serve.server.worker_job import WorkerIO, execute_job_spec
+from bajutsu.serve.upload_artifacts import ARTIFACT_KINDS
+from bajutsu.serve.uploads import find_bundle_config, materialize_bundle, validate_bundle_config
 
 _logger = logging.getLogger("bajutsu.worker")
 
@@ -48,6 +54,16 @@ _UPLOAD_HTTP_TIMEOUT = 60.0
 # Cloudflare answers that signature with a 403 `error code: 1010` (Browser Integrity Check) before
 # the request ever reaches the auth gate, so a correctly-tokened worker leases nothing forever.
 _USER_AGENT = "bajutsu-worker"
+
+# Where `_bundle_workspace` keeps one rebuilt tree per uploaded bundle, under the worker's own
+# working directory. Dot-prefixed so it is never mistaken for a run's own output, nor picked up by a
+# glob over the workspace. Trees nest one level deeper, per org (see `_bundle_workspace`).
+_BUNDLE_CACHE_DIR = ".bundles"
+
+# The parts a lease may sign for one bundle: the whole tree as a zip (a single-zip bind, BE-0073), or
+# one object per artifact kind (a composed triple, BE-0268). A name outside this set is a broken or
+# hostile lease response, never a path segment to fetch into.
+_BUNDLE_PART_NAMES = frozenset({"bundle", *ARTIFACT_KINDS})
 
 
 def _post_json(
@@ -189,6 +205,15 @@ def worker(
         spec = body["spec"]
         typer.echo(f"  leased job {job_id}")
 
+        # A job dispatched off an uploaded bundle runs from that bundle's own tree, not the worker's
+        # bare working directory, so every relative path its config names resolves. Resolved before
+        # the run and reused after it, so the console log and the evidence upload read the same
+        # workspace the run wrote into.
+        job_work, failure = _workspace_or_failure(work, spec, body.get("bundle_urls"))
+        if failure is not None:
+            _post_result(url, job_id, wid, failure, auth_token)
+            continue
+
         # The worker's object I/O is brokered by presigned URLs (BE-0160): the lease already carries
         # signed GET URLs for this run's baselines, and this io asks the control plane for signed PUT
         # URLs when uploading the run tree / authored scenario — so the worker holds no credentials.
@@ -203,7 +228,7 @@ def worker(
         result, abandoned = _run_with_heartbeat(
             spec,
             job_id=job_id,
-            work=work,
+            work=job_work,
             bus=bus,
             url=url,
             wid=wid,
@@ -219,16 +244,9 @@ def worker(
 
         run_id = result.get("runId")
         if run_id:
-            _write_console_log(work, run_id, bus, job_id)
+            _write_console_log(job_work, run_id, bus, job_id)
 
-        try:
-            _post_json(
-                f"{url}/api/worker/result",
-                {"job_id": job_id, "result": result, "worker_id": wid},
-                token=auth_token,
-            )
-        except (URLError, OSError):
-            _logger.exception("result post failed for job %s", job_id)
+        _post_result(url, job_id, wid, result, auth_token)
 
         # Upload the run's evidence via presigned URLs the control plane signs (BE-0110): the worker
         # holds no cloud credentials of its own. Runs *after* the result is posted — heartbeats stop
@@ -236,7 +254,7 @@ def worker(
         # reclaimed. Best-effort and time-bounded: a failure or stall warns and never affects the run.
         if run_id:
             _upload_evidence(
-                work,
+                job_work,
                 run_id,
                 url=url,
                 auth_token=auth_token,
@@ -364,10 +382,14 @@ def _put_file(url: str, path: Path, content_type: str, *, timeout: float | None 
 
 
 def _get_file(url: str, dest: Path, *, timeout: float | None = None) -> None:
-    """Download a presigned GET *url* into *dest* (read into memory — baselines are small images)."""
+    """Download a presigned GET *url* into *dest*, streaming it to disk.
+
+    Streamed rather than read whole: a baseline is a small image, but a bundle zip carries a built
+    app binary and would otherwise sit in memory in full.
+    """
     req = Request(url, method="GET", headers={"User-Agent": _USER_AGENT})  # noqa: S310
-    with urlopen(req, timeout=timeout) as r:  # noqa: S310
-        dest.write_bytes(r.read())
+    with urlopen(req, timeout=timeout) as r, dest.open("wb") as out:  # noqa: S310
+        shutil.copyfileobj(r, out)
 
 
 def _request_upload_urls(
@@ -420,6 +442,134 @@ def _put_tree_files(run_dir: Path, urls: dict[str, Any], *, best_effort: bool) -
         else:
             uploaded += 1
     return uploaded
+
+
+def _post_result(
+    url: str, job_id: str, worker_id: str, result: dict[str, Any], auth_token: str | None
+) -> None:
+    """Post a finished (or unstartable) job's result; a transport failure is logged, never raised."""
+    try:
+        _post_json(
+            f"{url}/api/worker/result",
+            {"job_id": job_id, "result": result, "worker_id": worker_id},
+            token=auth_token,
+        )
+    except (URLError, OSError):
+        _logger.exception("result post failed for job %s", job_id)
+
+
+def _safe_org(org: Any) -> str:
+    """*org* reduced to one safe path segment for the bundle cache, or ``default`` when unusable.
+
+    The org travels in the job spec, so it is server-authored — but it becomes a directory name here,
+    and a leased spec is still remote input. An allowlist of the characters an org id may hold keeps
+    a separator or a `..` out of the path rather than trusting the value's provenance.
+    """
+    cleaned = re.sub(r"[^A-Za-z0-9._-]+", "", org if isinstance(org, str) else "").strip(".")
+    return cleaned[:64] or "default"
+
+
+def _workspace_or_failure(
+    work: Path, spec: dict[str, Any], bundle_urls: Any
+) -> tuple[Path, dict[str, Any] | None]:
+    """The workspace to run this job from, or the failed result to post when none can be prepared.
+
+    A job whose bundle cannot be fetched is reported as failed rather than left to crash the poll
+    loop: the control plane would otherwise keep re-leasing a job this worker can never start, and
+    the user would wait on a run that never returns a verdict. The returned path is meaningless when
+    a failure comes back with it.
+    """
+    try:
+        return _bundle_workspace(work, spec, bundle_urls), None
+    except Exception as e:
+        _logger.exception("could not materialize the job's bundle")
+        return work, {"ok": False, "error": f"bundle unavailable: {e}"}
+
+
+def _bundle_workspace(work: Path, spec: dict[str, Any], bundle_urls: Any) -> Path:
+    """The directory to run this job from: the uploaded bundle's root, or *work* when it ships none.
+
+    A hosted `serve` binds an uploaded zip (or a composed triple) whose config names its `appPath`
+    binary, its scenarios, and its baselines relative to the bundle root. The worker holds no project
+    on disk, so it fetches what the lease signed and rebuilds that tree here. Running the job *from
+    the bundle root* is what makes every one of those relative paths resolve, with no rewriting on
+    either side.
+
+    The tree is keyed by the bundle id, so a second job off the same bundle reuses it and fetches
+    nothing. One tree therefore serves every job off one bundle, and each run writes its `runs/` and
+    console log inside it — the worker already shares one working directory across jobs, and this
+    keeps that property rather than paying a copy of an app binary per job.
+
+    Raises rather than falling back to *work*: a run started against a missing binary fails opaquely
+    at install time, far from this cause (directive 2).
+    """
+    bundle = spec.get("bundle")
+    if not isinstance(bundle, dict):
+        return work
+    bundle_id = bundle.get("id")
+    if not valid_sha256(bundle_id):
+        # Server-authored, so this is purely defensive — but the id becomes a directory name below,
+        # and a leased job spec is still remote input.
+        raise RuntimeError(f"job carries an invalid bundle id: {bundle_id!r}")
+    urls = bundle_urls if isinstance(bundle_urls, dict) else {}
+    # Scoped per org, mirroring the control plane's own `_org_uploads_dir` / `_org_compositions_dir`.
+    # A content-derived id makes a cross-org hit imply identical bytes, so what this buys is not
+    # isolation of the bundle: the tree is *mutable* — each run writes its `runs/` inside it — and one
+    # tenant's run evidence has no business landing in another tenant's directory.
+    cache = work / _BUNDLE_CACHE_DIR / _safe_org(spec.get("org"))
+    tree = cache / bundle_id
+    if not tree.exists():
+        if not urls:
+            # The lease signed nothing: a control plane with no object store configured has nowhere
+            # to have stored this bundle, so no worker can ever run the job. Say that here.
+            raise RuntimeError(f"job needs bundle {bundle_id}, but the lease signed no url for it")
+        tree = _fetch_bundle(cache, bundle_id, bundle, urls)
+    config = find_bundle_config(tree)
+    if config is None:
+        raise RuntimeError(f"bundle {bundle_id} holds no bajutsu.config.yaml")
+    return config.parent
+
+
+def _fetch_bundle(
+    cache: Path, bundle_id: str, bundle: dict[str, Any], urls: dict[str, Any]
+) -> Path:
+    """Download the bundle's stored objects and rebuild its tree at ``cache/<bundle_id>``.
+
+    A single-zip bind arrives as one ``bundle`` zip and goes through `materialize_bundle`; a composed
+    triple arrives as its legs and goes through `materialize_composition`. Both are the control
+    plane's own functions, so the worker reproduces its tree by running that code rather than
+    re-implementing it, and both apply `validate_bundle_config` — the check that confines every
+    target's paths to the tree (BE-0051).
+
+    The downloads land in a temporary directory that is removed either way: the rebuilt tree is what
+    persists, and a half-fetched set of parts must not look like a cache entry.
+    """
+    cache.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(dir=cache, prefix=".fetch-") as raw:
+        parts: dict[str, Path] = {}
+        for name, url in urls.items():
+            # Control-plane-authored names, re-checked because a lease response is remote input and
+            # each one is joined onto a path below.
+            if name not in _BUNDLE_PART_NAMES or not isinstance(url, str):
+                raise RuntimeError(f"unexpected bundle part {name!r} in the lease response")
+            parts[name] = Path(raw) / name
+            _get_file(url, parts[name], timeout=_UPLOAD_HTTP_TIMEOUT)
+        if bundle.get("artifacts") is None:
+            if "bundle" not in parts:
+                raise RuntimeError(f"bundle {bundle_id} was signed with no zip to fetch")
+            return materialize_bundle(
+                parts["bundle"], cache, bundle_id, validate=validate_bundle_config
+            )
+        if "config" not in parts:
+            raise RuntimeError(f"composed bundle {bundle_id} was signed with no config artifact")
+        return materialize_composition(
+            parts["config"],
+            parts.get("scenarios"),
+            parts.get("binary"),
+            compositions_dir=cache,
+            composition_id=bundle_id,
+            scenarios_filename=bundle.get("scenarios_filename"),
+        )
 
 
 def _download_baselines(work: Path, baseline_urls: dict[str, Any]) -> None:

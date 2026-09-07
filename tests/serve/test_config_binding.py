@@ -876,3 +876,44 @@ def test_the_usage_ledger_is_read_where_the_session_writes_it(tmp_path: Path) ->
     # A session that bound nothing still reads the deployment's, so a single-tenant serve is
     # unchanged.
     assert _usage_ledger_paths(state, None, "s2") != [checkout / "runs" / "usage.jsonl"]
+
+
+def test_a_job_off_an_uploaded_bundle_carries_it_to_the_worker(tmp_path: Path) -> None:
+    """A remote worker shares no filesystem with the control plane, so `job.cwd` alone means nothing
+    there. The job carries the bundle's own identity as well, which is what lets the lease sign a
+    GET for it and the worker rebuild the tree its relative `appPath` resolves against."""
+    uploads = tmp_path / "uploads"
+    state = _state(
+        tmp_path, uploads_dir=uploads, popen=fake_popen(["PASS  runs/1/manifest.json\n"])
+    )
+    state.bind_upload(_bundle(uploads, "u1"), "s1")
+
+    payload, status = ops.start_run(
+        state, {"target": "demo", "scenario": "smoke.yaml"}, session="s1"
+    )
+
+    assert status == 200, payload
+    job = state.jobs[payload["jobId"]]
+    assert job.bundle == {"id": "a" * 64, "artifacts": None, "scenarios_filename": None}
+    # A run off a local/Git config has no bundle for a worker to fetch.
+    other, status = ops.start_run(state, {"target": "demo", "scenario": "smoke.yaml"}, session="s2")
+    assert status == 200, other
+    assert state.jobs[other["jobId"]].bundle is None
+
+
+def test_an_uploaded_bundles_run_does_not_materialize_the_orgs_baselines(tmp_path: Path) -> None:
+    """A bundle ships its own baselines, and the worker now runs from inside the bundle's tree. The
+    baseline download clears its destination first, so materializing the org's stored baselines over
+    it would delete what the bundle shipped — the same reason the dispatcher omits `--baselines`."""
+    uploads = tmp_path / "uploads"
+    state = _state(
+        tmp_path, uploads_dir=uploads, popen=fake_popen(["PASS  runs/1/manifest.json\n"])
+    )
+    state.bind_upload(_bundle(uploads, "u1"), "s1")
+
+    payload, status = ops.start_run(
+        state, {"target": "demo", "scenario": "smoke.yaml"}, session="s1"
+    )
+
+    assert status == 200, payload
+    assert state.jobs[payload["jobId"]].materialize_baselines is False
