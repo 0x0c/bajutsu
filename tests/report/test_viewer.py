@@ -46,10 +46,12 @@ def test_html_embeds_scenario_video() -> None:
         artifacts=[Artifact("00-s1/scenario.mp4", "video", "simctl")],
     )
     out = html_report("run9", [r])
-    assert "<video" in out
+    assert "<video " in out
     assert 'src="00-s1/scenario.mp4"' in out
-    # A scenario with no video artifact embeds no player.
-    assert "<video" not in html_report("run9", [_passing()])
+    # A scenario with no video artifact embeds no player. The bare "<video" substring (no
+    # trailing space) is not enough on its own — the inlined stylesheet mentions "<video>" in a
+    # comment on every page, video or not.
+    assert "<video " not in html_report("run9", [_passing()])
 
 
 def test_html_step_rows_carry_video_offset() -> None:
