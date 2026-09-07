@@ -9,7 +9,7 @@
 | 提案者 | [@0x0c](https://github.com/0x0c) |
 | 状態 | **実装中** |
 | トラッキング Issue | [検索](https://github.com/bajutsu-e2e/bajutsu/issues?q=is%3Aissue+label%3Aroadmap-tracking+in%3Atitle+"BE-0407") |
-| 実装 PR | [#1897](https://github.com/bajutsu-e2e/bajutsu/pull/1897)（グループ 1、作業単位 1、3〜5）、[#1912](https://github.com/bajutsu-e2e/bajutsu/pull/1912)（グループ 1 の作業単位 6、グループ 2 の作業単位 7、9、10、11、12、13、そして 14 の半分）、[#1925](https://github.com/bajutsu-e2e/bajutsu/pull/1925)（グループ 1 の作業単位 2。グループ 1 の完了） |
+| 実装 PR | [#1897](https://github.com/bajutsu-e2e/bajutsu/pull/1897)（グループ 1、作業単位 1、3〜5）、[#1912](https://github.com/bajutsu-e2e/bajutsu/pull/1912)（グループ 1 の作業単位 6、グループ 2 の作業単位 7、9、10、11、12、13、そして 14 の半分）、[#1925](https://github.com/bajutsu-e2e/bajutsu/pull/1925)（グループ 1 の作業単位 2。グループ 1 の完了）、[#1938](https://github.com/bajutsu-e2e/bajutsu/pull/1938)（グループ 3 の作業単位 16、18、19、21、22、23） |
 | トピック | Platform support |
 | 関連 | [BE-0105](../BE-0105-xcuitest-single-snapshot-query/BE-0105-xcuitest-single-snapshot-query-ja.md)、[BE-0114](../BE-0114-driver-conformance-suite/BE-0114-driver-conformance-suite-ja.md)、[BE-0234](../BE-0234-adb-run-performance/BE-0234-adb-run-performance-ja.md)、[BE-0259](../BE-0259-assert-query-snapshot-reuse/BE-0259-assert-query-snapshot-reuse-ja.md)、[BE-0310](../BE-0310-ios-accessibility-screen-change-readiness/BE-0310-ios-accessibility-screen-change-readiness-ja.md)、[BE-0341](../BE-0341-pre-action-evidence-capture/BE-0341-pre-action-evidence-capture-ja.md)、[BE-0396](../BE-0396-ios-sfsafariviewcontroller-tree/BE-0396-ios-sfsafariviewcontroller-tree-ja.md)、[BE-0408](../BE-0408-step-latency-device-executor-protocol/BE-0408-step-latency-device-executor-protocol-ja.md)、[BE-0409](../BE-0409-step-latency-ios-device-executor/BE-0409-step-latency-ios-device-executor-ja.md)、[BE-0410](../BE-0410-step-latency-android-device-executor/BE-0410-step-latency-android-device-executor-ja.md) |
 <!-- /BE-METADATA -->
@@ -490,7 +490,7 @@ driver conformance suite
   記録側が書き込む前に権限を絞ります。そして一度も書き込まれなかった撮影は、0 バイトの残骸を残しません。
   API 34 のエミュレータ上で実際のドライバとシンクを通して計測したところ、撮影してから読み取るまでが
   3361 ミリ秒から 2182 ミリ秒へ下がりました。
-- PR — グループ 3、作業単位 16、18、19、21、22、23。リクエスト自身より新しいイベントを端末に
+- [#1938](https://github.com/bajutsu-e2e/bajutsu/pull/1938) — グループ 3、作業単位 16、18、19、21、22、23。リクエスト自身より新しいイベントを端末に
   待たせるのをやめました。静止した画面が生み出しようのないイベントで、そのためにどのジェスチャも
   サーバーの 2 秒の postdate 予算を丸ごと払っていました。`nativeZ` のノード走査は、Android の
   すべての読み取りが払うものではなく、ターゲットが自身の設定で要求するものにしました。`/act` には、
