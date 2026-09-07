@@ -1,15 +1,4 @@
-"""Coverage-map serve operation (BE-0146).
-
-Surfaces the deterministic `bajutsu coverage` aggregation (BE-0050) in the serve Web UI: the static
-id-namespace dimension always, the endpoints-observed-vs-asserted and observed-id dimensions when a
-run set is selected, and the screens-visited dimension when a crawl supplies the discovered
-denominator. Read-only, deterministic, AI-free: every figure is a count over declared namespaces and
-`network.json` / `elements.json` / `screenmap.json`, never a verdict and never a gate.
-
-Two entry points share one aggregation: `coverage_view` (the view's `POST /api/coverage`, which also
-carries the structured figures) and `coverage_html` (`GET /coverage`, the linkable page the other
-analytics dashboards each have).
-"""
+"""Assemble one target's coverage map from its scenarios and a selected run set."""
 
 from __future__ import annotations
 
@@ -28,6 +17,9 @@ from bajutsu.serve.authz import _target_forbidden
 from bajutsu.serve.helpers import valid_run_id
 from bajutsu.serve.operations.reads import run_set_manifests
 from bajutsu.serve.state import ServeState, _scenarios_dir_for
+
+from ._coverage_error import _CoverageError
+from ._report import _Report
 
 
 def _artifact_paths(manifests: list[dict[str, Any]], kind: str) -> Iterator[str]:
@@ -125,39 +117,6 @@ def read_observed_ids_via_store(store: ArtifactStore, manifests: list[dict[str, 
     *manifests* (e.g. from `run_set_manifests`), reading each step's ``elements.json`` through
     *store* instead of globbing a local ``runs_dir`` (BE-0258)."""
     return observed_identifiers(_read_json_lists(store, manifests, "elements"))
-
-
-class _CoverageError(Exception):
-    """An input the caller can fix (no config, unknown target, unreadable suite), with its status.
-
-    Raised by `_aggregate` so the JSON and HTML entry points can report the same problem in the shape
-    each one's client expects, without threading an error tuple through the aggregation.
-    """
-
-    def __init__(self, message: str, status: int = 400) -> None:
-        super().__init__(message)
-        self.status = status
-
-
-@dataclasses.dataclass(frozen=True)
-class _Report:
-    """One aggregated coverage map: the static dimension, plus whichever evidence dimensions the
-    request supplied inputs for."""
-
-    target: str
-    static: _coverage.Coverage
-    endpoints: _coverage.EndpointCoverage | None = None
-    observed: _coverage.ObservedIdCoverage | None = None
-    screens: _coverage.ScreenCoverage | None = None
-
-    def html(self) -> str:
-        return _coverage.render_html(
-            self.static,
-            endpoints=self.endpoints,
-            observed=self.observed,
-            screens=self.screens,
-            target=self.target,
-        )
 
 
 def discovered_screens_via_store(store: ArtifactStore, crawl_run: str) -> list[_coverage.ScreenRef]:
@@ -365,6 +324,3 @@ def _error_page(message: str) -> str:
         "<code>&amp;runs=&lt;id&gt;,&lt;id&gt;</code> and <code>&amp;crawl=&lt;id&gt;</code>.</p>"
         "</body></html>"
     )
-
-
-__all__ = ["coverage_html", "coverage_view"]

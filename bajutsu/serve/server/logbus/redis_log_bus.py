@@ -1,44 +1,15 @@
-"""A Redis-backed LogBus for the hosted backend (BE-0015 server phase, legacy).
-
-`InMemoryLogBus` buffers each job's lines in one process. `RedisLogBus` keeps the same `LogBus`
-contract — a late subscriber replays the whole log, the stream ends once the job is closed — but
-stores the lines in Redis so the worker that runs the job and any control-plane replica serving
-`/events` are different processes: a Redis **list** holds every line (so a late subscriber replays
-it) plus a **done** flag, polled for the live tail. Superseded by `PostCompletionLogBus` (BE-0106),
-which the server backend wires today without needing Redis.
-
-The redis client is **injected** (the `RedisLike` slice below), so this module imports no redis —
-it's safe to import and unit-test without the ``worker`` extra.
-"""
+"""The log bus over a Redis list, with a done flag polled for the live tail."""
 
 from __future__ import annotations
 
 import time
 from collections.abc import Iterator
-from typing import Protocol
+
+from .redis_like import RedisLike
 
 _LINES = "bajutsu:log:"  # Redis key prefix for a job's line list
 _DONE = "bajutsu:logdone:"  # Redis key prefix for a job's "no more lines" flag
 _DEFAULT_TTL = 86400  # seconds a finished job's log/done keys linger before Redis evicts them (24h)
-
-
-class RedisLike(Protocol):
-    """The slice of a redis-py client `RedisLogBus` uses (so a fake can stand in)."""
-
-    def rpush(self, key: str, value: str) -> object:
-        """Append *value* to the list at *key*."""
-
-    def lrange(self, key: str, start: int, end: int) -> list[object]:
-        """Return the list at *key* from index *start* to *end* (`-1` = last)."""
-
-    def set(self, key: str, value: str) -> object:
-        """Set *key* to *value*."""
-
-    def get(self, key: str) -> object:
-        """Return *key*'s value, or None if unset."""
-
-    def expire(self, key: str, seconds: int) -> object:
-        """Set *key* to expire in *seconds* (bounding a finished job's log lifetime)."""
 
 
 class RedisLogBus:

@@ -686,3 +686,33 @@ def test_module_level_code_read_by_its_neighbour_stays_beside_it() -> None:
     assert "_FIRST = 1" in plan.files["_shared.py"]
     assert "from ." not in plan.files["_shared.py"]
     assert "_SECOND = (_FIRST, 2)" in plan.files["alpha.py"]
+
+
+def test_a_name_an_inner_import_binds_is_not_read_as_a_reference() -> None:
+    # `SqlRepository` imports its ORM models inside the methods that use them — rule 5's treatment,
+    # applied before this split. Counting those as reads keeps the module-level `TYPE_CHECKING`
+    # import alive in the split file with nothing left annotating it, which fails F401.
+    plan = _plan(
+        """
+        from __future__ import annotations
+
+        from typing import TYPE_CHECKING
+
+        if TYPE_CHECKING:
+            from other.place import Model
+
+
+        class Alpha:
+            def make(self) -> object:
+                from other.place import Model
+
+                return Model()
+
+
+        class Beta:
+            pass
+        """
+    )
+    alpha = plan.files["alpha.py"]
+    assert alpha.count("from other.place import Model") == 1
+    assert "if TYPE_CHECKING:" not in alpha

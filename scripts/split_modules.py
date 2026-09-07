@@ -14,6 +14,7 @@ file under a `DOCSTRING_PATHS` entry needs. This script decides only the unambig
 from __future__ import annotations
 
 import argparse
+import contextlib
 import keyword
 import re
 import subprocess
@@ -68,6 +69,8 @@ class _References(cst.CSTVisitor):
         self.all: set[str] = set()
         self.runtime: set[str] = set()
         self.rebound: set[str] = set()
+        self.annotated: set[str] = set()
+        self.locally_imported: set[str] = set()
         self.uses_file: bool = False
         self._annotation_depth = 0
 
@@ -75,6 +78,8 @@ class _References(cst.CSTVisitor):
         self.all.add(name)
         if self._annotation_depth == 0:
             self.runtime.add(name)
+        else:
+            self.annotated.add(name)
 
     def visit_Name(self, node: cst.Name) -> bool:
         if node.value == "__file__":
@@ -200,6 +205,26 @@ class _References(cst.CSTVisitor):
         """Record only the reads a binding target performs — `obj.attr` reads `obj`, `x` reads none."""
         if not isinstance(target, cst.Name):
             target.visit(self)
+
+    def visit_Import(self, node: cst.Import) -> bool:
+        # A name an inner `import` binds is not a read. `SqlRepository` imports its ORM models
+        # inside the methods that use them — rule 5's treatment, applied before this split — and
+        # carrying the module-level import along too leaves it with nothing to annotate, an F401.
+        self._record_local_import(node)
+        return False
+
+    def visit_ImportFrom(self, node: cst.ImportFrom) -> bool:
+        self._record_local_import(node)
+        return False
+
+    def _record_local_import(self, node: cst.Import | cst.ImportFrom) -> None:
+        names = node.names
+        if isinstance(names, cst.ImportStar):
+            return
+        for alias in names:
+            # An alias shape `_alias_binding` refuses is refused by the split itself a moment later.
+            with contextlib.suppress(SplitError):
+                self.locally_imported.add(_alias_binding(alias))
 
     def visit_Global(self, node: cst.Global) -> bool:
         for item in node.names:
@@ -511,6 +536,8 @@ def _file_reads(
         collected = _references(node)
         reads.all |= collected.all
         reads.runtime |= collected.runtime
+        reads.annotated |= collected.annotated
+        reads.locally_imported |= collected.locally_imported
     return reads
 
 
@@ -598,9 +625,13 @@ def _render_file(
     runtime_siblings = {n: w for n, w in siblings.items() if n not in deferred}
     deferred_siblings = {n: w for n, w in siblings.items() if n in deferred}
 
+    # A name a method imports for itself needs no module-level import, unless an annotation
+    # elsewhere in the file still reads it.
+    used = reads.all - (reads.locally_imported - reads.annotated)
+
     type_checking: list[_Statement] = []
     for statement in parsed.type_checking:
-        kept = _filter_import(_import_of(statement), reads.all)
+        kept = _filter_import(_import_of(statement), used)
         if kept is not None:
             type_checking.append(statement.with_changes(body=[kept], leading_lines=[]))
     type_checking.extend(
@@ -608,7 +639,6 @@ def _render_file(
         for name in sorted(deferred_siblings)
     )
 
-    used = set(reads.all)
     if type_checking:
         used.add("TYPE_CHECKING")
 
