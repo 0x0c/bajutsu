@@ -1,17 +1,4 @@
-"""Aggregate the attributed AI usage/cost ledger for the serve dashboard (BE-0195).
-
-A read-only aggregation over the JSONL ledger `bajutsu.usage_ledger` writes (one line per AI call,
-tagged with provider / model / command / scenario and priced in dollars where the provider has
-per-token pricing). It turns that append-only log into a picture — where the tokens and dollars go,
-broken down by each dimension, compared across provider/model, and trended over time. Every figure
-is an exact count or sum; there is no model and no verdict, and nothing here touches the `run` / CI
-gate. It is the visualization complement to the run-stats dashboard (BE-0102), applied to a new
-data source.
-
-Cost stays honest: a subscription provider (`ant` / `claude-code`) or an unknown model records
-`cost = None`, and an all-unpriced group reports its tokens with the dollar figure left absent
-rather than fabricating a `$0.00`.
-"""
+"""Aggregate ledger events into the usage and cost picture the dashboard renders (BE-0195)."""
 
 from __future__ import annotations
 
@@ -19,13 +6,17 @@ import functools
 import re
 from collections import Counter
 from collections.abc import Callable, Iterable
-from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
 from jinja2 import Environment, FileSystemLoader
 
 from bajutsu.common.analytics.ledger import UsageEvent
+
+from .comparison_row import ComparisonRow
+from .day_point import DayPoint
+from .usage_row import UsageRow
+from .usage_stats import UsageStats
 
 # A ledger timestamp is a UTC ISO-8601 string (`datetime.now(UTC).isoformat()`), so the day is the
 # leading `YYYY-MM-DD`; a line whose ts doesn't start that way simply has no day and buckets under "".
@@ -34,74 +25,10 @@ _TS_DAY = re.compile(r"^(\d{4}-\d{2}-\d{2})")
 _UNKNOWN = "(unknown)"
 
 
-@dataclass(frozen=True)
-class UsageRow:
-    """One dimension value's aggregate — its calls, tokens, and dollar cost.
-
-    `cost` sums only the priced calls; `priced_calls` / `unpriced_calls` split the total so a group
-    with no per-token price reads as unpriced (`has_price` False → the view shows "—") rather than a
-    fabricated `$0.00`.
-    """
-
-    key: str  # the provider / model / command / scenario value; None coalesced to "(unknown)"
-    calls: int
-    tokens: int
-    cost: float  # sum of the priced calls' cost; 0.0 when none in the group was priced
-    priced_calls: int
-    unpriced_calls: int
-
-    @property
-    def has_price(self) -> bool:
-        """Whether any call in this group carried a per-token price (else the view shows "—")."""
-        return self.priced_calls > 0
-
-
-@dataclass(frozen=True)
-class ComparisonRow:
-    """One (provider, model) pair's efficiency — the view that serves the optimization goal.
-
-    `cost_per_call` / `cost_per_scenario` are None when the pair has no priced call, so an unpriced
-    subscription model is compared on tokens without an invented dollar efficiency.
-    """
-
-    provider: str
-    model: str
-    calls: int
-    scenarios: int  # distinct scenarios this pair was spent on
-    tokens: int
-    cost: float
-    priced_calls: int
-    cost_per_call: float | None
-    cost_per_scenario: float | None
-
-
-@dataclass(frozen=True)
-class DayPoint:
-    """One day's usage — the trend line at day granularity."""
-
-    day: str  # YYYY-MM-DD, or "" for a line whose ts carries no date
-    calls: int
-    tokens: int
-    cost: float
-
-
-@dataclass(frozen=True)
-class UsageStats:
-    """The whole-ledger picture: totals, per-dimension breakdowns, comparison, and the daily trend."""
-
-    calls: int
-    total_tokens: int
-    total_cost: float  # sum of every priced call's cost
-    priced_calls: int
-    unpriced_calls: int
-    period_start: str | None  # earliest event ts in the aggregated set (None when empty)
-    period_end: str | None  # latest event ts
-    by_provider: list[UsageRow]
-    by_model: list[UsageRow]
-    by_command: list[UsageRow]
-    by_scenario: list[UsageRow]
-    comparison: list[ComparisonRow]
-    by_day: list[DayPoint] = field(default_factory=list)
+# The shared Jinja templates live at the package root (`bajutsu/templates/`), two levels up now
+# that this module is packaged under `common/analytics/` (BE-0257; nested under `common/` per the
+# feature-first reorg).
+_TEMPLATE_DIR = Path(__file__).resolve().parent.parent.parent.parent / "templates"
 
 
 def aggregate_usage(
@@ -264,12 +191,6 @@ def _day_of(ts: str) -> str:
     """The `YYYY-MM-DD` a ledger ts opens with, or "" when it carries no date prefix."""
     match = _TS_DAY.match(ts)
     return match.group(1) if match else ""
-
-
-# The shared Jinja templates live at the package root (`bajutsu/templates/`), two levels up now
-# that this module is packaged under `common/analytics/` (BE-0257; nested under `common/` per the
-# feature-first reorg).
-_TEMPLATE_DIR = Path(__file__).resolve().parent.parent.parent / "templates"
 
 
 @functools.lru_cache(maxsize=1)

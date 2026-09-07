@@ -1,26 +1,13 @@
-"""Assertion dispatch and the small per-kind evaluators.
-
-Evaluate a list of expect/assert against query() results (list[Element]). The list is AND-ed; one
-failure fails the step. No AI is involved (machine checks only). Evaluation is total (returns
-results instead of raising) so it can be placed straight into the report (manifest). The heavier
-per-kind subsystems live in sibling modules: network matching in `network`, image preprocessing in
-`visual`, JSON-Schema I/O in `schema`.
-"""
+"""Evaluate one assertion against a screen and say, deterministically, whether it holds."""
 
 from __future__ import annotations
 
 import json
 import re
 from collections.abc import Callable
-from dataclasses import dataclass
-from pathlib import Path
+from typing import TYPE_CHECKING
 
-from bajutsu.common.assertions._common import (
-    AssertionResult,
-    _compile,
-    _resolve_one,
-    sel_str,
-)
+from bajutsu.common.assertions._common import AssertionResult, _compile, _resolve_one, sel_str
 from bajutsu.common.assertions.network import (
     _assign_requests,
     _request_assignment_result,
@@ -28,8 +15,8 @@ from bajutsu.common.assertions.network import (
     match_request,
     request_label,
 )
-from bajutsu.common.assertions.schema import SchemaContext, _eval_response_schema
-from bajutsu.common.assertions.visual import VisualContext, _eval_visual
+from bajutsu.common.assertions.schema import _eval_response_schema
+from bajutsu.common.assertions.visual import _eval_visual
 from bajutsu.common.drivers import base
 from bajutsu.common.evidence.network import NetworkExchange
 from bajutsu.common.scenario import (
@@ -46,39 +33,23 @@ from bajutsu.common.scenario import (
     TextMatch,
 )
 
+from .eval_context import EvalContext
 
-@dataclass(frozen=True)
-class GoldenContext:
-    """Paths a `golden` assertion needs (BE-0006).
-
-    The golden JSON path (from the assertion's `path` field) is resolved against `goldens_dir`.
-    `screen`, when given, is the authoritative device screen bounds for frame sanity checks;
-    when absent, the bounds are derived from the live elements — a weaker fallback since
-    elements at the screen edge make the check tautological for overflow detection.
-    """
-
-    goldens_dir: Path
-    screen: base.Frame | None = None
+if TYPE_CHECKING:
+    from .golden_context import GoldenContext
 
 
-@dataclass(frozen=True)
-class EvalContext:
-    """The per-run inputs the context-bearing assertion kinds need, bundled as one value (BE-0250).
-
-    Each field feeds exactly one kind: `visual` the screenshot/baseline paths, `schema` the
-    JSON-Schema directory, `golden` the goldens directory, and `clipboard` the device pasteboard
-    text already read for the block. Bundling replaces the four loose keyword-only parameters that
-    were threaded in lockstep through `evaluate` -> `evaluate_one` -> `run_scenario` ->
-    `_run_step_body` -> the runner, so a new context-bearing kind adds a field here instead of a
-    parameter at every layer. `clipboard` stays a resolved value, not a reader: the read is gated
-    and performed once per block by the runner's `_clipboard_for`, so bundling never turns it into a
-    per-step read.
-    """
-
-    visual: VisualContext | None = None
-    schema: SchemaContext | None = None
-    golden: GoldenContext | None = None
-    clipboard: str | None = None
+# Assertion evaluators keyed by kind (the `Assertion` field name), each a thin adapter over the
+# per-kind `_eval_*` above that pulls the one set field off the assertion and the inputs its kind
+# needs. Dispatch is a lookup on the set field, replacing the 14-way `if a.X is not None` chain
+# (BE-0250) — the same self-registering pattern `orchestrator/actions/_registry.py` uses for step
+# actions. The uniform signature is why each adapter asserts its own field is set (the caller only
+# reaches it when it is): it lets one dict hold every kind under strict typing, as `_HANDLERS` does.
+_Evaluator = Callable[
+    [Assertion, list[base.Element], list[NetworkExchange], EvalContext],
+    AssertionResult,
+]
+_EVALUATORS: dict[str, _Evaluator] = {}
 
 
 def _eval_exists(elements: list[base.Element], a: Exists) -> AssertionResult:
@@ -350,19 +321,6 @@ def _eval_golden(
     if result.frame_failures:
         parts.append(f"frame failures: {', '.join(result.frame_failures)}")
     return AssertionResult(False, "golden", detail, "; ".join(parts))
-
-
-# Assertion evaluators keyed by kind (the `Assertion` field name), each a thin adapter over the
-# per-kind `_eval_*` above that pulls the one set field off the assertion and the inputs its kind
-# needs. Dispatch is a lookup on the set field, replacing the 14-way `if a.X is not None` chain
-# (BE-0250) — the same self-registering pattern `orchestrator/actions/_registry.py` uses for step
-# actions. The uniform signature is why each adapter asserts its own field is set (the caller only
-# reaches it when it is): it lets one dict hold every kind under strict typing, as `_HANDLERS` does.
-_Evaluator = Callable[
-    [Assertion, list[base.Element], list[NetworkExchange], EvalContext],
-    AssertionResult,
-]
-_EVALUATORS: dict[str, _Evaluator] = {}
 
 
 def _evaluator(kind: str) -> Callable[[_Evaluator], _Evaluator]:

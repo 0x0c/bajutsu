@@ -1,77 +1,19 @@
-"""Visual-assertion image preprocessing.
-
-The coordinate math, cropping, masking, and Pillow file I/O a `visual` assertion needs before it
-hands off to `bajutsu.common.evidence.visual`'s pixel-compare engine. Frames are in element points; the screenshot
-is in device pixels, so everything here resolves selectors and scales frames into pixel space.
-"""
+"""Compare a screenshot against its baseline and produce the evidence images."""
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from bajutsu.common.assertions._common import AssertionResult, _resolve_one, sel_str
 from bajutsu.common.drivers import base
-from bajutsu.common.evidence.sink import RunArtifactWriter
-from bajutsu.common.scenario import (
-    ExcludeRegion,
-    Selector,
-    SelectorRegion,
-    VisualMatch,
-)
+from bajutsu.common.scenario import ExcludeRegion, Selector, SelectorRegion, VisualMatch
 
+from ._prepared import _Prepared
+from .visual_evidence import VisualEvidence
 
-@dataclass(frozen=True)
-class VisualEvidence:
-    """Image evidence for a visual assertion, carried into the manifest/report.
-
-    Paths are *run-dir-relative* (the same scheme as artifacts), so the self-contained
-    report and the serve UI can reference them. `baseline_name` is the YAML key into the
-    baselines dir — what `approve` promotes the actual screenshot to.
-    """
-
-    baseline_name: str
-    actual: str  # the captured screenshot
-    baseline: str | None = None  # the baseline copy in the run dir (None if missing)
-    diff: str | None = None  # the diff visualization (None when identical / missing)
-    diff_pct: float | None = None
-    missing: bool = False  # baseline did not exist yet (first run)
-    engine: str | None = None  # the compare engine used (exact / pixelmatch; BE-0165)
-    # Provenance for element-scoped comparison / selector masking (BE-0171).
-    element_scoped: bool = False  # the comparison was cropped to one element's frame
-    # selectors that resolved to a mask, in order (a list so it round-trips through the manifest)
-    masked_selectors: list[str] = field(default_factory=list)
-
-
-@dataclass(frozen=True)
-class VisualContext:
-    """What a visual assertion reads, and where the images it produces go.
-
-    `screenshot_path` is the run's captured screenshot and `baselines_dir` the project's stored
-    baselines, which live outside the run directory and are only ever read. Everything written goes
-    through `writer` under `prefix` — the scenario's evidence dir — so this holds no writable handle
-    into the run directory (BE-0331).
-    """
-
-    screenshot_path: Path
-    baselines_dir: Path
-    writer: RunArtifactWriter
-    prefix: str
-    default_compare: str = "exact"
-
-    @property
-    def actual_name(self) -> str:
-        """The captured screenshot's artifact name, relative to the run dir."""
-        return f"{self.prefix}/{self.screenshot_path.name}"
-
-    def capture_actual(self, driver: base.Driver) -> None:
-        """Capture the screenshot this scenario's `visual` assertions compare against.
-
-        The driver writes the image itself, so the sink reserves the path and records the bytes as
-        uninspected — pixels cannot be masked (BE-0151).
-        """
-        driver.screenshot(str(self.screenshot_path))
-        self.writer.record_unmasked(self.actual_name)
+if TYPE_CHECKING:
+    from .visual_context import VisualContext
 
 
 def _visual_scale(
@@ -120,21 +62,6 @@ def _resolve_mask(elements: list[base.Element], sel: Selector) -> tuple[base.Ele
 def _shift(region: ExcludeRegion, dx: float, dy: float) -> ExcludeRegion:
     """A mask rectangle translated into a cropped image's local coordinates."""
     return ExcludeRegion(x=region.x - dx, y=region.y - dy, w=region.w, h=region.h)
-
-
-@dataclass(frozen=True)
-class _Prepared:
-    """The result of visual preprocessing: what to compare, plus the frame data later steps reuse.
-
-    `compare_actual` is the image handed to the compare engine (the element crop when scoped, else
-    the whole screenshot); `actual_rel` is its run-dir-relative path for the evidence. `crop` and
-    `scale` are None for a whole-screen comparison and set once frames were resolved.
-    """
-
-    compare_actual: Path
-    actual_rel: str
-    crop: ExcludeRegion | None
-    scale: tuple[float, float] | None
 
 
 def _prepare_visual_comparison(

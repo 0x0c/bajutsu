@@ -1,15 +1,4 @@
-"""Attributed, persistent AI usage/cost ledger (BE-0196).
-
-`bajutsu.common.analytics.usage` keeps a flat, in-memory token total that dies with the process. This module makes
-that history durable and attributed: one JSONL line per AI call, tagged with what the tokens were
-spent on (command, provider, model, scenario, step) and priced in dollars where the provider has
-per-token pricing. It is the raw material the usage dashboard reads.
-
-Reporting only — nothing here runs on the deterministic `run` / CI verdict, and recording is
-best-effort: `bajutsu.common.analytics.usage.record` calls `emit` inside a swallow-everything guard, so a full disk
-never breaks an AI path. Following the operational-logging rules (BE-0055 / BE-0047), the ledger
-stores counts, prices, and labels only — never prompt or response content.
-"""
+"""Price an AI call and append it to the active ledger."""
 
 from __future__ import annotations
 
@@ -17,43 +6,18 @@ import json
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from contextvars import ContextVar
-from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from threading import Lock
 from typing import Any
 
 from bajutsu.common.analytics.usage import TokenUsage, of
 from bajutsu.common.config import AiConfig
 from bajutsu.common.run_meta.files import runs_root
 
-# Bump when the on-disk record shape changes incompatibly; readers key off it to stay
-# forward-compatible (an older line is still parseable — see `UsageEvent.from_record`).
-LEDGER_SCHEMA_VERSION = 1
-
-
-@dataclass(frozen=True)
-class Pricing:
-    """Per-token rates for one `(provider, model)`, expressed in US dollars per million tokens.
-
-    Per-million (not per-token) because that is how providers publish list prices, so a config
-    override reads the same as the vendor's page. `cost` converts back to an absolute dollar figure.
-    """
-
-    input_usd_per_mtok: float
-    output_usd_per_mtok: float
-    cache_write_usd_per_mtok: float
-    cache_read_usd_per_mtok: float
-
-    def cost(self, u: TokenUsage) -> float:
-        """The dollar cost of *u* at these rates."""
-        return (
-            u.input_tokens * self.input_usd_per_mtok
-            + u.output_tokens * self.output_usd_per_mtok
-            + u.cache_write_tokens * self.cache_write_usd_per_mtok
-            + u.cache_read_tokens * self.cache_read_usd_per_mtok
-        ) / 1_000_000
-
+from .attribution import Attribution
+from .jsonl_ledger import JsonlLedger
+from .pricing import Pricing
+from .usage_event import UsageEvent
 
 # Shipped default list prices (USD per million tokens), keyed by (provider, model *family*). The
 # family key matches by substring against the full model id, so version suffixes
@@ -71,6 +35,22 @@ _DEFAULT_PRICING: dict[tuple[str, str], Pricing] = {
 }
 
 PricingTable = dict[tuple[str, str], Pricing]
+
+
+# Default None (not an `Attribution()` literal) so the ContextVar default is immutable; readers
+# coalesce None to the empty attribution via `current_attribution`.
+_ATTRIBUTION: ContextVar[Attribution | None] = ContextVar("bajutsu_usage_attribution", default=None)
+
+
+# The process-active ledger sink and pricing table, installed by the CLI/serve at startup. None
+# means "no ledger configured", so `emit` is a no-op and only the in-memory total accrues (unit 5).
+_ACTIVE_LEDGER: JsonlLedger | None = None
+_ACTIVE_PRICING: PricingTable = {}
+
+
+# Default ledger location — under the gitignored `runs/` tree, so records accumulate but never land
+# in the repo. `ai.usageLedger` overrides the path; an empty string disables persistence.
+DEFAULT_LEDGER_PATH = runs_root() / "usage.jsonl"
 
 
 def default_pricing_table() -> PricingTable:
@@ -134,20 +114,6 @@ def compute_cost(
     return pricing.cost(u) if pricing is not None else None
 
 
-@dataclass(frozen=True)
-class Attribution:
-    """What an AI call's tokens were spent on — the ledger's non-token dimensions."""
-
-    command: str | None = None
-    scenario: str | None = None
-    step: str | None = None
-
-
-# Default None (not an `Attribution()` literal) so the ContextVar default is immutable; readers
-# coalesce None to the empty attribution via `current_attribution`.
-_ATTRIBUTION: ContextVar[Attribution | None] = ContextVar("bajutsu_usage_attribution", default=None)
-
-
 @contextmanager
 def attributed(
     *, command: str | None = None, scenario: str | None = None, step: str | None = None
@@ -189,74 +155,6 @@ def current_attribution() -> Attribution:
     return _ATTRIBUTION.get() or Attribution()
 
 
-@dataclass(frozen=True)
-class UsageEvent:
-    """One AI call's durable record: its attribution, token counts, and computed dollar cost."""
-
-    ts: str  # UTC ISO-8601 timestamp
-    command: str | None
-    provider: str | None
-    model: str | None
-    scenario: str | None
-    step: str | None
-    usage: TokenUsage
-    cost: float | None
-
-    def to_record(self) -> dict[str, Any]:
-        """The versioned, JSON-serializable dict written as one ledger line."""
-        return {
-            "v": LEDGER_SCHEMA_VERSION,
-            "ts": self.ts,
-            "command": self.command,
-            "provider": self.provider,
-            "model": self.model,
-            "scenario": self.scenario,
-            "step": self.step,
-            "input_tokens": self.usage.input_tokens,
-            "output_tokens": self.usage.output_tokens,
-            "cache_write_tokens": self.usage.cache_write_tokens,
-            "cache_read_tokens": self.usage.cache_read_tokens,
-            "calls": self.usage.calls,
-            "cost": self.cost,
-        }
-
-    @classmethod
-    def from_record(cls, record: Mapping[str, Any]) -> UsageEvent:
-        """Parse one ledger line. Missing fields degrade gracefully (older/partial lines stay readable)."""
-        return cls(
-            ts=record["ts"],
-            command=record.get("command"),
-            provider=record.get("provider"),
-            model=record.get("model"),
-            scenario=record.get("scenario"),
-            step=record.get("step"),
-            usage=TokenUsage(
-                input_tokens=record.get("input_tokens", 0),
-                output_tokens=record.get("output_tokens", 0),
-                cache_write_tokens=record.get("cache_write_tokens", 0),
-                cache_read_tokens=record.get("cache_read_tokens", 0),
-                calls=record.get("calls", 0),
-            ),
-            cost=record.get("cost"),
-        )
-
-
-class JsonlLedger:
-    """An append-only JSONL sink: one line per event, lock-guarded for concurrent `run --workers`."""
-
-    def __init__(self, path: Path) -> None:
-        self._path = path
-        self._lock = Lock()
-
-    def append(self, event: UsageEvent) -> None:
-        """Append one event as a JSON line, creating the parent directory on first write."""
-        line = json.dumps(event.to_record(), ensure_ascii=False)
-        with self._lock:
-            self._path.parent.mkdir(parents=True, exist_ok=True)
-            with self._path.open("a", encoding="utf-8") as f:
-                f.write(line + "\n")
-
-
 def read_events(path: Path) -> list[UsageEvent]:
     """Every readable event in the ledger at *path* (empty when the file is absent).
 
@@ -277,12 +175,6 @@ def read_events(path: Path) -> list[UsageEvent]:
     return events
 
 
-# The process-active ledger sink and pricing table, installed by the CLI/serve at startup. None
-# means "no ledger configured", so `emit` is a no-op and only the in-memory total accrues (unit 5).
-_ACTIVE_LEDGER: JsonlLedger | None = None
-_ACTIVE_PRICING: PricingTable = {}
-
-
 def configure(ledger: JsonlLedger | None, pricing: PricingTable) -> None:
     """Install the active ledger sink and pricing table for this process."""
     global _ACTIVE_LEDGER, _ACTIVE_PRICING  # noqa: PLW0603  # the process-wide sink is the point
@@ -300,11 +192,6 @@ def reset() -> None:
     _ACTIVE_LEDGER = None
     _ACTIVE_PRICING = {}
     _ATTRIBUTION.set(None)
-
-
-# Default ledger location — under the gitignored `runs/` tree, so records accumulate but never land
-# in the repo. `ai.usageLedger` overrides the path; an empty string disables persistence.
-DEFAULT_LEDGER_PATH = runs_root() / "usage.jsonl"
 
 
 def resolve_ledger_path(configured: str | None) -> Path | None:
