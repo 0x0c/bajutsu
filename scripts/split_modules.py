@@ -527,7 +527,10 @@ def _parse(source: str) -> _Parsed:
         if targets == ("__all__",):
             names = _literal_string_list(statement)
             if names is None:
-                raise SplitError("a computed `__all__` cannot be carried across the split")
+                raise SplitError(
+                    "an `__all__` that is not a plain list of string literals cannot be carried "
+                    "across the split"
+                )
             parsed.dunder_all = names
             continue
         parsed.module_level.append(
@@ -922,7 +925,11 @@ def plan_split(source: str, *, name: str = "<module>", allow_file_paths: bool = 
         for stem in sorted((set(owned) | set(grouped)) - {INIT_MODULE})
     }
     public = sorted(
-        name for name in rebound if not name.startswith("_") or name in (parsed.dunder_all or [])
+        name
+        for name in rebound
+        # `name in stems`: a name only a `global` ever binds was never on the package to begin with,
+        # so there is nothing for the split to take away and nothing to refuse.
+        if name in stems and (not name.startswith("_") or name in (parsed.dunder_all or []))
     )
     if public:
         # Dropping it from `__init__.py` would take a public name off the package's surface, and

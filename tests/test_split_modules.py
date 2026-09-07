@@ -447,7 +447,7 @@ def test_star_imports_are_refused() -> None:
 
 
 def test_a_computed_dunder_all_is_refused() -> None:
-    with pytest.raises(SplitError, match="computed"):
+    with pytest.raises(SplitError, match="not a plain list of string literals"):
         _plan(
             """
             class Alpha:
@@ -1803,3 +1803,95 @@ def test_a_lookalike_import_does_not_pass_for_type_checking() -> None:
     )
     alpha = plan.files["alpha.py"]
     assert "from typing import TYPE_CHECKING" in alpha
+
+
+@pytest.mark.parametrize(
+    "signature",
+    [
+        "def take(self, values: list[Beta]) -> None: ...",
+        "def all(self) -> dict[str, Beta]: ...",
+    ],
+)
+def test_an_annotation_only_cycle_inside_a_subscript_is_still_deferrable(signature: str) -> None:
+    # The subscript rule reads elements at the subscript's own context, but an annotation still
+    # wraps the whole thing — so a cycle carried by `list[Beta]` breaks without a hand-written
+    # in-method import, exactly as one carried by a bare `Beta` does.
+    plan = _plan(
+        f"""
+        from __future__ import annotations
+
+
+        class Alpha:
+            {signature}
+
+
+        class Beta:
+            def make(self) -> object:
+                return Alpha()
+        """
+    )
+    assert "if TYPE_CHECKING:" in plan.files["alpha.py"]
+    assert plan.notes == ()
+
+
+def test_a_single_quoted_entry_point_guard_is_recognized() -> None:
+    # The structural match accepts it; the substring test it replaced did not.
+    plan = _plan(
+        """
+        class Alpha:
+            pass
+
+
+        class Beta:
+            pass
+
+
+        def main() -> int:
+            return 0
+
+
+        if __name__ == '__main__':
+            raise SystemExit(main())
+        """
+    )
+    assert "__main__.py" in plan.files
+
+
+def test_an_annotated_but_computed_dunder_all_is_still_refused() -> None:
+    with pytest.raises(SplitError, match="not a plain list of string literals"):
+        _plan(
+            """
+            class Alpha:
+                pass
+
+
+            class Beta:
+                pass
+
+
+            __all__: list[str] = [Alpha.__name__]
+            """
+        )
+
+
+def test_a_name_only_a_global_binds_needs_no_refusal() -> None:
+    # It was never a module-level binding, so the package never carried it and the split takes
+    # nothing away — refusing here would block a module that splits correctly.
+    plan = _plan(
+        """
+        class Alpha:
+            pass
+
+
+        class Beta:
+            pass
+
+
+        def configure() -> None:
+            global RUNTIME
+
+            RUNTIME = object()
+        """
+    )
+    assert "RUNTIME" not in plan.files["__init__.py"]
+    assert plan.notes == ()
