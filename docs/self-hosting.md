@@ -558,7 +558,8 @@ Two notes for operating it:
 - **Nothing evicts a tree.** A pipeline that uploads a bundle per build accumulates one tree per
   build. Prune `.bundles/` on a schedule if the worker's disk is tight.
 - **A bundle's run no longer downloads the organization's stored baselines.** The bundle ships its
-  own. Put the approved images in the bundle when you approve baselines through serve as well.
+  own. If you approve baselines through serve and also upload bundles, put the approved images in
+  the bundle.
 
 Wrap it in a `LaunchAgent` (as in Tier A) so it survives reboots. The worker polls the control
 plane's `/api/worker/lease` endpoint over HTTP (no Redis needed), runs each job on a fresh
