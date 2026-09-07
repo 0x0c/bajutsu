@@ -16,6 +16,7 @@ from __future__ import annotations
 import argparse
 import keyword
 import re
+import shutil
 import subprocess
 import sys
 from dataclasses import dataclass, field
@@ -56,6 +57,40 @@ def snake_case(name: str) -> str:
     return f"{stem}_" if keyword.iskeyword(stem) else stem
 
 
+class _OwnImports(cst.CSTVisitor):
+    """The names one function imports for itself, excluding the nested scopes that own their own."""
+
+    def __init__(self) -> None:
+        self.names: set[str] = set()
+
+    def visit_Import(self, node: cst.Import) -> bool:
+        self._record(node)
+        return False
+
+    def visit_ImportFrom(self, node: cst.ImportFrom) -> bool:
+        self._record(node)
+        return False
+
+    def visit_FunctionDef(self, _node: cst.FunctionDef) -> bool:
+        return False
+
+    def visit_ClassDef(self, _node: cst.ClassDef) -> bool:
+        return False
+
+    def _record(self, node: cst.Import | cst.ImportFrom) -> None:
+        names = node.names
+        if isinstance(names, cst.ImportStar):
+            return
+        for alias in names:
+            self.names.add(_alias_binding(alias))
+
+
+def _own_imports(node: cst.FunctionDef) -> set[str]:
+    collected = _OwnImports()
+    node.body.visit(collected)
+    return collected.names
+
+
 def _subscript_head(node: cst.Subscript) -> str | None:
     """The rightmost name of a subscript's target — `Literal` for both `Literal[…]` forms."""
     value: cst.BaseExpression = node.value
@@ -77,20 +112,28 @@ class _References(cst.CSTVisitor):
         self.runtime: set[str] = set()
         self.rebound: set[str] = set()
         self.annotated: set[str] = set()
-        self.locally_imported: set[str] = set()
         self.uses_file: bool = False
         self._annotation_depth = 0
+        # One frame per enclosing function, holding the names that function imports for itself.
+        self._local_imports: list[set[str]] = []
 
     def visible(self) -> set[str]:
-        """The names this file still needs a module-level import for.
+        """The names this file still needs a module-level import for."""
+        return self.all
 
-        A name a method imports for itself is already bound where it is used, unless an annotation
-        elsewhere reads it too. Counting those as sibling references undoes a rule-5 in-method
-        import that a human had already applied, and puts the cycle straight back.
+    def _satisfied_locally(self, name: str) -> bool:
+        """Whether an enclosing function already imports *name* where this read happens.
+
+        Scoped to the enclosing frames, never file-wide: a name one method imports for itself says
+        nothing about a read in a sibling method or at module level, and suppressing the import for
+        those too leaves the generated file reading a name nothing binds. An annotation is never
+        satisfied this way — it is evaluated where the `def` is, not where the local import runs.
         """
-        return self.all - (self.locally_imported - self.annotated)
+        return self._annotation_depth == 0 and any(name in frame for frame in self._local_imports)
 
     def _record(self, name: str) -> None:
+        if self._satisfied_locally(name):
+            return
         self.all.add(name)
         if self._annotation_depth == 0:
             self.runtime.add(name)
@@ -130,7 +173,10 @@ class _References(cst.CSTVisitor):
         node.params.visit(self)
         if node.returns is not None:
             node.returns.visit(self)
+        # The signature is evaluated where the `def` is, so only the body sees this frame.
+        self._local_imports.append(_own_imports(node))
         node.body.visit(self)
+        self._local_imports.pop()
         return False
 
     def visit_ClassDef(self, node: cst.ClassDef) -> bool:
@@ -230,26 +276,14 @@ class _References(cst.CSTVisitor):
         if not isinstance(target, cst.Name):
             target.visit(self)
 
-    def visit_Import(self, node: cst.Import) -> bool:
+    def visit_Import(self, _node: cst.Import) -> bool:
         # A name an inner `import` binds is not a read. `SqlRepository` imports its ORM models
         # inside the methods that use them — rule 5's treatment, applied before this split — and
         # carrying the module-level import along too leaves it with nothing to annotate, an F401.
-        self._record_local_import(node)
         return False
 
-    def visit_ImportFrom(self, node: cst.ImportFrom) -> bool:
-        self._record_local_import(node)
+    def visit_ImportFrom(self, _node: cst.ImportFrom) -> bool:
         return False
-
-    def _record_local_import(self, node: cst.Import | cst.ImportFrom) -> None:
-        names = node.names
-        if isinstance(names, cst.ImportStar):
-            return
-        # No `suppress` here: an inner import is the only path that reaches `_alias_binding` for
-        # a name outside the module header, so swallowing the refusal would silently change which
-        # module-level imports survive rather than refusing the file.
-        for alias in names:
-            self.locally_imported.add(_alias_binding(alias))
 
     def visit_Global(self, node: cst.Global) -> bool:
         for item in node.names:
@@ -285,6 +319,16 @@ def _import_of(statement: cst.SimpleStatementLine) -> cst.Import | cst.ImportFro
     if not isinstance(small, (cst.Import, cst.ImportFrom)):
         raise SplitError(f"expected an import, found {type(small).__name__}")
     return small
+
+
+def _binds_type_checking(statement: _Statement) -> bool:
+    """Whether this header statement already imports `TYPE_CHECKING` under that name."""
+    if not isinstance(statement, cst.SimpleStatementLine):
+        return False
+    names = _import_of(statement).names
+    if isinstance(names, cst.ImportStar):
+        return False
+    return any(_alias_binding(alias) == "TYPE_CHECKING" for alias in names)
 
 
 def _filter_import(
@@ -440,6 +484,8 @@ def _parse(source: str) -> _Parsed:
             for inner in statement.body.body:
                 if not isinstance(inner, cst.SimpleStatementLine):
                     raise SplitError("a TYPE_CHECKING block holds more than plain imports")
+                if len(inner.body) != 1:
+                    raise SplitError("a `;`-joined import line is ambiguous to split")
                 parsed.type_checking.append(inner)
             continue
         if not isinstance(statement, cst.SimpleStatementLine):
@@ -589,7 +635,6 @@ def _file_reads(
         reads.all |= collected.all
         reads.runtime |= collected.runtime
         reads.annotated |= collected.annotated
-        reads.locally_imported |= collected.locally_imported
     return reads
 
 
@@ -665,8 +710,10 @@ def _choose_deferred(
                 deferred.setdefault(stem, set()).update(names)
                 break
         else:
-            # Every remaining cycle, not just this one: a batch operator fixing them one re-run at
-            # a time pays a round trip per cycle for no reason.
+            # Every cycle this walk found, not just the first: a batch operator fixing them one
+            # re-run at a time pays a round trip per cycle for no reason. The walk reports one back
+            # edge per path rather than enumerating every simple cycle, which is enough to work
+            # from and cheaper than Johnson's algorithm.
             listed = "; ".join(" -> ".join([*each, each[0]]) for each in cycles)
             raise SplitError(
                 f"circular import {listed}.py, with no annotation-only edge to defer — break it "
@@ -713,7 +760,8 @@ def _render_file(
         kept = _filter_import(_import_of(statement), used)
         if kept is not None:
             imports.append(statement.with_changes(body=[kept]))
-    if type_checking and not any("TYPE_CHECKING" in _render([statement]) for statement in imports):
+    already = any(_binds_type_checking(statement) for statement in imports)
+    if type_checking and not already:
         imports.append(cst.parse_statement("from typing import TYPE_CHECKING"))
     body.extend(imports)
     body.extend(
@@ -854,7 +902,19 @@ def plan_split(source: str, *, name: str = "<module>", allow_file_paths: bool = 
         stem: _file_reads(owned.get(stem, []), grouped.get(stem, []))
         for stem in sorted((set(owned) | set(grouped)) - {INIT_MODULE})
     }
-    for stem, reads in reads_by_stem.items():
+    public = sorted(
+        name for name in rebound if not name.startswith("_") or name in (parsed.dunder_all or [])
+    )
+    if public:
+        # Dropping it from `__init__.py` would take a public name off the package's surface, and
+        # re-exporting it would freeze a copy — so neither placement is the split's to choose.
+        raise SplitError(
+            f"{', '.join(public)} is public and rebound with `global`; a package cannot re-export "
+            "a name whose binding moves, so make it private or move the rebinding out first"
+        )
+    scanned = dict(reads_by_stem)
+    scanned[INIT_MODULE] = _file_reads(owned.get(INIT_MODULE, []), [])
+    for stem, reads in scanned.items():
         borrowed = sorted(name for name in reads.all & rebound if stems.get(name, stem) != stem)
         if borrowed:
             raise SplitError(
@@ -892,13 +952,18 @@ def apply_split(path: Path, plan: SplitPlan) -> Path:
     """
     package = path.with_suffix("")
     package.mkdir()
-    for filename, source in plan.files.items():
-        target = package / filename
-        target.write_text(source, encoding="utf-8")
-        try:
-            compile(source, str(target), "exec")
-        except SyntaxError as error:
-            raise SplitError(f"generated {target} does not parse: {error}") from error
+    try:
+        for filename, source in plan.files.items():
+            target = package / filename
+            target.write_text(source, encoding="utf-8")
+            try:
+                compile(source, str(target), "exec")
+            except SyntaxError as error:
+                raise SplitError(f"generated {target} does not parse: {error}") from error
+    except SplitError:
+        # Clear the half-written directory, or the retry fails on `mkdir` instead of on the defect.
+        shutil.rmtree(package, ignore_errors=True)
+        raise
     path.unlink()
     return package
 

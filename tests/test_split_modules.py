@@ -1114,7 +1114,9 @@ def _write_package(root: Path, name: str, source: str) -> Path:
     package.mkdir()
     for filename, text in _plan(source).files.items():
         (package / filename).write_text(text)
-    subprocess.run(["uv", "run", "ruff", "format", "-q", str(package)], check=False, cwd=_REPO_ROOT)
+    # `check=True`: a formatter failure means the plan emitted source ruff cannot parse, and
+    # swallowing it would leave these tests asserting against text no generated file ever holds.
+    subprocess.run(["uv", "run", "ruff", "format", "-q", str(package)], check=True, cwd=_REPO_ROOT)
     return package
 
 
@@ -1388,3 +1390,173 @@ def test_a_trailing_statement_keeps_the_imports_it_reads() -> None:
     assert "import atexit" in init
     assert init.index("import atexit") < init.index("__all__")
     assert init.index("__all__") < init.index("atexit.register(_cleanup)")
+
+
+def test_a_local_import_satisfies_only_the_scope_that_makes_it() -> None:
+    # A method importing `json` for itself says nothing about a module-level statement in the same
+    # generated file. Suppressing the header import for both leaves `_DEFAULTS` reading a name
+    # nothing binds — a NameError at package import, past the compile check.
+    plan = _plan(
+        """
+        import json
+
+        _DEFAULTS = json.loads("{}")
+
+
+        class Alpha:
+            def dump(self) -> str:
+                import json
+
+                return json.dumps(_DEFAULTS)
+
+
+        class Beta:
+            pass
+        """
+    )
+    assert "import json" in plan.files["alpha.py"]
+
+
+def test_a_local_import_does_not_hide_a_siblings_own_read() -> None:
+    plan = _plan(
+        """
+        from __future__ import annotations
+
+
+        class Engine:
+            def build(self) -> object:
+                from .widget import Widget
+
+                return Widget()
+
+            def default(self) -> object:
+                return _DEFAULT
+
+
+        _DEFAULT = Widget
+
+
+        class Widget:
+            pass
+        """
+    )
+    # `_DEFAULT` is read at module level, where the method's own import cannot reach it.
+    engine = plan.files["engine.py"]
+    assert "from .widget import Widget" in engine
+
+
+def test_a_public_name_rebound_with_global_is_refused() -> None:
+    # Re-exporting it freezes a copy, and dropping it takes a public name off the package's
+    # surface — with ruff's F822 silent inside `__init__.py`, nothing downstream would say so.
+    with pytest.raises(SplitError, match="public and rebound"):
+        _plan(
+            """
+            MEMO = None
+
+
+            class Alpha:
+                pass
+
+
+            class Beta:
+                pass
+
+
+            def load() -> object:
+                global MEMO
+                MEMO = object()
+                return MEMO
+            """
+        )
+
+
+def test_a_trailing_statement_reading_a_rebound_name_is_refused() -> None:
+    with pytest.raises(SplitError, match="rebinds with `global`"):
+        _plan(
+            """
+            import atexit
+
+            _MEMO = None
+
+
+            class Alpha:
+                pass
+
+
+            class Beta:
+                pass
+
+
+            def load() -> object:
+                global _MEMO
+                _MEMO = object()
+                return _MEMO
+
+
+            atexit.register(lambda: _MEMO)
+            """
+        )
+
+
+def test_deferring_a_cycle_needs_string_annotations() -> None:
+    # Without the future import the annotation is evaluated eagerly, so the deferred name is
+    # undefined at class-definition time — a NameError the deferral itself would have caused.
+    with pytest.raises(SplitError, match="evaluates eagerly"):
+        _plan(
+            """
+            class Alpha:
+                def take(self, value: "Beta") -> None:
+                    pass
+
+
+            class Beta:
+                def make(self) -> object:
+                    return Alpha()
+            """
+        )
+
+
+def test_a_semicolon_joined_import_inside_a_type_checking_block_is_refused() -> None:
+    with pytest.raises(SplitError, match="`;`-joined import"):
+        _plan(
+            """
+            from typing import TYPE_CHECKING
+
+            if TYPE_CHECKING:
+                from a.b import One; from a.b import Two
+
+
+            class Alpha:
+                value: One
+
+
+            class Beta:
+                value: Two
+            """
+        )
+
+
+def test_a_real_run_replaces_the_module_with_a_package_that_imports(tmp_path: Path) -> None:
+    # The only test that takes the write path: `apply_split` compiles each file and then unlinks
+    # the original, and `_tidy` formats what it wrote. Every other `main` case refuses first.
+    path = _module(tmp_path, "sample", _END_TO_END["plain"])
+    assert main([str(path)]) == 0
+    assert not path.exists()
+    package = tmp_path / "sample"
+    assert (package / "__init__.py").exists()
+    proc = subprocess.run(
+        [sys.executable, "-c", "import sample"],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert proc.returncode == 0, proc.stderr
+    formatted = subprocess.run(
+        ["uv", "run", "ruff", "format", "--check", str(package)],
+        cwd=_REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert formatted.returncode == 0, formatted.stdout
