@@ -86,7 +86,7 @@ def test_rejects_symlink_entry(tmp_path: Path) -> None:
 
 
 def test_rejects_too_many_entries(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(uploads, "MAX_ENTRIES", 2)
+    monkeypatch.setattr(uploads._functions, "MAX_ENTRIES", 2)
     blob = _zip({"a": b"1", "b": b"2", "c": b"3"})
     with pytest.raises(BundleError, match="too many entries"):
         extract_bundle(_written(tmp_path, blob), _dest(tmp_path))
@@ -96,7 +96,7 @@ def test_rejects_total_uncompressed_over_cap(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     # The streamed byte count is the real defense — it stops the moment the cap is crossed.
-    monkeypatch.setattr(uploads, "MAX_TOTAL_BYTES", 8)
+    monkeypatch.setattr(uploads._functions, "MAX_TOTAL_BYTES", 8)
     with pytest.raises(BundleError, match="uncompressed"):
         extract_bundle(_written(tmp_path, _zip({"big.txt": b"x" * 64})), _dest(tmp_path))
 
@@ -378,7 +378,7 @@ def test_read_scenario_zip_rejects_a_case_variant_yaml_extension(tmp_path: Path)
 def test_read_scenario_zip_rejects_too_many_entries(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(uploads, "MAX_SCENARIO_ZIP_ENTRIES", 1)
+    monkeypatch.setattr(uploads._functions, "MAX_SCENARIO_ZIP_ENTRIES", 1)
     blob = _zip({"a.yaml": b"- name: a\n", "b.yaml": b"- name: b\n"})
     with pytest.raises(BundleError, match="too many entries"):
         read_scenario_zip(_written(tmp_path, blob))
@@ -387,7 +387,7 @@ def test_read_scenario_zip_rejects_too_many_entries(
 def test_read_scenario_zip_rejects_oversized_entry(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(uploads, "MAX_SCENARIO_ENTRY_BYTES", 4)
+    monkeypatch.setattr(uploads._functions, "MAX_SCENARIO_ENTRY_BYTES", 4)
     blob = _zip({"big.yaml": b"- name: alpha\n  steps: []\n"})
     with pytest.raises(BundleError, match="too large"):
         read_scenario_zip(_written(tmp_path, blob))
@@ -396,7 +396,7 @@ def test_read_scenario_zip_rejects_oversized_entry(
 def test_read_scenario_zip_rejects_oversized_total(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(uploads, "MAX_SCENARIO_ZIP_TOTAL_BYTES", 20)
+    monkeypatch.setattr(uploads._functions, "MAX_SCENARIO_ZIP_TOTAL_BYTES", 20)
     blob = _zip({"a.yaml": b"- name: a\n  steps: []\n", "b.yaml": b"- name: b\n  steps: []\n"})
     with pytest.raises(BundleError, match="uncompressed"):
         read_scenario_zip(_written(tmp_path, blob))

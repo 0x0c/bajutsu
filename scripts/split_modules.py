@@ -459,9 +459,14 @@ def _assign_owners(parsed: _Parsed) -> tuple[dict[int, str], list[str]]:
         if not statement.binds:
             placement[index] = INIT_MODULE
             continue
-        owners = sorted(
-            {stem for stem, reads in declaration_reads.items() if reads.all & set(statement.binds)}
-        )
+        bound = set(statement.binds)
+        owners = sorted({stem for stem, reads in declaration_reads.items() if reads.all & bound})
+        # A module-level statement can own another: `oplog.py`'s `_CONTEXT_KEYS` is built from the
+        # context variables declared beside it. Counting only classes and functions as owners
+        # scatters such a pair across two files that then import each other at module load, which
+        # no rule-5 in-method import can break.
+        if any(other is not statement and other.reads.all & bound for other in parsed.module_level):
+            owners = sorted({*owners, SHARED_MODULE})
         names = ", ".join(statement.binds)
         if rebound & set(statement.binds):
             # `global` cannot reach a name in another module, so the memo has to sit with the

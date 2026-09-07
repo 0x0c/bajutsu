@@ -656,3 +656,33 @@ def test_module_level_code_derived_from_its_owner_follows_it() -> None:
     )
     alpha = plan.files["alpha.py"]
     assert alpha.index("class Alpha:") < alpha.index("_FIELDS = ")
+
+
+def test_module_level_code_read_by_its_neighbour_stays_beside_it() -> None:
+    # `oplog.py`'s `_CONTEXT_KEYS` is built from the context variables declared beside it. Counting
+    # only classes and functions as owners sends the two to different files, which then import each
+    # other — a cycle no rule-5 in-method import can break, since both run at module load.
+    plan = _plan(
+        """
+        _FIRST = 1
+        _SECOND = (_FIRST, 2)
+
+
+        class Alpha:
+            def read(self) -> tuple[int, int]:
+                return _SECOND
+
+
+        class Beta:
+            pass
+
+
+        def helper() -> int:
+            return _FIRST
+        """
+    )
+    # `_FIRST` has a second reader in `_SECOND`, so it lands in `_shared.py` rather than following
+    # `helper` — which keeps `_shared.py` a leaf, importing nothing that imports it back.
+    assert "_FIRST = 1" in plan.files["_shared.py"]
+    assert "from ." not in plan.files["_shared.py"]
+    assert "_SECOND = (_FIRST, 2)" in plan.files["alpha.py"]

@@ -253,7 +253,7 @@ Three contracts are enforced:
   in the hosted topology (which reads an org-bearing config) keeps working while the core never
   models orgs. The same mechanism also drops a top-level `ui:` key (BE-0191) — the serve UI's
   presentation settings (`ui.default_theme`) are a serve concern and are parsed in
-  `bajutsu/serve/themes.py`, not modeled in `Config`. A forbidden import-linter contract keeps `config/`, `common/drivers/`, `common/runner/`, and
+  `bajutsu/serve/themes/`, not modeled in `Config`. A forbidden import-linter contract keeps `config/`, `common/drivers/`, `common/runner/`, and
   `scenario/` off those extras (`include_external_packages` lets it see the external import), on top
   of the periphery contract that already keeps them off `bajutsu.serve`.
 - **The scenario schema and `Driver` Protocol stay a portable inner contract** — independent of the
