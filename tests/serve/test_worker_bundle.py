@@ -410,10 +410,36 @@ def test_the_bundle_cache_is_scoped_per_org(
 
 def test_an_org_that_is_not_a_safe_path_segment_falls_back(tmp_path: Path) -> None:
     # The org is server-authored, but it becomes a directory name, and a leased spec is remote input.
-    assert worker_cli._safe_org("../../etc") == "etc"
-    assert worker_cli._safe_org("..") == "default"
+    # Anything that is not already a safe segment — a stripped character, an over-long id, any
+    # uppercase — gets a digest suffix (see the collision test below), so a reduced id is never
+    # mistaken for the org it was reduced from.
+    assert worker_cli._safe_org("../../etc").startswith("etc-")
+    assert worker_cli._safe_org("..").startswith("org-")
     assert worker_cli._safe_org(None) == "default"
+    assert worker_cli._safe_org("acme") == "acme"  # untouched by the allowlist: returned as-is
+
+
+def test_two_orgs_that_reduce_to_the_same_segment_stay_apart() -> None:
+    # An org id is operator-authored and already reaches object-store keys unsanitized, so a space
+    # or an over-long id is legal upstream. Stripped down to the same segment, two such ids must not
+    # collapse onto one mutable cache directory — a bundle's tree, and the `runs/` evidence each job
+    # writes inside it, would then leak between tenants.
+    assert worker_cli._safe_org("acme corp") != worker_cli._safe_org("acmecorp")
+    long_a = "acme" * 20  # 80 chars — over the old 64-char truncation
+    long_b = long_a[:-1] + "!"  # differs only past the old truncation point
+    assert worker_cli._safe_org(long_a) != worker_cli._safe_org(long_b)
+    # A macOS worker's filesystem is case-insensitive by default, so these two would be one
+    # directory without the digest — the platform this cache mostly runs on.
+    assert worker_cli._safe_org("Acme") != worker_cli._safe_org("acme")
+    # An id already a safe segment needs no digest.
     assert worker_cli._safe_org("acme") == "acme"
+
+
+def test_an_org_holding_a_lone_surrogate_still_yields_a_segment() -> None:
+    # `json.loads` decodes "\ud800" into a str that strict UTF-8 refuses to encode, so hashing the
+    # raw value without `surrogatepass` would raise — and `_workspace_or_failure` would read that as
+    # a permanent failure and post a red run for a scenario that never executed.
+    assert worker_cli._safe_org("\ud800x").startswith("x-")
 
 
 def test_a_truncated_download_is_caught_and_left_to_retry(

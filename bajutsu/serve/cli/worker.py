@@ -319,8 +319,15 @@ def _run_with_heartbeat(
     and the lease is left to lapse rather than reported as a failed job (directive 2 — a network
     blip must not surface as a red run for a scenario that never executed). *job_work* is *work*
     itself for a job that ships no bundle, or meaningless alongside a `None` result.
+
+    A reclaim seen while the fetch is still running must stop the run from ever starting, not merely
+    get dropped once it finishes: without *lost*, the run thread would walk straight from a finished
+    fetch into `execute_job_spec` — installing the app and driving the device beside whichever worker
+    won the re-lease — and only discard the result afterward. The fetch is the one point past which
+    nothing has touched the device yet, so returning early there costs nothing.
     """
     holder: dict[str, Any] = {"work": work}
+    lost = threading.Event()
 
     def _run() -> None:
         try:
@@ -334,6 +341,8 @@ def _run_with_heartbeat(
         holder["work"] = job_work
         if failure is not None:
             holder["result"] = failure
+            return
+        if lost.is_set():  # the lease is already gone — never start the run
             return
         try:
             job = execute_job_spec(
@@ -373,6 +382,7 @@ def _run_with_heartbeat(
             continue
         if code == 409:
             abandoned = True
+            lost.set()  # seen in time, this stops _run before it ever calls execute_job_spec
             runner.join()  # wait it out so this worker never runs two jobs at once
             break
 
@@ -518,9 +528,30 @@ def _safe_org(org: Any) -> str:
     The org travels in the job spec, so it is server-authored — but it becomes a directory name here,
     and a leased spec is still remote input. An allowlist of the characters an org id may hold keeps
     a separator or a `..` out of the path rather than trusting the value's provenance.
+
+    An org id is operator-authored (`orgs:` or the database) and already reaches object-store keys
+    unsanitized through `org_prefix`, so a space, a non-ASCII character, or a 70-character id is legal
+    upstream — and stripping it down here can't be allowed to collide two such ids onto one directory.
+    An id returns as-is only when it is already a safe segment: nothing stripped, at most 64
+    characters, and lowercase. Anything else — a stripped character, an over-long id, or any
+    uppercase — is disambiguated by a digest of the *raw* value instead, so two ids that would
+    otherwise share one segment (`"acme corp"` / `"acmecorp"`, two ids agreeing on their first 64
+    characters, or `"Acme"` / `"acme"` on a case-insensitive filesystem, which is the default on a
+    macOS worker) never share the mutable tree underneath — the isolation this cache exists to give
+    each tenant.
+
+    The digest encodes with ``surrogatepass`` because a lone surrogate survives `json.loads` into a
+    `str` that strict UTF-8 refuses: without it this sanitizer would raise, and
+    `_workspace_or_failure` would classify that as a permanent failure and post a red run for a
+    scenario that never executed. Surrogates are the only strs strict UTF-8 rejects, and the
+    error handler is injective over them, so collision resistance is unchanged.
     """
-    cleaned = re.sub(r"[^A-Za-z0-9._-]+", "", org if isinstance(org, str) else "").strip(".")
-    return cleaned[:64] or "default"
+    raw = org if isinstance(org, str) else ""
+    cleaned = re.sub(r"[^A-Za-z0-9._-]+", "", raw).strip(".")
+    if cleaned == raw and cleaned == cleaned.lower() and len(cleaned) <= 64:
+        return cleaned or "default"
+    digest = hashlib.sha256(raw.encode("utf-8", "surrogatepass")).hexdigest()
+    return f"{cleaned[:51] or 'org'}-{digest[:12]}"
 
 
 def _workspace_or_failure(

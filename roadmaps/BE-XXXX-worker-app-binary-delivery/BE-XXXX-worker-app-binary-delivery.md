@@ -111,10 +111,20 @@ the run started in.
 Paying a per-job copy of the tree would isolate the `runs/` writes as well. An app binary is too
 large to copy per job for that alone. Trees do nest per org, for the reason the control plane's
 caches do. The tree is mutable, so one tenant's run evidence must not land in another's directory.
+An org id is operator-authored, so two different ids can reduce to one safe segment. Three cases
+do it: a stripped character, an id past 64 characters, and a pair differing in case alone on a
+case-insensitive filesystem. Each would defeat that isolation. The cache keeps an id as-is when it
+is already a safe segment, and gives every other one a digest of the original.
 
 The fetch runs on the run's own background thread, under the same heartbeat. It is the job's largest
 transfer. A fetch slower than the lease timeout would otherwise trip a reclaim this worker would
 never notice, and it would then run the job beside whichever worker won the re-lease.
+
+Observing that reclaim differs from acting on it in time. A flag checked once the fetch returns
+is what stops the run from starting. Without that flag, a fetch finishing right after the reclaim
+would still walk the run's own thread into installing the app and driving the device, beside the
+worker that won the re-lease. Its *result* would then be discarded, too late to matter. Nothing has
+touched the device yet when the fetch returns, so returning there instead costs nothing.
 
 The worker hashes each part once it lands, against the sha256 the job named. A short body is not an
 error to `http.client`, so nothing else notices a truncated download. A truncated raw binary reaches
@@ -158,6 +168,8 @@ The gate covers each seam without a network or a Simulator:
 - A job with no bundle identity keeps the plain workspace, so a Git-sourced run keeps working.
 - A job that carries a bundle identity the lease could not sign fails, rather than running blind.
 - A reclaim arriving mid-fetch is seen, so the heartbeat provably covers the download.
+- A reclaim seen mid-fetch stops the run before it starts, never merely discards its result.
+- Two org ids that reduce to the same cache segment still get separate, non-colliding directories.
 - A truncated part and a mismatched leg digest are caught, and leave no tree behind to reuse.
 - A `503` on the fetch is retried; a `404`, and a failure raised after the bytes land, are reported.
 - `_get_file` writes a body larger than one read to disk, so a bundle never buffers whole in memory.

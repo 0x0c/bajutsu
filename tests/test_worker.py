@@ -599,6 +599,50 @@ def test_run_with_heartbeat_covers_the_bundle_fetch(
     assert abandoned is True
 
 
+def test_run_with_heartbeat_never_starts_the_run_once_the_lease_is_lost_mid_fetch(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A reclaim seen while the fetch is still running must stop the run from starting at all.
+
+    Moving the fetch under the heartbeat (the test above) makes a 409 observable before the run
+    ever begins — but observing it is not enough on its own: without the `lost` event, this thread
+    would walk from the finished fetch straight into `execute_job_spec`, installing the app and
+    driving the device beside whichever worker won the re-lease, and only discard the result
+    afterward. Pinned here by asserting `execute_job_spec` is never called at all.
+    """
+    release = threading.Event()
+    started = threading.Event()
+
+    def slow_workspace(work: Path, spec: dict[str, Any], urls: Any) -> Path:
+        release.wait(2.0)
+        # Give the main thread time to finish `lost.set()` before this thread checks it: `set()`
+        # wakes a waiter via the OS, which is slower than the handful of bytecodes the main thread
+        # needs to run between returning 409 and setting the flag, but not so much slower that a
+        # loaded CI runner is guaranteed to preserve the order without this margin.
+        time.sleep(0.05)
+        return work
+
+    def recording_execute(spec: dict[str, Any], **kwargs: Any) -> _FakeJob:
+        started.set()  # would prove the bug if this ever fires
+        return _FakeJob()
+
+    monkeypatch.setattr(worker_mod, "_bundle_workspace", slow_workspace)
+    monkeypatch.setattr(worker_mod, "execute_job_spec", recording_execute)
+
+    def hb_409(
+        url: str, body: dict[str, Any], *, token: str | None = None, timeout: float | None = None
+    ) -> tuple[int, Any]:
+        release.set()
+        return 409, {}
+
+    monkeypatch.setattr(worker_mod, "_post_json", hb_409)
+    _result, abandoned, _job_work = _run_hb(
+        tmp_path, bundle_urls={"bundle": "https://signed/bundle"}, spec={"bundle": {"id": "a" * 64}}
+    )
+    assert abandoned is True
+    assert not started.is_set()
+
+
 def test_run_with_heartbeat_leaves_a_transient_fetch_failure_to_lapse(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
