@@ -494,7 +494,7 @@ class RawSource:
     backend applies and before `Element` normalization — so a diagnosis can tell "the device's own dump
     already looked wrong" apart from "bajutsu's own processing changed it". `parsed_input` is the same
     read *after* a backend's own structural transform of it, when that transform actually changed
-    something: adb's resident channel strips SystemUI decor windows (`narrow_to_active_window`) before
+    something: adb's resident channel strips SystemUI decor windows (`narrowed_root`) before
     handing the result to `parse_hierarchy`, so `parsed_input` is what the parser actually consumed.
     `None` when the backend applies no such transform (the dump-subprocess path, XCUITest) or the
     transform left `text` unchanged — `text` alone already describes what was parsed. `suffix` names the

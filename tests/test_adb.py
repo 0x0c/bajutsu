@@ -2225,7 +2225,9 @@ def test_parse_hierarchy_identities_align_with_the_elements() -> None:
     # The device matches on the dump's raw attributes, so the identity must be verbatim — not the
     # `identifier` `_to_element` strips the package prefix off. Both lists walk the same nodes, so
     # element i is named by identity i; a drift here would address the wrong node on the device.
-    els, identities = adb_driver_mod.parse_hierarchy_with_identities(FIXTURE)
+    els, identities = adb_driver_mod.elements_with_identities(
+        adb_driver_mod.slice_hierarchy_root(FIXTURE)
+    )
     assert len(els) == len(identities) == FIXTURE_ELEMENT_COUNT
     submit = next(i for i, e in enumerate(els) if e["identifier"] == "stable.submit")
     assert identities[submit] == ("stable.submit", "sent", "送信", "android.widget.Button")
@@ -2554,6 +2556,10 @@ def test_a_confirmed_gestures_own_tree_answers_the_read_that_follows_it() -> Non
     before = len(reads)
     assert driver.query() == parse_hierarchy(COMPOSE_TAB)
     assert len(reads) == before  # answered from the reply, not from the device
+    # And never as proof of rest. The device's settle is bounded by a read count and returns its
+    # last, still-tearing dump on expiry with nothing on the wire to say so, so a `_settled_key` set
+    # from it would let `_settle` skip its own poll on a screen that may still be animating.
+    assert driver._settled_key is None
     # Consumed once: the read after it is a genuine one again.
     assert driver.query() == parse_hierarchy(FIXTURE)
     assert len(reads) == before + 1
@@ -2595,6 +2601,25 @@ def test_a_tree_that_does_not_postdate_the_gesture_is_refused() -> None:
         fetch_clock=lambda: 4200.0,  # the gesture's mark; the tree's 4199 predates it
         act=act,
     )
+    driver.tap({"id": "stable.submit"})
+    assert driver._seeded_tree is None
+    assert driver.query() == parse_hierarchy(FIXTURE)
+
+
+def test_a_degenerate_tree_in_the_reply_is_read_again_rather_than_seeded() -> None:
+    # A seeded tree reaches `query()` without passing through `_read_settled_tree`'s transient-empty
+    # retry, so the mid-transition dump this device is known to produce would be handed straight to a
+    # selector the retry would have saved. Refusing it costs the round trip this unit saves, nothing
+    # more: the driver reads, with the retry, exactly as it did before.
+    sparse = "<hierarchy><node index='0' class='android.widget.FrameLayout' bounds='[0,0][1,1]' /></hierarchy>"
+    act, _ = _recording_act([_confirmed_with_tree(sparse, 98765.0)])
+    driver = AdbDriver(
+        "U",
+        run=lambda _a: "",
+        fetch_hierarchy=lambda _since: HierarchyRead(FIXTURE, 1.0),
+        act=act,
+    )
+    driver.query()  # a rich tree first, so a later sparse one reads as transient rather than real
     driver.tap({"id": "stable.submit"})
     assert driver._seeded_tree is None
     assert driver.query() == parse_hierarchy(FIXTURE)

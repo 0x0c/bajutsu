@@ -114,12 +114,28 @@ class ResidentServerTest {
         val reader = client.getInputStream().bufferedReader(StandardCharsets.UTF_8)
         val out = client.getOutputStream()
         while (true) {
-            // Null is the peer having gone quiet — an ordinary end to a reused connection, not the
-            // fault the accept loop logs, so it returns rather than throwing.
+            // Two different silences, told apart because only one is ordinary. `soTimeout` governs
+            // every read on the socket, so a timeout *after* the request line arrived is a fault the
+            // host is blocking on — for `/act` it reaches the driver as "may or may not have
+            // landed", when in fact nothing was injected — while one before it is a peer that simply
+            // went quiet, the ordinary end of a reused connection.
+            val started = Started()
             val target = try {
-                readRequestTarget(reader) ?: return
+                readRequestTarget(reader, started) ?: return
             } catch (e: SocketTimeoutException) {
-                Log.d(TAG, "connection idle past ${SO_TIMEOUT_MS}ms; closing it", e)
+                if (started.value) {
+                    Log.w(TAG, "connection went quiet mid-request; nothing was served", e)
+                } else {
+                    Log.d(TAG, "connection idle past ${SO_TIMEOUT_MS}ms; closing it", e)
+                }
+                return
+            }
+            if (target.isEmpty()) {
+                // A request line that does not parse. With one connection per request this could
+                // only be a bad client; with the connection reused it is the signature of the two
+                // ends disagreeing about where the last reply ended, which is the one symptom that
+                // would reveal such a desynchronization in the wild.
+                Log.w(TAG, "malformed request line; ending the connection rather than guessing")
                 return
             }
             when (target.substringBefore('?')) {
@@ -138,14 +154,43 @@ class ResidentServerTest {
         }
     }
 
-    /** The request target (path plus any query) after the method; null if empty/malformed. */
-    private fun readRequestTarget(reader: BufferedReader): String? {
+    /** Whether a request line has been read yet, so the caller can tell an idle peer from a fault. */
+    private class Started {
+        var value = false
+    }
+
+    /**
+     * The request target (path plus any query) after the method; null at end of input, empty if the
+     * request line does not parse.
+     *
+     * Also drains the request body, which only became load-bearing once the connection is reused:
+     * bytes left unread would be parsed as the *next* request on it, so a desynchronized connection
+     * would answer wrong rather than fail. Every request this server serves is body-less today, and
+     * `http.client` sends `Content-Length: 0` for them, so this drains nothing in practice — it is
+     * the invariant, not a workaround.
+     */
+    private fun readRequestTarget(reader: BufferedReader, started: Started): String? {
         val requestLine = reader.readLine() ?: return null
-        val target = requestLine.split(' ').getOrNull(1) ?: return null
+        started.value = true
+        val target = requestLine.split(' ').getOrNull(1) ?: return ""
         // Drain the remaining request headers so the client sees a clean, complete exchange.
+        var contentLength = 0
         while (true) {
             val line = reader.readLine() ?: break
             if (line.isEmpty()) break
+            if (line.startsWith(CONTENT_LENGTH_HEADER, ignoreCase = true)) {
+                contentLength = line.substringAfter(':').trim().toIntOrNull() ?: 0
+            }
+        }
+        if (contentLength > 0) {
+            Log.w(TAG, "request carried a $contentLength-byte body; draining it to keep the stream aligned")
+            var left = contentLength
+            val buffer = CharArray(DRAIN_CHUNK)
+            while (left > 0) {
+                val read = reader.read(buffer, 0, minOf(left, buffer.size))
+                if (read < 0) break
+                left -= read
+            }
         }
         return target
     }
@@ -197,16 +242,12 @@ class ResidentServerTest {
      * [publishHeader], which is what lets the host skip the read-lag barrier for it (BE-0339 Unit 5).
      */
     private fun respondAct(out: OutputStream, device: UiDevice, readMark: ReadMark, target: String) {
+        // Validated first, and never defaulted. A missing or malformed field here would otherwise
+        // pick an element by assumption — `index` 0 of `count` 1 — which is exactly the guess this
+        // endpoint exists to refuse. An identity field may legitimately be empty (a node with no
+        // text), so presence is required and emptiness is not. Before the waits below, so a request
+        // that cannot be served does not first spend the postdate budget earning its `400`.
         val kind = paramOf(target, "kind") ?: return respond(out, BAD_REQUEST, TEXT, "no kind\n".bytes())
-        device.waitForIdle()
-        sinceOf(target)?.let {
-            readMark.awaitPostdate(it, POSTDATE_BUDGET_MS)
-            device.waitForIdle()
-        }
-        // Validated, never defaulted. A missing or malformed field here would otherwise pick an
-        // element by assumption — `index` 0 of `count` 1 — which is exactly the guess this endpoint
-        // exists to refuse. An identity field may legitimately be empty (a node with no text), so
-        // presence is required and emptiness is not.
         val index = paramOf(target, "index")?.toIntOrNull()
             ?: return respond(out, BAD_REQUEST, TEXT, "no usable index\n".bytes())
         val count = paramOf(target, "count")?.toIntOrNull()
@@ -215,7 +256,12 @@ class ResidentServerTest {
             paramOf(target, it.first)
                 ?: return respond(out, BAD_REQUEST, TEXT, "no ${it.first}\n".bytes())
         }
-        val matches = settledActBounds(device, readMark, want)
+        device.waitForIdle()
+        sinceOf(target)?.let {
+            readMark.awaitPostdate(it, POSTDATE_BUDGET_MS)
+            device.waitForIdle()
+        }
+        val matches = settledActBounds(device, want)
         if (matches.size != count || index !in matches.indices) {
             // Loudly stale, never a guess: the screen the host resolved on is not the screen here, so
             // acting on `matches[index]` would be acting on a different element. The host re-resolves.
@@ -273,7 +319,7 @@ class ResidentServerTest {
         // Snapshot before the settle, for the reason [respondSource] states at length: the mark must
         // never outrun the body it is stamped on, or a stale tree would certify as caught up.
         val mark = readMark.current()
-        val body = settledDump(device, readMark)
+        val body = settledDump(device)
         respond(
             out,
             "200 OK",
@@ -438,7 +484,7 @@ class ResidentServerTest {
         // `awaitPostdate` has already advanced `current()` past `since`, so this undercount never
         // drops the mark back below the actuation it must clear.
         val mark = readMark.current()
-        val body = settledDump(device, readMark)
+        val body = settledDump(device)
         val headers = mutableMapOf(READ_MARK_HEADER to mark.toString())
         // Only when the host asked (BE-0407 unit 18). The walk covers every node on every read —
         // 20-100ms — and answers nothing at all for an app that opted no view into `nativeZ`, which
@@ -550,30 +596,10 @@ class ResidentServerTest {
      * that never settles (an animation) costs at most [SETTLE_DUMPS] reads and returns the last one,
      * exactly as the host's `AdbDriver._CATCHUP_DWELL_S` accepts a tear that outlasts its dwell.
      */
-    private fun <T> settled(
-        device: UiDevice,
-        readMark: ReadMark,
-        label: String,
-        read: () -> T,
-        sameAs: (T, T) -> Boolean,
-    ): T {
-        // The mark is sampled *before* each read, never after, so an event that lands while a read is
-        // in flight advances it and forces the confirming read. Sampling after would let such an
-        // event be credited to the read that predates it.
-        var mark = readMark.current()
+    private fun <T> settled(device: UiDevice, label: String, read: () -> T, sameAs: (T, T) -> Boolean): T {
         var previous = read()
         repeat(SETTLE_DUMPS - 1) {
             device.waitForIdle()
-            // Nothing was republished while the last read was taken or since (BE-0407 unit 17). A
-            // node's bounds reach a dump by way of an accessibility event — the premise the whole
-            // mark barrier already rests on (BE-0332) — so a second dump here could only re-derive
-            // the tree just read. The confirming read exists to catch *tearing*, and there is
-            // nothing to tear when nothing published: this is a stronger answer than two agreeing
-            // dumps, not a weaker one, and it is what the second dump was paying 100-200ms to
-            // establish.
-            val now = readMark.current()
-            if (now == mark) return previous
-            mark = now
             val current = read()
             if (sameAs(current, previous)) return current
             previous = current
@@ -586,8 +612,8 @@ class ResidentServerTest {
      * [respondSource], which answers an arbitrary host-side selector and so cannot narrow the
      * comparison the way [settledActBounds] does for `/act`.
      */
-    private fun settledDump(device: UiDevice, readMark: ReadMark): ByteArray =
-        settled(device, readMark, "hierarchy", { dumpHierarchy(device) }, ByteArray::contentEquals)
+    private fun settledDump(device: UiDevice): ByteArray =
+        settled(device, "hierarchy", { dumpHierarchy(device) }, ByteArray::contentEquals)
 
     /**
      * Like [settledDump], but scoped to the identity `/act` has already resolved: settles once two
@@ -604,10 +630,10 @@ class ResidentServerTest {
      * check skips the [XmlPullParser] walk on a screen that has genuinely gone idle, rather than paying
      * it on every settle attempt.
      */
-    private fun settledActBounds(device: UiDevice, readMark: ReadMark, want: List<String>): List<Rect> {
+    private fun settledActBounds(device: UiDevice, want: List<String>): List<Rect> {
         var seenXml: ByteArray? = null
         var seenBounds = emptyList<Rect>()
-        return settled(device, readMark, "act bounds", {
+        return settled(device, "act bounds", {
             val xml = dumpHierarchy(device)
             if (seenXml?.contentEquals(xml) != true) {
                 seenBounds = matchingBounds(xml, want)
@@ -741,6 +767,10 @@ class ResidentServerTest {
         // without letting an animated value spin forever. Same value the retired `stableHierarchy` used,
         // now scoped to tearing while the mark decides staleness.
         const val SETTLE_DUMPS = 4
+
+        // Read so a body can be drained off a reused connection; see `readRequestTarget`.
+        const val CONTENT_LENGTH_HEADER = "content-length:"
+        const val DRAIN_CHUNK = 4096
 
         const val TEXT = "text/plain; charset=utf-8"
         const val BAD_REQUEST = "400 Bad Request"

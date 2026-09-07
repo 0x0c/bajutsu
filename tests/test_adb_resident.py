@@ -20,6 +20,7 @@ from pathlib import Path
 import pytest
 
 from bajutsu.common.backend_cli import adb, adb_resident
+from bajutsu.common.drivers import base
 from bajutsu.common.drivers.adb import (
     ActOutcome,
     ActRequest,
@@ -57,27 +58,30 @@ _APP_ONLY = (
 )
 
 
+def _narrowed_elements(xml: str) -> list[base.Element]:
+    return elements_with_identities(adb_resident.narrowed_root(xml)[0])[0]
+
+
 def test_narrow_matches_the_active_window_dump() -> None:
     # The whole point of PR-C's equivalence work: after narrowing, the resident dump parses to exactly
     # the Elements the `uiautomator dump` path produces — the SystemUI window is gone.
-    narrowed = adb_resident.narrow_to_active_window(_MULTI_WINDOW)
-    assert parse_hierarchy(narrowed) == parse_hierarchy(_APP_ONLY)
+    assert _narrowed_elements(_MULTI_WINDOW) == parse_hierarchy(_APP_ONLY)
     # Guard the test itself: the two dumps genuinely differ before narrowing.
     assert parse_hierarchy(_MULTI_WINDOW) != parse_hierarchy(_APP_ONLY)
+    assert adb_resident.narrowed_root(_MULTI_WINDOW)[1] is True  # a window really was dropped
 
 
 def test_narrow_leaves_the_active_window_dump_untouched() -> None:
     # A dump with no system window (already the active window, e.g. the fallback path fed back through)
     # passes through so the two transports converge on identical Elements.
-    assert parse_hierarchy(adb_resident.narrow_to_active_window(_APP_ONLY)) == parse_hierarchy(
-        _APP_ONLY
-    )
+    assert _narrowed_elements(_APP_ONLY) == parse_hierarchy(_APP_ONLY)
+    assert adb_resident.narrowed_root(_APP_ONLY)[1] is False  # nothing to strip
 
 
-def test_narrow_returns_unparseable_input_unchanged() -> None:
-    # Garbage/mid-transition text is handed straight to parse_hierarchy, which yields [] as before —
-    # narrowing never masks a bad read.
-    assert adb_resident.narrow_to_active_window("null root node") == "null root node"
+def test_narrow_answers_no_tree_for_unparseable_input() -> None:
+    # Garbage/mid-transition text yields no tree, and the driver's empty-tree degrade applies as
+    # before — narrowing never masks a bad read.
+    assert adb_resident.narrowed_root("null root node") == (None, False)
 
 
 # A second non-SystemUI window (a permission dialog, say) — same shape as `_APP_WINDOW` but its own
@@ -101,8 +105,7 @@ def test_narrow_characterizes_two_simultaneous_non_systemui_windows() -> None:
         "<?xml version='1.0' encoding='UTF-8' standalone='yes' ?>\n"
         f'<hierarchy rotation="0">\n{_SYSTEMUI_WINDOW}\n{_APP_WINDOW}\n{_DIALOG_WINDOW}\n</hierarchy>'
     )
-    narrowed = adb_resident.narrow_to_active_window(multi)
-    els = parse_hierarchy(narrowed)
+    els = _narrowed_elements(multi)
     # SystemUI is gone, but both the app window and the dialog window remain — neither was chosen
     # over the other.
     assert any(e["identifier"] == "stable.submit" for e in els)
@@ -212,12 +215,13 @@ def _serve_act_tree(
     return server.server_port, server
 
 
-def _tap(port: int) -> ActOutcome:
+def _tap(port: int, *, keepalive: adb_resident.Keepalive | None = None) -> ActOutcome:
     return adb_resident.act(
         port,
         ActRequest(
             kind="tap", identity=("a", "", "", "C"), index=0, count=1, since=None, duration_ms=None
         ),
+        keepalive=keepalive,
     )
 
 
@@ -342,6 +346,9 @@ def test_a_kept_connection_carries_the_next_call_instead_of_reconnecting() -> No
         adb_resident.fetch_source(port, keepalive=keepalive)
         first = keepalive.conn
         assert first is not None
+        keepalive.last_success_at = (
+            None  # the idle ceiling has its own test; this one is reuse only
+        )
         adb_resident.fetch_clock(port, keepalive=keepalive)
         assert keepalive.conn is first  # the clock probe rode the read's connection
     finally:
@@ -351,9 +358,84 @@ def test_a_kept_connection_carries_the_next_call_instead_of_reconnecting() -> No
         server.shutdown()
 
 
+def test_a_connection_left_idle_too_long_is_reconnected_before_it_is_used() -> None:
+    # The peek narrows the race against the server's own 5s idle close but cannot close it, so a
+    # connection old enough for the peek to matter is retired outright. Without this ceiling, a
+    # gesture could be written onto a socket the server had already torn down — the ambiguous
+    # half-sent request the whole staleness discipline exists to avoid.
+    port, server = _serve_keepalive()
+    keepalive = adb_resident.Keepalive()
+    try:
+        adb_resident.fetch_source(port, keepalive=keepalive)
+        first = keepalive.conn
+        keepalive.last_success_at -= adb_resident._KEEPALIVE_IDLE_RECONNECT_S + 1  # type: ignore[operator]
+        adb_resident.fetch_source(port, keepalive=keepalive)
+        assert keepalive.conn is not first
+    finally:
+        keepalive.discard()
+        server.shutdown()
+
+
+def test_a_reused_connection_takes_this_calls_own_timeout() -> None:
+    # A read must not inherit an actuation's longer window, and — the damaging direction — an
+    # actuation must not inherit a read's shorter one, where a slow press-and-hold would time out and
+    # reach the driver as "may or may not have landed" on a gesture that was still in flight.
+    port, server = _serve_keepalive()
+    keepalive = adb_resident.Keepalive()
+    try:
+        adb_resident.fetch_source(port, timeout=5.0, keepalive=keepalive)
+        assert keepalive.conn is not None and keepalive.conn.sock is not None
+        assert keepalive.conn.sock.gettimeout() == 5.0
+        _tap(port, keepalive=keepalive)
+        assert keepalive.conn is not None and keepalive.conn.sock is not None
+        assert keepalive.conn.sock.gettimeout() == 10.0  # act's own, longer window
+    finally:
+        keepalive.discard()
+        server.shutdown()
+
+
+def test_a_gesture_the_channel_could_not_even_reach_degrades_rather_than_raising_a_socket_error() -> (
+    None
+):
+    # Connecting eagerly moved the connect out of `act`'s own `try`, and a raw `OSError` then escaped
+    # `_device_act`'s three-exception catch and failed the step — on the one fault class that is
+    # provably safe to fall back from, since nothing had been sent. The conversion belongs to the
+    # channel, so all three callers are covered by construction.
+    keepalive = adb_resident.Keepalive()
+    with socket.socket() as probe:  # a port nothing is listening on
+        probe.bind(("127.0.0.1", 0))
+        dead = probe.getsockname()[1]
+    with pytest.raises(AdbResidentError):
+        _tap(dead, keepalive=keepalive)
+    with pytest.raises(AdbResidentError):
+        adb_resident.fetch_source(dead, keepalive=keepalive)
+    assert adb_resident.fetch_clock(dead, keepalive=keepalive) is None
+
+
+def test_a_stale_reply_keeps_the_connection_while_a_lost_one_retires_it() -> None:
+    # A `409` is a complete exchange and leaves the socket good; a reply that never arrived leaves it
+    # in an unknown state, and reusing it would let the next call parse whatever is left as its own
+    # answer — for a gesture, a previous exchange's confirmation.
+    port, server = _serve_keepalive()
+    keepalive = adb_resident.Keepalive()
+    try:
+        _SourceHandler.act_status = 409
+        _tap(port, keepalive=keepalive)
+        assert keepalive.conn is not None  # the exchange completed; the connection is still good
+        _SourceHandler.act_drop_reply = True
+        with pytest.raises(AdbActUncertain):
+            _tap(port, keepalive=keepalive)
+        assert keepalive.conn is None
+    finally:
+        _SourceHandler.act_status = 200
+        _SourceHandler.act_drop_reply = False
+        keepalive.discard()
+        server.shutdown()
+
+
 def test_a_peer_that_hung_up_is_reconnected_rather_than_written_to() -> None:
     # The server's own idle ceiling can close a kept connection with nothing on this side to notice.
-    # A zero-timeout peek answers that *before* any byte of the next request is sent, so the ordinary
+    # A zero-timeout `select` answers that *before* any byte of the next request is sent, so the ordinary
     # idle close reconnects cleanly instead of surfacing as a half-sent request whose delivery is
     # ambiguous — the distinction `act` cannot guess through, since a re-sent gesture is a second touch.
     port, server = _serve_once()  # HTTP/1.0: hangs up after every reply, like an idle-closing peer
@@ -537,10 +619,12 @@ class _FakeProc:
 
 
 def _apks(tmp_path: Path) -> tuple[Path, Path]:
+    """The two APK paths, created once. Existing content is left alone so a test can rebuild one."""
     server_apk = tmp_path / "server-debug.apk"
     test_apk = tmp_path / "server-debug-androidTest.apk"
-    server_apk.write_bytes(b"apk")
-    test_apk.write_bytes(b"apk")
+    for apk in (server_apk, test_apk):
+        if not apk.exists():
+            apk.write_bytes(b"apk")
     return server_apk, test_apk
 
 
@@ -589,6 +673,83 @@ def test_a_second_lease_reuses_the_apk_pair_this_run_already_installed(tmp_path:
     second: list[list[str]] = []
     _install_server(tmp_path, second, installed).start()
     assert _installs(second) == []
+
+
+def test_a_rebuilt_apk_is_installed_again(tmp_path: Path) -> None:
+    # The digests are the whole safety argument for the skip — identical bytes cannot be signed
+    # differently — so a record keyed on anything weaker (the paths, say) would let a rebuilt server
+    # be skipped and leave the device running the previous build for the rest of the run.
+    installed: dict[str, tuple[str, str]] = {}
+    _install_server(tmp_path, [], installed).start()
+    (tmp_path / "server-debug.apk").write_bytes(b"a different build")
+    calls: list[list[str]] = []
+    _install_server(tmp_path, calls, installed).start()
+    assert len(_installs(calls)) == 4
+
+
+def test_the_record_is_kept_per_device_not_per_run(tmp_path: Path) -> None:
+    # A record that ignored the serial would skip the install on a device that never received the
+    # pair, and the lease would then fail on a `/act` the server there does not serve — the confusing
+    # half of this channel's failure modes.
+    installed: dict[str, tuple[str, str]] = {}
+    _install_server(tmp_path, [], installed).start()
+    calls: list[list[str]] = []
+    other = _install_server(tmp_path, calls, installed)
+    other._serial = "OTHERDEVICE"  # the same run, a second device in the lane
+    other.start()
+    assert len(_installs(calls)) == 4
+
+
+def test_one_missing_package_is_enough_to_reinstall(tmp_path: Path) -> None:
+    # Both packages are checked, not just the first: the instrumentation APK alone going missing
+    # leaves a server that answers nothing, which is exactly what the check exists to catch.
+    installed: dict[str, tuple[str, str]] = {}
+    _install_server(tmp_path, [], installed).start()
+    calls: list[list[str]] = []
+    server_apk, test_apk = _apks(tmp_path)
+
+    def run(args: list[str]) -> str:
+        calls.append(args)
+        if "path" in args:
+            return "" if adb.RESIDENT_TEST_PACKAGE in args else "package:/data/app/server.apk\n"
+        return "41000\n" if "forward" in args and "--remove" not in args else ""
+
+    adb_resident.ResidentServer(
+        "U",
+        run=run,
+        spawn=lambda argv: _FakeProc(),
+        fetch=lambda port, _since: HierarchyRead(_APP_ONLY),
+        server_apk=server_apk,
+        test_apk=test_apk,
+        installed=installed,
+    ).start()
+    assert len(_installs(calls)) == 4
+
+
+def test_a_pm_path_answer_that_is_not_a_package_line_reinstalls(tmp_path: Path) -> None:
+    # "Non-empty output" is not "installed": an adb error line or a `pm` diagnostic would otherwise
+    # read as a present package and skip an install the device needs.
+    installed: dict[str, tuple[str, str]] = {}
+    _install_server(tmp_path, [], installed).start()
+    calls: list[list[str]] = []
+    server_apk, test_apk = _apks(tmp_path)
+
+    def run(args: list[str]) -> str:
+        calls.append(args)
+        if "path" in args:
+            return "error: device offline\n"
+        return "41000\n" if "forward" in args and "--remove" not in args else ""
+
+    adb_resident.ResidentServer(
+        "U",
+        run=run,
+        spawn=lambda argv: _FakeProc(),
+        fetch=lambda port, _since: HierarchyRead(_APP_ONLY),
+        server_apk=server_apk,
+        test_apk=test_apk,
+        installed=installed,
+    ).start()
+    assert len(_installs(calls)) == 4
 
 
 def test_a_package_removed_out_of_band_is_installed_again(tmp_path: Path) -> None:
@@ -707,6 +868,38 @@ def test_start_returned_fetch_carries_no_raw_body_when_narrowing_is_a_no_op(
     )
     channel = srv.start()
     assert channel.fetch(None).narrowed is False
+
+
+def _channel_with_act(tmp_path: Path, *, native_z: bool) -> adb_resident.ResidentChannel:
+    server_apk, test_apk = _apks(tmp_path)
+    carried = HierarchyRead(_APP_ONLY, 98765.0, root=adb_resident.narrowed_root(_APP_ONLY)[0])
+    return adb_resident.ResidentServer(
+        "U",
+        run=lambda args: "41000\n" if "forward" in args and "--remove" not in args else "",
+        spawn=lambda argv: _FakeProc(),
+        fetch=lambda port, _since: HierarchyRead(_APP_ONLY),
+        act_probe=lambda port, request: ActOutcome(
+            acted=True, published_mark=98765.0, read=carried
+        ),
+        server_apk=server_apk,
+        test_apk=test_apk,
+        native_z=native_z,
+    ).start()
+
+
+def test_a_native_z_target_reads_for_itself_rather_than_taking_a_gestures_tree(
+    tmp_path: Path,
+) -> None:
+    # BE-0407 unit 19's saved round trip is given up on a target that asked for `nativeZ` (unit 18).
+    # `/act`'s reply carries no `nativeZ` header, so a tree seeded from it would report every
+    # element's position as absent — indistinguishable from an app that opted no view in, which is
+    # the one confusion BE-0355 works hardest to avoid.
+    assert _channel_with_act(tmp_path, native_z=True).act(_act_request()).read is None
+
+
+def test_a_target_that_did_not_ask_for_native_z_keeps_the_gestures_tree(tmp_path: Path) -> None:
+    # The counterpart: with no `nativeZ` reading to lose, the tree stands in for the next read.
+    assert _channel_with_act(tmp_path, native_z=False).act(_act_request()).read is not None
 
 
 def test_fetch_fault_stops_the_server_before_it_propagates(tmp_path: Path) -> None:

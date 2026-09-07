@@ -151,8 +151,9 @@ class ActOutcome:
     # The tree the device dumped after that publish, when it confirmed one (BE-0407 unit 19). Carried
     # only alongside a confirmation, because that confirmation is exactly what makes it safe: an
     # event postdates the injection, so this dump cannot describe the pre-gesture screen. None
-    # otherwise — an unconfirmed gesture, an older server — and the driver then reads for itself, as
-    # it always did.
+    # None otherwise: an unconfirmed gesture, an older server, and a target that asked for `nativeZ`
+    # (whose reading this reply cannot carry, so the driver reads for itself rather than report every
+    # element's position as absent).
     read: HierarchyRead | None = None
 
 
@@ -382,7 +383,7 @@ def _native_z_key(node: ET.Element, occurrence: int) -> str:
     window while the body spans every window — and cannot key them by identity either, since the
     four accessibility fields `_identity` uses are deliberately not unique. Both sides walk the same
     accessibility tree depth-first, so the occurrence count agrees, *scoped to the active window*:
-    `narrow_to_active_window` drops SystemUI's own windows from the body before this key is computed,
+    `narrowed_root` drops SystemUI's own windows from the tree before this key is computed,
     but not a second window of the app under test itself (a dialog over its own main window). Two
     opted-in nodes sharing bounds, class, and package across the app's own windows would shift each
     other's occurrence count and could match onto the wrong one — narrower than the false-authority
@@ -403,7 +404,7 @@ def _elements_from_nodes(
 ) -> list[base.Element]:
     """`_to_element` over every node, warning once for the parse if any `bounds` was malformed.
 
-    The one place both `parse_hierarchy` and `parse_hierarchy_with_identities` build their `Element`
+    The one place both `parse_hierarchy` and `elements_with_identities` build their `Element`
     list, so the malformed-bounds tally and its warning are counted and logged once, not duplicated at
     each call site — and the one place a device-measured `nativeZ` is matched onto the node it belongs
     to (BE-0355).
@@ -437,13 +438,6 @@ def elements_with_identities(
         return [], []
     nodes = list(root.iter("node"))
     return _elements_from_nodes(nodes, native_z), [_identity(n) for n in nodes]
-
-
-def parse_hierarchy_with_identities(
-    text: str, native_z: Mapping[str, float] | None = None
-) -> tuple[list[base.Element], list[NodeIdentity]]:
-    """`parse_hierarchy`, plus each element's device-addressable identity, index-aligned."""
-    return elements_with_identities(slice_hierarchy_root(text), native_z)
 
 
 def slice_hierarchy_root(text: str) -> ET.Element | None:
@@ -645,6 +639,8 @@ class AdbDriver(CoordinateTreeDriver):
         # Latches the first mark-less resident read (see `_read_source`), so a channel that serves
         # hierarchies without the read-mark header says so once rather than degrading invisibly.
         self._mark_warned = False
+        # Ditto for a `/act` reply whose two marks contradict each other (see `_seed_from_act`).
+        self._seed_mark_warned = False
         # Lazily resolved once for the sendevent double-tap path (BE-0208): whether adbd is root and
         # which node is the touchscreen. `_touch_probed` distinguishes "not yet looked" from "looked,
         # found nothing" so a device with no touchscreen is not re-probed on every double-tap.
@@ -741,28 +737,60 @@ class AdbDriver(CoordinateTreeDriver):
 
         Everything `_describe` does for a read of its own, minus the round trip: the identity map the
         next gesture counts peers against, the raw-dump record the `rawTree` capture reads, and the
-        stable-key bookkeeping `_record_tree` keeps. `_settled_key` is set too, because the device
-        proved rest the same way `_settle`'s own poll does — two agreeing dumps, or no accessibility
-        event at all between them, which is the stronger answer — so the next `_settle` needs neither
-        the seeded read nor a poll.
+        stable-key bookkeeping `_record_tree` keeps.
+
+        What it deliberately does *not* set is `_settled_key`. The device's own settle is bounded by
+        a read count (`SETTLE_DUMPS`), and on expiry it returns the last, still-tearing dump with
+        nothing on the wire to say so — so treating it as proof of rest would let `_settle` take its
+        fast path and perform no confirming read at all, on a screen that may still be animating.
+        That is the same trap `_advance_catchup` refuses when a barrier closes on a device mark, and
+        the one `_SETTLE_DEADLINE_S` is wall-clock rather than count-based to avoid. The round trip
+        is still saved: `_settle`'s poll consumes the seed as its first read instead of skipping the
+        poll.
 
         The mark is re-checked here rather than taken on trust: the reply already had to carry a
         publish confirmation to get this far, and requiring the tree's own mark to postdate the
         gesture too means a server that mislabelled one header cannot seed a pre-gesture screen.
+
+        A degenerate tree is refused for a different reason. `_read_settled_tree`'s transient-empty
+        retry rides out the mid-transition dump this device is known to produce, and a seeded tree
+        reaches `query()` without passing through it — so a sparse reply would be handed to a
+        selector that the retry would have saved. Refusing it costs the round trip this unit saves
+        and nothing else: the driver simply reads, with the retry, as it did before.
         """
-        if read is None or read.mark is None or (mark is not None and read.mark <= mark):
+        if read is None or read.mark is None:
+            return  # the ordinary absence: an older server, or a gesture it could not confirm
+        if mark is not None and read.mark <= mark:
+            # Not ordinary at all: the reply confirmed a publish *and* carried a tree whose own mark
+            # does not postdate the gesture, so the server's two marks disagree. Silence would leave
+            # this guard indistinguishable from dead code while it fired on every gesture of a lease.
+            if not self._seed_mark_warned:
+                self._seed_mark_warned = True
+                logger.warning(
+                    "resident actuation confirmed a publish but its tree's read mark (%.0f) does "
+                    "not postdate the gesture (%.0f); reading instead of seeding",
+                    read.mark,
+                    mark,
+                )
+            return
+        root = read.root if read.root is not None else slice_hierarchy_root(read.text)
+        # `read.native_z`, not `self._native_z`: the reply's own measurements belong to the reply's
+        # own tree, and this runs before the driver adopts them.
+        els, identities = elements_with_identities(root, read.native_z)
+        # `not els` as well as the transient test, which needs a richer tree to have been seen
+        # first: an empty seed would answer a selector with nothing at all, and the read it
+        # replaced would have retried.
+        if not els or self._is_transient_empty(els):
+            logger.debug("device reply carried a degenerate tree; reading again instead of seeding")
             return
         self._read_mark = read.mark
         self._native_z = read.native_z
         self._raw_reply = read.text
         self._parsed_root = read.root if read.narrowed else None
-        root = read.root if read.root is not None else slice_hierarchy_root(read.text)
-        els, identities = elements_with_identities(root, self._native_z)
         self._identities = {id(el): ident for el, ident in zip(els, identities, strict=True)}
         self._last_tree = els
         self._record_tree(els)
         self._seeded_tree = els
-        self._settled_key = self._last_stable_key
 
     def _describe(self) -> list[base.Element]:
         # `_read_source` refreshes `_native_z` for this read, so it is read after, never before.
