@@ -309,8 +309,8 @@ Log:
   with it.
 
   Running the script against real code found eight defects in it. Each one got a regression test
-  before the batch it blocked. A self-review pass over the finished diff found seven more, listed
-  after these.
+  before the batch it blocked. Three rounds of self-review over the finished diff found eleven
+  more, listed after these.
 
   - Tuple-unpacking assignment targets were invisible, so nothing imported the names they bind.
   - Python Enhancement Proposal 695 (PEP 695) type-parameter bounds went unread.
@@ -318,8 +318,8 @@ Log:
   - A class-body field sharing a sibling's name read as a reference to that sibling.
   - A name an inner `import` binds counted as a read.
   - Module-level code derived from its own owner came out above that owner.
-  - Reads merged per declaration, not per target file. Only a module's last
-    function then counted as an owner.
+  - Reads merged per declaration, not per target file. A module's last function
+    was then the sole one counted as an owner.
 
   Two rules changed shape under real code. Deferring an annotation-only
   sibling under `TYPE_CHECKING` breaks Pydantic. Pydantic resolves
@@ -344,22 +344,27 @@ Log:
   `test_spawn_cold_discards_a_never_ready_runner` waiting out its real 120
   seconds on every run of the gate. It now takes a quarter of a second.
 
-  The self-review found seven further defects of one kind. The script produced a
-  wrong-but-plausible package and reported success.
+  Three rounds of self-review found eleven further defects of one kind. The script
+  produced a wrong-but-plausible package and reported success.
 
   - It wrote an unbreakable cycle to disk under a note.
   - It read a `Literal["Beta"]` string as a forward reference.
   - It brought a sibling back as a module-level import that a method already
-    imported for itself, restoring the cycle a hand-applied rule 5 had broken.
-  - It re-exported a `global`-rebound name by value, so the package attribute
-    froze at import while the real binding moved on. That is what had made one
+    imported for itself. That restored a cycle rule 5 had broken by hand.
+  - It re-exported a `global`-rebound name by value. The package attribute then
+    froze at import while the real binding moved on, which is what had made one
     usage-ledger assertion unconditionally true.
+  - It pruned a method's local import file-wide. The module-level statement beside
+    it then lost the header import it still read.
+  - It read every subscript as annotation context. A runtime read inside one was
+    then free to move under `TYPE_CHECKING`, where the name resolves to nothing.
 
-  Each of the seven is a refusal or a fix now. The tidy-up step, the delete step,
+  Each of the eleven is a refusal or a fix now. The tidy-up step, the delete step,
   and the batch loop each report a fault rather than an exit code of zero. The
-  suite grew from 41 tests to 75. It now writes three representative plans into
-  real packages, imports them, and lints them. That is the script's actual
-  contract, which every other assertion had stood in for.
+  suite grew from 41 tests to 94, at 92 percent branch coverage of the script. It
+  now writes three representative plans into real packages, imports them, and
+  lints them. That is the script's actual contract, which every other assertion
+  had stood in for.
 
   `make check` is green, and total coverage measures 94.71 percent across
   the suite. The test-side split is the one part of the design left
