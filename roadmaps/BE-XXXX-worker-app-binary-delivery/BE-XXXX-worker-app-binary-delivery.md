@@ -9,7 +9,7 @@
 | Author | [@paihu](https://github.com/paihu) |
 | Status | **Implemented** |
 | Tracking issue | [Search](https://github.com/bajutsu-e2e/bajutsu/issues?q=is%3Aissue+label%3Aroadmap-tracking+in%3Atitle+"BE-XXXX") |
-| Implementing PR | _pending — filled in once the PR is opened_ |
+| Implementing PR | [#1933](https://github.com/bajutsu-e2e/bajutsu/pull/1933) |
 | Topic | Hosting the web UI |
 <!-- /BE-METADATA -->
 

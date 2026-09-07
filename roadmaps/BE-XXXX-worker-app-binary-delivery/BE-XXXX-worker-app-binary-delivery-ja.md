@@ -9,7 +9,7 @@
 | 提案者 | [@paihu](https://github.com/paihu) |
 | 状態 | **実装済み** |
 | トラッキング Issue | [検索](https://github.com/bajutsu-e2e/bajutsu/issues?q=is%3Aissue+label%3Aroadmap-tracking+in%3Atitle+"BE-XXXX") |
-| 実装 PR | _PR を開いた時点で記入_ |
+| 実装 PR | [#1933](https://github.com/bajutsu-e2e/bajutsu/pull/1933) |
 | トピック | Web UI のホスティング |
 <!-- /BE-METADATA -->
 
