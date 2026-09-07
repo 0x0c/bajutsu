@@ -309,7 +309,8 @@ Log:
   with it.
 
   Running the script against real code found eight defects in it. Each one got a regression test
-  before the batch it blocked.
+  before the batch it blocked. A self-review pass over the finished diff found seven more, listed
+  after these.
 
   - Tuple-unpacking assignment targets were invisible, so nothing imported the names they bind.
   - Python Enhancement Proposal 695 (PEP 695) type-parameter bounds went unread.
@@ -317,13 +318,13 @@ Log:
   - A class-body field sharing a sibling's name read as a reference to that sibling.
   - A name an inner `import` binds counted as a read.
   - Module-level code derived from its own owner came out above that owner.
-  - Reads merged per declaration, not per target file, so a module's last
-    function was the sole one counted as an owner.
+  - Reads merged per declaration, not per target file. Only a module's last
+    function then counted as an owner.
 
   Two rules changed shape under real code. Deferring an annotation-only
   sibling under `TYPE_CHECKING` breaks Pydantic. Pydantic resolves
   annotations at run time. A sibling import is now a runtime import by
-  default, and a cycle is what defers one. Rule 4's no-single-owner case
+  default, and a cycle is what defers it. Rule 4's no-single-owner case
   splits in two. Code that binds nothing runs at the end of
   `__init__.py`, where this item's design puts it. Code that binds a name
   goes to a `_shared.py` instead, because `__init__.py` re-exports the
@@ -335,15 +336,35 @@ Log:
   Fifteen new cycles took rule 5's in-method import by hand, each on its
   single edge.
 
-  Thirty-nine `monkeypatch` targets across the suite now name the module that owns the binding.
-  Most were the quiet kind this item's design predicts. A retry test would have slept for real. A
+  Forty-two `monkeypatch` targets across the suite now name the module that owns the binding. Most
+  were the quiet kind this item's design predicts. A retry test would have slept for real. A
   cache-hit test asserting a call is *not* made would have passed vacuously. So would every
-  rejection test that lowers an upload cap.
+  rejection test that lowers an upload cap. One cost more than correctness. A
+  cold-startup ceiling the patch no longer reached left
+  `test_spawn_cold_discards_a_never_ready_runner` waiting out its real 120
+  seconds on every run of the gate. It now takes a quarter of a second.
+
+  The self-review found seven further defects of one kind. The script produced a
+  wrong-but-plausible package and reported success.
+
+  - It wrote an unbreakable cycle to disk under a note.
+  - It read a `Literal["Beta"]` string as a forward reference.
+  - It brought a sibling back as a module-level import that a method already
+    imported for itself, restoring the cycle a hand-applied rule 5 had broken.
+  - It re-exported a `global`-rebound name by value, so the package attribute
+    froze at import while the real binding moved on. That is what had made one
+    usage-ledger assertion unconditionally true.
+
+  Each of the seven is a refusal or a fix now. The tidy-up step, the delete step,
+  and the batch loop each report a fault rather than an exit code of zero. The
+  suite grew from 41 tests to 75. It now writes three representative plans into
+  real packages, imports them, and lints them. That is the script's actual
+  contract, which every other assertion had stood in for.
 
   `make check` is green, and total coverage measures 94.71 percent across
   the suite. The test-side split is the one part of the design left
-  undone. These test files group their cases by function, not by source
-  class, and rule 2 already keeps a module's functions together.
+  undone. These test files group their cases by function, not by source class.
+  Rule 2 already keeps a module's functions together.
   Splitting them per class would re-partition the suite rather than
   mirror the source.
 
