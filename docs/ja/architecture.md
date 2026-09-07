@@ -152,7 +152,7 @@ flowchart TB
     record["record.py / crawl/<br/>（Tier 1 / AI）"]
     codegen["codegen/<br/>（構造マッピング）"]
     trace["trace.py<br/>（タイムライン）"]
-    triage["triage.py / agents/claude_triage.py<br/>（自己修復・助言）"]
+    triage["triage.py / agents/claude_triage<br/>（自己修復・助言）"]
 
     orch["orchestrator/"]
     agentStuff["agents/<br/>（protocols・factory・claude・alerts 等）"]
@@ -371,7 +371,7 @@ iOS 側の対になるジョブ `pool (xcuitest)` は、Simulator を 2 台起�
 - config 解決（defaults × targets、redact マージ）と actuator 選択
 - `simctl` コマンド層、XCUITest のオートメーションスナップショットのパーサ、`doctor` スコア + バックエンド別の実行可能ゲート（`preflight.py`: iOS は必須 CLI + 起動済みシミュレータ、web は Playwright とその Chromium ブラウザ）
 - `trace` コマンド（`trace.py`）: 保存済み run のテキストタイムライン（steps + network + appTrace）
-- M4 自己修復トリアージ（`triage/heuristic` + `agents/claude_triage.py`）: 失敗 run のコンテキスト組み立て + `TriageAgent` 診断（ルールベース `HeuristicTriageAgent`、または `--ai` の Claude で失敗スクリーンショット込み）。エージェントは構造化 fix（`renameId` / `addIndex` / `raiseTimeout`）を提案でき、`--apply`/`--write` でシナリオ source に適用（diff プレビュー、opt-in）、`--rerun` で再実行検証
+- M4 自己修復トリアージ（`triage/heuristic` + `agents/claude_triage`）: 失敗 run のコンテキスト組み立て + `TriageAgent` 診断（ルールベース `HeuristicTriageAgent`、または `--ai` の Claude で失敗スクリーンショット込み）。エージェントは構造化 fix（`renameId` / `addIndex` / `raiseTimeout`）を提案でき、`--apply`/`--write` でシナリオ source に適用（diff プレビュー、opt-in）、`--rerun` で再実行検証
 
 #### CLI、`serve`、codegen
 

@@ -116,11 +116,11 @@ def test_non_run_path_top_level_modules_are_not_relevant() -> None:
     # unclassified module would fire (that is the point). (PR #936, a serve-only change, wrongly fired
     # all four before the periphery was carved out.)
     for module in (
-        "bajutsu/analysis/stats.py",
-        "bajutsu/analysis/audit.py",
-        "bajutsu/analysis/coverage.py",
+        "bajutsu/analysis/stats/stats.py",
+        "bajutsu/analysis/audit/audit_report.py",
+        "bajutsu/analysis/coverage/coverage.py",
         "bajutsu/common/analytics/stats.py",
-        "bajutsu/common/agents/alerts.py",
+        "bajutsu/common/agents/alerts/alert_locator.py",
         "bajutsu/common/github/actions.py",
         # The crawl engine core/serialize/__init__ trigger (above), but the periphery siblings in the
         # same package do not — the on-device run never imports them, so `crawl/**` must not be swept

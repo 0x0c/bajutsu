@@ -140,7 +140,7 @@ _PERIPHERY_EXCLUSIONS: tuple[tuple[str, str], ...] = (
         "the `bajutsu trace` diagnostic — it inspects a past run, it is never part of one",
     ),
     # common/agents/: record imports the Agent / EnrichmentAgent *protocols*
-    # (`common/agents/protocols.py`, swept in below), but a run drives no live agent, so the concrete
+    # (`common/agents/protocols`, swept in below), but a run drives no live agent, so the concrete
     # implementations stay out. The factory entry restates the former
     # `test_agent_factory_is_not_relevant_by_parity` (BE-0333 Unit 3).
     (
@@ -152,7 +152,7 @@ _PERIPHERY_EXCLUSIONS: tuple[tuple[str, str], ...] = (
         "AI model / credential configuration, an authoring-path concern",
     ),
     (
-        "bajutsu/common/agents/alerts.py",
+        "bajutsu/common/agents/alerts/",
         "serve-side alerting over a run's results, not part of the run",
     ),
     (
@@ -164,7 +164,7 @@ _PERIPHERY_EXCLUSIONS: tuple[tuple[str, str], ...] = (
         "the AI-credential probe doctor's AI half reports; the E2E doctor gate reads only its environment section",
     ),
     (
-        "bajutsu/common/agents/claude.py",
+        "bajutsu/common/agents/claude/",
         "a concrete Claude agent implementation, an authoring / record-proposal path",
     ),
     (
@@ -176,7 +176,7 @@ _PERIPHERY_EXCLUSIONS: tuple[tuple[str, str], ...] = (
         "Claude-backed evidence enrichment, a post-run authoring path",
     ),
     (
-        "bajutsu/common/agents/claude_triage.py",
+        "bajutsu/common/agents/claude_triage/",
         "Claude-backed triage, a diagnosis path off the run",
     ),
     ("bajutsu/common/agents/enrich.py", "the enrichment-agent surface a run never invokes"),

@@ -155,7 +155,7 @@ flowchart TB
     record["record.py / crawl/<br/>(Tier 1 / AI)"]
     codegen["codegen/<br/>(structural)"]
     trace["trace.py<br/>(timeline)"]
-    triage["triage.py / agents/claude_triage.py<br/>(self-heal · advisory)"]
+    triage["triage.py / agents/claude_triage<br/>(self-heal · advisory)"]
 
     orch["orchestrator/"]
     agentStuff["agents/<br/>(protocols · factory · claude · alerts · …)"]
@@ -816,7 +816,7 @@ Android; on iOS it rests on the fast suite's bookkeeping proof alone.
   gate (`preflight.py`: iOS needs the required CLIs + a booted Simulator; web needs Playwright + its
   Chromium browser)
 - The `trace` command (`trace.py`): a text timeline over a saved run (steps + network + appTrace)
-- M4 self-healing triage (`triage/heuristic` + `agents/claude_triage.py`): assemble a failed run's context +
+- M4 self-healing triage (`triage/heuristic` + `agents/claude_triage`): assemble a failed run's context +
   a `TriageAgent` diagnosis (rule-based `HeuristicTriageAgent`, or `--ai` Claude with the failure
   screenshot). An agent can propose a structured fix (`renameId` / `addIndex` / `raiseTimeout`);
   `--apply`/`--write` patches the scenario source (diff-previewed, opt-in) and `--rerun` re-runs it

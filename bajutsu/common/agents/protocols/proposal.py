@@ -1,38 +1,16 @@
-"""Authoring agent abstraction (Tier 1).
-
-The agent proposes the next action from an observation. The record loop executes
-proposals to advance the app and writes out a deterministic scenario. Keeping the
-agent behind a protocol lets the loop be tested with a scripted fake; the Claude
-implementation lives in agents/claude.py.
-"""
+"""An authoring agent's next move — a batch of actions, done, or a request for a human."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Literal, Protocol
+from typing import Literal
 
-from bajutsu.common.drivers import base
-from bajutsu.common.scenario import Assertion, Scenario, Selector, Step
+from bajutsu.common.scenario import Assertion, Selector, Step
 
 # How a human-supplied value (BE-0182) is resolved deterministically at run time: a `totp` / `email`
 # step (BE-0046) that produces a `${vars.*}`, or a declared `${secrets.*}`. The agent *proposes* one
 # (authoring, not judging); the author confirms and wires it.
 HumanValueClass = Literal["totp", "email", "secret"]
-
-
-@dataclass
-class Observation:
-    """What the agent sees one turn: the goal, the current screen, and history so far."""
-
-    goal: str
-    screen: list[base.Element]
-    history: list[Step]
-    screenshot: bytes | None = None  # PNG bytes of the current screen, for vision
-    plan: list[str] = field(default_factory=list)  # the goal decomposed into ordered concrete steps
-    # Whether this session can ever supply a screenshot (BE-0192). False in `--no-screenshot` mode,
-    # where vision is off for every turn — so the agent must not be nudged to escalate for one it
-    # can never get. When True, a `screenshot is None` turn is merely on-demand-skipped, not blind.
-    vision_available: bool = True
 
 
 @dataclass
@@ -86,51 +64,3 @@ class Proposal:
     def step(self) -> Step | None:
         """The first proposed step, or None — a convenience for single-action callers."""
         return self.steps[0] if self.steps else None
-
-
-class Agent(Protocol):
-    """The authoring agent: proposes the next action from an observation."""
-
-    def next_action(self, observation: Observation) -> Proposal: ...
-
-    def plan(self, goal: str) -> list[str]:
-        """Decompose `goal` into an ordered list of concrete, human-readable steps.
-
-        Called once before the record loop starts so the procedure can be explained to
-        the watcher and fed back to the agent each turn (via `Observation.plan`). Optional:
-        the loop treats a missing `plan` (or one that returns []) as "no up-front plan".
-        """
-        ...
-
-
-# ---------------------------------------------------------------------------
-# Enrichment (BE-0014)
-# ---------------------------------------------------------------------------
-
-
-@dataclass
-class StepContext:
-    """What the enrichment agent sees for one replayed step: the step and the screen after it."""
-
-    step: Step
-    screen: list[base.Element]
-    screenshot: bytes | None = None
-
-
-@dataclass
-class EnrichmentProposal:
-    """The agent's proposed assertions for an existing scenario."""
-
-    expect: list[Assertion] = field(default_factory=list)
-    settle: Step | None = None
-    note: str = ""
-
-
-class EnrichmentAgent(Protocol):
-    """Proposes assertions for a scenario whose steps have already been replayed."""
-
-    def propose_assertions(
-        self,
-        scenario: Scenario,
-        step_contexts: list[StepContext],
-    ) -> EnrichmentProposal: ...
