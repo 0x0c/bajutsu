@@ -118,8 +118,10 @@ property the control plane's own extraction cache has, on the machine that runs 
 `docs/self-hosting.md` says to prune `.bundles/` rather than adding a policy this item cannot size.
 And a bundle's run no longer downloads the org's stored baselines, since the bundle ships its own;
 a deployment that approves baselines through serve and also uploads bundles will see visual
-assertions start comparing against the bundle's `baselines/` instead. `_get_file` streams to disk instead of reading the whole response
-into memory. An app binary dwarfs the baseline images that helper first served.
+assertions start comparing against the bundle's `baselines/` instead.
+
+`_get_file` streams to disk instead of reading the whole response into memory. An app binary dwarfs
+the baseline images that helper first served.
 
 A bundle also ships its own baselines, and the dispatcher must stop materializing the org's stored
 ones over them. `_download_baselines` clears its destination directory first, so with the workspace
