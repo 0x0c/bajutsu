@@ -580,3 +580,31 @@ def test_a_quoted_forward_reference_in_a_type_alias_is_read_as_a_name() -> None:
         """
     )
     assert "from .alpha import Alpha" in plan.files["_shared.py"]
+
+
+def test_an_entry_point_guard_becomes_the_packages_dunder_main() -> None:
+    # `python -m pkg` runs `__main__.py`, never `__init__.py`, so leaving the guard behind would
+    # take the entry point out silently — `bajutsu.common.provisioning.provision` is invoked that
+    # way by scripts/install.sh and by the web-e2e job.
+    plan = _plan(
+        """
+        class Alpha:
+            pass
+
+
+        class Beta:
+            pass
+
+
+        def main() -> int:
+            return 0
+
+
+        if __name__ == "__main__":
+            raise SystemExit(main())
+        """
+    )
+    main = plan.files["__main__.py"]
+    assert "from . import main" in main
+    assert 'if __name__ == "__main__":' in main
+    assert "__main__" not in plan.files["__init__.py"]

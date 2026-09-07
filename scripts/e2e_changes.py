@@ -218,7 +218,7 @@ _LANE_CLAIMED: tuple[str, ...] = (
     "bajutsu/common/platform_lifecycle/environments/web.py",
     "bajutsu/common/platform_lifecycle/environments/xcuitest/",
     "bajutsu/common/platform_lifecycle/environments/xcuitest_live.py",
-    "bajutsu/common/provisioning/provision.py",
+    "bajutsu/common/provisioning/provision/",
     "bajutsu/common/backend_cli/adb_resident/",
     "bajutsu/serve/",
     "bajutsu/templates/",
@@ -355,7 +355,7 @@ _LANE_PATHS: dict[str, str] = {
         # bajutsu.common.provisioning.provision --backend web` (BE-0304) to install Chromium for
         # real. Web-only: no other lane invokes it, and the lanes never run `scripts/install.sh`,
         # its other caller.
-        r"|bajutsu/common/provisioning/provision\.py$"
+        r"|bajutsu/common/provisioning/provision/"
         r"|bajutsu/record/cli\.py$"
         # The serve-UI dogfood (BE-0058) drives the served SPA, so the serve backend and its templates
         # are web-CI-relevant whenever they change, not only when the harness itself does.

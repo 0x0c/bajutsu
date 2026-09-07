@@ -248,6 +248,13 @@ def _filter_import(
     return node.with_changes(names=aliases)
 
 
+def _is_main_guard(node: cst.BaseStatement) -> bool:
+    """Whether this is the `if __name__ == "__main__":` entry point a package needs to keep."""
+    return isinstance(node, cst.If) and '__name__ == "__main__"' in cst.Module(
+        body=[]
+    ).code_for_node(node.test)
+
+
 def _is_type_checking_block(node: cst.BaseStatement) -> bool:
     return isinstance(node, cst.If) and "TYPE_CHECKING" in cst.Module(body=[]).code_for_node(
         node.test
@@ -293,6 +300,7 @@ class _Parsed:
     declarations: list[_Declaration] = field(default_factory=list)
     module_level: list[_ModuleLevel] = field(default_factory=list)
     dunder_all: list[str] | None = None
+    main_guard: cst.If | None = None
 
 
 def _target_names(target: cst.BaseExpression) -> list[str]:
@@ -350,6 +358,13 @@ def _parse(source: str) -> _Parsed:
                     name=statement.name.value, stem=stem, node=statement, is_class=is_class
                 )
             )
+            continue
+        if _is_main_guard(statement):
+            assert isinstance(statement, cst.If)
+            # `python -m pkg` runs `__main__.py`, never `__init__.py`, so the guard has to move
+            # there or the entry point disappears without a word — `scripts/install.sh` and the
+            # web-e2e job both invoke one this way.
+            parsed.main_guard = statement
             continue
         if _is_type_checking_block(statement):
             assert isinstance(statement, cst.If)
@@ -653,6 +668,18 @@ def _render_init(parsed: _Parsed, stems: dict[str, str]) -> str:
     return _render(body)
 
 
+def _render_main(parsed: _Parsed, stems: dict[str, str]) -> str:
+    """The package's `__main__.py`: the original entry-point guard, over package-level imports."""
+    assert parsed.main_guard is not None
+    reads = _references(parsed.main_guard)
+    imported = sorted(name for name in reads.all if name in stems)
+    body: list[_Statement] = []
+    if imported:
+        body.append(cst.parse_statement(f"from . import {', '.join(imported)}"))
+    body.append(parsed.main_guard.with_changes(leading_lines=[]))
+    return _render(body)
+
+
 @dataclass(frozen=True)
 class SplitPlan:
     """The files one split writes, and the placements a human still has to confirm."""
@@ -705,6 +732,8 @@ def plan_split(source: str, *, name: str = "<module>", allow_file_paths: bool = 
         for stem in reads_by_stem
     }
     files["__init__.py"] = _render_init(parsed, stems)
+    if parsed.main_guard is not None:
+        files["__main__.py"] = _render_main(parsed, stems)
     return SplitPlan(files=files, notes=tuple(notes + cycle_notes))
 
 

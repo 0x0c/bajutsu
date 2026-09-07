@@ -1,16 +1,4 @@
-"""Config-aware environment installer (BE-0164).
-
-Reads a project's effective config, resolves which backends its ``targets.*`` actually use and
-whether an AI provider is configured, and installs exactly the pip extras and external tools those
-need — not "every backend unconditionally" and not "everything". A local, developer-invoked bootstrap step:
-it never runs on a hosted or uploaded-config path (the boundary BE-0090 closed), runs before any
-scenario, and is never part of a pass/fail decision (prime directive #1).
-
-``plan`` is pure (config -> ``InstallPlan``) so it is unit-testable without touching the machine;
-``provision`` executes a plan idempotently, shelling out only for tools that are actually missing.
-Both read their facts from the one ``requirements`` mapping shared with ``preflight``, so a new
-backend plugs in there rather than forking this installer (prime directive #3).
-"""
+"""Plan and install what a backend needs, or report what the user must do by hand."""
 
 from __future__ import annotations
 
@@ -20,7 +8,6 @@ import shutil
 import subprocess
 import sys
 from collections.abc import Callable, Iterable, Iterator
-from dataclasses import dataclass
 from pathlib import Path
 
 from bajutsu.common.backends import resolve_actuators
@@ -28,6 +15,9 @@ from bajutsu.common.config import Config, load_config, resolve, web_engine
 from bajutsu.common.config_source import DEFAULT_CONFIG
 from bajutsu.common.provisioning import requirements
 from bajutsu.common.provisioning.requirements import Brew, Extra, Manual, Playwright, Tool
+
+from .install_plan import InstallPlan
+from .provision_report import ProvisionReport
 
 Which = Callable[[str], str | None]
 Runner = Callable[[list[str]], None]
@@ -41,30 +31,6 @@ def _run(cmd: list[str]) -> None:
 
 def _echo(msg: str) -> None:
     sys.stderr.write(f"{msg}\n")
-
-
-@dataclass(frozen=True)
-class InstallPlan:
-    """The extras and external tools a config resolves to needing.
-
-    ``tools`` may include Extra-backed entries (e.g. the web `playwright` package): those are covered
-    by the ``extras`` sync, so ``provision`` takes no separate action for them.
-    """
-
-    extras: tuple[str, ...]
-    tools: tuple[Tool, ...]
-
-    @property
-    def is_empty(self) -> bool:
-        return not self.extras and not self.tools
-
-
-@dataclass(frozen=True)
-class ProvisionReport:
-    """What an execution did: the commands it ran and the remedies it left for the user to do."""
-
-    ran: tuple[tuple[str, ...], ...]
-    manual: tuple[str, ...]
 
 
 def plan(config: Config, *, ai_configured: bool | None = None) -> InstallPlan:
@@ -239,7 +205,3 @@ def main(argv: list[str] | None = None) -> int:
     for note in report.manual:
         _echo(f"provision: needs manual action — {note}")
     return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())

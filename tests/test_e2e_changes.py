@@ -282,9 +282,9 @@ def test_provision_is_web_only() -> None:
     # `python -m bajutsu.common.provisioning.provision --backend web` to install Chromium for real
     # (BE-0304), so a provisioner change is web-relevant. No other lane invokes it: neither runs
     # `scripts/install.sh`, its only other caller.
-    assert is_relevant(["bajutsu/common/provisioning/provision.py"], "web") is True
-    assert is_relevant(["bajutsu/common/provisioning/provision.py"], "ios") is False
-    assert is_relevant(["bajutsu/common/provisioning/provision.py"], "android") is False
+    assert is_relevant(["bajutsu/common/provisioning/provision/_functions.py"], "web") is True
+    assert is_relevant(["bajutsu/common/provisioning/provision/_functions.py"], "ios") is False
+    assert is_relevant(["bajutsu/common/provisioning/provision/_functions.py"], "android") is False
 
 
 def test_serve_analytics_modules_are_relevant_on_no_lane_except_web_serve() -> None:
@@ -578,7 +578,7 @@ _RUN_ENTRYPOINTS = (
     "bajutsu/codegen/cli.py",
     "bajutsu/record/cli.py",
     "bajutsu/cli/commands/doctor.py",
-    "bajutsu/common/provisioning/provision.py",
+    "bajutsu/common/provisioning/provision/_functions.py",
     "tests/driver_conformance.py",
 )
 
