@@ -164,7 +164,7 @@ def test_an_excluded_shape_is_never_reserved() -> None:
     driver = _fake_with_alert("Allow")
 
     with patch(
-        "bajutsu.common.orchestrator.loop.system_alert_shapes",
+        "bajutsu.common.orchestrator.loop._step_runner.system_alert_shapes",
         return_value=(
             ResolvedAlertShape(
                 identifying_labels=frozenset({"Allow"}),

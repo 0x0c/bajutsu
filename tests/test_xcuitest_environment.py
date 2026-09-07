@@ -50,6 +50,12 @@ from bajutsu.common.platform_lifecycle.environments.xcuitest import (
     _spawn_cold_with_retry,
     _Spawned,
 )
+
+# `_allocate_port` is read from the environment module's own globals since BE-0411 split the
+# package, so the package's re-export is not what the spawn resolves.
+from bajutsu.common.platform_lifecycle.environments.xcuitest import (
+    xcuitest_environment as xcuitest_env_impl,
+)
 from bajutsu.common.scenario import Preconditions
 
 _DEVICE_UDID = "00008030-000A1B2C3D4E"  # a physical-device id shape (not a simctl UUID)
@@ -807,10 +813,10 @@ def test_respawn_uses_the_tighter_readiness_ceiling(
         seen.append(kwargs["timeout"])
         return original(*args, **kwargs)
 
-    # Patch the module-level name `_spawn_cold` resolves against (string target, so no second
-    # `import` of a module this file already imports names from).
+    # Patch the module-level name `_spawn_cold` resolves against — its own module's globals since
+    # BE-0411 split the package, not the package's re-export.
     monkeypatch.setattr(
-        "bajutsu.common.platform_lifecycle.environments.xcuitest._spawn_cold_with_retry", spy
+        "bajutsu.common.platform_lifecycle.environments.xcuitest.xcuitest_environment._spawn_cold_with_retry", spy
     )
 
     XcuitestEnvironment("xcuitest", "UDID", env_run=run, respawn=False).start(eff, Preconditions())
@@ -839,7 +845,7 @@ def test_in_place_respawn_uses_the_tighter_readiness_ceiling(
         return original(*args, **kwargs)
 
     monkeypatch.setattr(
-        "bajutsu.common.platform_lifecycle.environments.xcuitest._spawn_cold_with_retry", spy
+        "bajutsu.common.platform_lifecycle.environments.xcuitest.xcuitest_environment._spawn_cold_with_retry", spy
     )
 
     env = XcuitestEnvironment("xcuitest", "UDID", env_run=run)  # respawn=False: a first bring-up
@@ -870,7 +876,7 @@ def test_erase_forced_cold_spawn_keeps_the_full_ceiling(
         return original(*args, **kwargs)
 
     monkeypatch.setattr(
-        "bajutsu.common.platform_lifecycle.environments.xcuitest._spawn_cold_with_retry", spy
+        "bajutsu.common.platform_lifecycle.environments.xcuitest.xcuitest_environment._spawn_cold_with_retry", spy
     )
 
     env = XcuitestEnvironment("xcuitest", "UDID", env_run=run)
@@ -1214,7 +1220,7 @@ def test_result_bundle_path_is_cleared_before_the_spawn(
     monkeypatch.setenv(_RESULT_BUNDLE_ENV, str(bundles))
     _, _, run = _fake_toolchain(monkeypatch)
     env = XcuitestEnvironment("xcuitest", "UDID", env_run=run)
-    monkeypatch.setattr(xcuitest_env, "_allocate_port", lambda: 4242)
+    monkeypatch.setattr(xcuitest_env_impl, "_allocate_port", lambda: 4242)
     stale = bundles / "result-UDID-4242.xcresult"
     stale.mkdir(parents=True)
     (stale / "Info.plist").write_bytes(b"leftover")
@@ -1236,7 +1242,7 @@ def test_a_leftover_that_survives_the_clearing_degrades_to_no_bundles(
     monkeypatch.setenv(_RESULT_BUNDLE_ENV, str(bundles))
     popen_argvs, _, run = _fake_toolchain(monkeypatch)
     env = XcuitestEnvironment("xcuitest", "UDID", env_run=run)
-    monkeypatch.setattr(xcuitest_env, "_allocate_port", lambda: 4242)
+    monkeypatch.setattr(xcuitest_env_impl, "_allocate_port", lambda: 4242)
     bundles.mkdir(parents=True)
     (bundles / "result-UDID-4242.xcresult").write_text("not a directory")
 
@@ -1518,8 +1524,8 @@ def test_a_repeatable_cold_spawn_failure_fails_loudly_and_keeps_the_logs(
     # misleading "mid-run crash" warning (its reason is in the error), and both attempts' captured
     # logs are kept on disk as evidence past the 20-line tail (BE-0319 units 1/3/4).
     module = "bajutsu.common.platform_lifecycle.environments.xcuitest"
-    monkeypatch.setattr(f"{module}._RUNNER_STARTUP_TIMEOUT", 0.05)
-    monkeypatch.setattr(f"{module}._DEFAULT_RUNNER_LOG_DIR", tmp_path / "logs")
+    monkeypatch.setattr(f"{module}._functions._RUNNER_STARTUP_TIMEOUT", 0.05)
+    monkeypatch.setattr(f"{module}.xcuitest_environment._DEFAULT_RUNNER_LOG_DIR", tmp_path / "logs")
     monkeypatch.delenv("BAJUTSU_XCUITEST_RUNNER_LOG", raising=False)
 
     class _DeadProc:

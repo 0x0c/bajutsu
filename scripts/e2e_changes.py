@@ -214,9 +214,9 @@ _LANE_CLAIMED: tuple[str, ...] = (
     "bajutsu/common/drivers/playwright/",
     "bajutsu/common/drivers/xcuitest/",
     "bajutsu/common/drivers/xcuitest_live/",
-    "bajutsu/common/platform_lifecycle/environments/android.py",
+    "bajutsu/common/platform_lifecycle/environments/android/",
     "bajutsu/common/platform_lifecycle/environments/web.py",
-    "bajutsu/common/platform_lifecycle/environments/xcuitest.py",
+    "bajutsu/common/platform_lifecycle/environments/xcuitest/",
     "bajutsu/common/platform_lifecycle/environments/xcuitest_live.py",
     "bajutsu/common/provisioning/provision.py",
     "bajutsu/common/backend_cli/adb_resident/",
@@ -279,7 +279,8 @@ _LANE_PATHS: dict[str, str] = {
         r"|bajutsu/common/drivers/(?:xcuitest|xcuitest_live)/"
         # The XCUITest lifecycle environments (cold spawn, the warm resident lease, the BE-0292
         # bundled runner) — the iOS half of the `platform_lifecycle/` carve-out above.
-        r"|bajutsu/common/platform_lifecycle/environments/(?:xcuitest|xcuitest_live)\.py$"
+        r"|bajutsu/common/platform_lifecycle/environments/xcuitest/"
+        r"|bajutsu/common/platform_lifecycle/environments/xcuitest_live\.py$"
         r"|bajutsu/record/cli\.py$"
         r"|tests/test_driver_conformance_ondevice\.py$"
         r"|tests/test_fault_injection_ondevice\.py$"
@@ -323,7 +324,7 @@ _LANE_PATHS: dict[str, str] = {
         r"|bajutsu/common/backend_cli/adb_resident/"
         # The Android lifecycle environment (boot, install, the BE-0236 provision profile) — the
         # Android half of the `platform_lifecycle/` carve-out.
-        r"|bajutsu/common/platform_lifecycle/environments/android\.py$"
+        r"|bajutsu/common/platform_lifecycle/environments/android/"
         r"|demos/showcase/android/"
         r"|demos/showcase/scenarios/"
         r"|demos/showcase/showcase\.config\.yaml$"
@@ -385,7 +386,7 @@ _POOL_PATHS = (
     # size. The split itself lives here, so a change to it belongs on this surface even though the
     # shared `bajutsu/` sweep above already makes the module lane-relevant.
     r"|bajutsu/run/cli\.py$"
-    r"|bajutsu/common/evidence/core\.py$"
+    r"|bajutsu/common/evidence/core/"
     r"|bajutsu/common/evidence/sink\.py$"
     r"|scripts/assert_pool_isolation\.py$"
     r"|scripts/e2e_changes\.py$"

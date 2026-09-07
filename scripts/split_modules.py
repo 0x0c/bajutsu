@@ -114,6 +114,22 @@ class _References(cst.CSTVisitor):
         node.body.visit(self)
         return False
 
+    def visit_Subscript(self, node: cst.Subscript) -> bool:
+        # A quoted forward reference is not always inside an `Annotation`: a type alias writes it
+        # straight into a subscript, as `Callable[[Driver], "AlertEvent | None"]` does. Read those
+        # in annotation context, so the name is imported rather than left undefined.
+        node.value.visit(self)
+        self._annotation_depth += 1
+        for element in node.slice:
+            if isinstance(element.slice, cst.Index) and isinstance(
+                element.slice.value, cst.SimpleString
+            ):
+                self._visit_quoted(element.slice.value)
+            else:
+                element.visit(self)
+        self._annotation_depth -= 1
+        return False
+
     def visit_Annotation(self, node: cst.Annotation) -> bool:
         self._annotation_depth += 1
         inner = node.annotation

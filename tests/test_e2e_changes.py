@@ -81,7 +81,7 @@ def test_run_path_top_level_modules_are_relevant() -> None:
         "bajutsu/common/backend_cli/adb.py",
         "bajutsu/common/backend_cli/simctl.py",
         # runner/pipeline.py and orchestrator/loop.py unconditional imports
-        "bajutsu/common/evidence/core.py",
+        "bajutsu/common/evidence/core/file_sink.py",
         # `bajutsu.common.evidence.core` executes `evidence/__init__.py` on import, same as
         # `crawl/__init__.py` / `common/agents/__init__.py` below.
         "bajutsu/common/evidence/__init__.py",
@@ -362,7 +362,9 @@ def test_android_lane_surface() -> None:
     # codegen CLI command is android-relevant — the one CLI command besides `run` this lane drives.
     assert is_relevant(["bajutsu/codegen/cli.py"], "android") is True
     # ...but not another lane's driver, app, or workflow.
-    assert is_relevant(["bajutsu/common/drivers/playwright/playwright_driver.py"], "android") is False
+    assert (
+        is_relevant(["bajutsu/common/drivers/playwright/playwright_driver.py"], "android") is False
+    )
     assert is_relevant(["BajutsuKit/Sources/x.swift"], "android") is False
     assert is_relevant([".github/workflows/web-e2e.yml"], "android") is False
 
@@ -398,7 +400,9 @@ def test_web_lane_surface() -> None:
     assert is_relevant([".github/workflows/android-e2e.yml"], "web") is False
     assert is_relevant([".github/actions/setup-android-toolchain/action.yml"], "web") is False
     assert is_relevant(["bajutsu/common/drivers/xcuitest/xcuitest_driver.py"], "web") is False
-    assert is_relevant(["bajutsu/common/drivers/xcuitest_live/web_driver_client.py"], "web") is False
+    assert (
+        is_relevant(["bajutsu/common/drivers/xcuitest_live/web_driver_client.py"], "web") is False
+    )
     assert is_relevant(["bajutsu/common/drivers/adb/adb_driver.py"], "web") is False
     assert is_relevant(["bajutsu/common/drivers/coordinate_tree.py"], "web") is False
 
@@ -407,7 +411,7 @@ def test_web_lane_surface() -> None:
 # The historical failure: a top-level module the old positive list named with a trailing `\.py$` was
 # split into a package (`config`, BE-0252; `platform_lifecycle`), and every file under it stopped
 # matching, so the lane's `changes` job reported `relevant=false` and the required aggregator went
-# green without running a thing — `platform_lifecycle/environments/xcuitest.py` owns the XCUITest
+# green without running a thing — `platform_lifecycle/environments/xcuitest/` owns the XCUITest
 # cold spawn the iOS lane exists to exercise, and PR #1403 changed it to a fully skipped fleet. The
 # BE-0333 inverted default retires that whole class: the shared core sweeps `bajutsu/` wholesale, so
 # a package and a module match alike and a split cannot drop a file out of the filter. These pin that
@@ -441,9 +445,9 @@ def test_lifecycle_environment_leaves_fire_only_their_own_lane() -> None:
     # never import it. Sweeping the package without this carve-out would trade the under-trigger for
     # an over-trigger on `environments/xcuitest.py`, the most-churned file in the package.
     owner = {
-        "bajutsu/common/platform_lifecycle/environments/xcuitest.py": "ios",
+        "bajutsu/common/platform_lifecycle/environments/xcuitest/xcuitest_environment.py": "ios",
         "bajutsu/common/platform_lifecycle/environments/xcuitest_live.py": "ios",
-        "bajutsu/common/platform_lifecycle/environments/android.py": "android",
+        "bajutsu/common/platform_lifecycle/environments/android/android_environment.py": "android",
         "bajutsu/common/platform_lifecycle/environments/web.py": "web",
     }
     for path, own_lane in owner.items():
@@ -913,10 +917,10 @@ def test_pool_fires_on_the_parallel_run_surface() -> None:
     for path in (
         "bajutsu/common/runner/pool.py",
         "bajutsu/common/runner/pipeline.py",
-        "bajutsu/common/platform_lifecycle/environments/android.py",
+        "bajutsu/common/platform_lifecycle/environments/android/android_environment.py",
         # `_resolve_lanes` — the comma `--udid` list turned into the pool, and the `--workers` cap.
         "bajutsu/run/cli.py",
-        "bajutsu/common/evidence/core.py",
+        "bajutsu/common/evidence/core/file_sink.py",
         "bajutsu/common/evidence/sink.py",
         "scripts/assert_pool_isolation.py",
         "scripts/android_pool_e2e.sh",

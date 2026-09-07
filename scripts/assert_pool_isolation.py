@@ -200,7 +200,7 @@ def isolation_violations(
     # names — a manifest entry pointing at evidence a reader cannot open. Gated on the result having
     # recorded a name at all, so the claim stays "it recorded evidence and the evidence is not there"
     # rather than demanding a directory from a result that captured nothing (a dropped recording is
-    # never recorded: `evidence/core.py` skips the artifact entry along with the file).
+    # never recorded: `evidence/core` skips the artifact entry along with the file).
     held = set(dir_names)
     violations.extend(
         f"scenario {owners[0]!r} recorded evidence under {sid!r}, which the run directory does not "

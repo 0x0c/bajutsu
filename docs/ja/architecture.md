@@ -128,7 +128,7 @@ flowchart TB
 | `analysis/` | 実機も AI も使わない読み取り専用の助言的分析パッケージ（BE-0257）、CI を止めない: `audit`（決定性・フレーキネス監査、BE-0049）、`coverage`（シナリオの id 名前空間カバレッジ、BE-0050）、`impact`（テスト影響分析。diff から影響ステップを選ぶ、BE-0321）、`stats`（集計 run 統計ダッシュボード、BE-0102）、クロスランのフレーキネスランキング（`flakiness`、BE-0220）、`trace` タイムライン（`trace.py`、`bajutsu trace` コマンドの本体）——それぞれの Typer コマンドは `cli/`（機能ごとに 1 ファイル）にあります | [cli](cli.md) |
 | `cli/` | Typer アプリの組み立て：各機能自身の CLI（`run`/`crawl`/`record`/`triage`/`mcp`/`codegen`/`serve`/`analysis`）と、機能を持たない `commands/`（`doctor`/`lint`/`schema`/`report`）、`.env` ローダ（`dotenv.py`）をマウント | [cli](cli.md) |
 | `common/screenshots.py` | AI 経路が共有するスクリーンショット取得 + ピクセル座標のヘルパ（`screenshot_bytes`、`png_size`、`fraction`、BE-0246） | [recording](recording.md) |
-| `common/handoff.py` | 人手介在ハンドオフの契約（Tier 1、BE-0179）。`record`（端末の stdin）と `serve`（SSE）が同じ transport 中立なリクエスト/レスポンスを実装 | [recording](recording.md) |
+| `common/handoff/` | 人手介在ハンドオフの契約（Tier 1、BE-0179）。`record`（端末の stdin）と `serve`（SSE）が同じ transport 中立なリクエスト/レスポンスを実装 | [recording](recording.md) |
 | `common/deprecations.py` | 改名済みのオーサリング/CLI 表記への一度きりの非推奨通知（`warn_once`）と、廃止済み表記への明示的な拒否（`reject_renamed_key`） | — |
 | `common/diagnostics.py` | プロセス全体のロギング設定。run が自分自身について何をどれだけ語るか | — |
 | `common/stall_diagnostics.py` | バックエンドが stall した瞬間の、範囲を限定したベストエフォートな状態取得（BE-0361/BE-0367） | — |
@@ -427,7 +427,7 @@ iOS 側の対になるジョブ `pool (xcuitest)` は、Simulator を 2 台起�
 | 機能 | 現状 | 場所 |
 |---|---|---|
 | `mockServer`（外部モックコマンド） | config スキーマのみ。`cmd`/`port` の外部サーバは**未実装**で、シナリオ `mocks`（宣言的なプロトコル内スタブ、実装済み）で代替する | `config/schema.py` `MockServer` |
-| **web** バックエンドでの `appTrace` 区間証跡 | `appTrace` は `os_log`/simctl 由来（iOS 専用）。Playwright バックエンドは代わりに `video` と `deviceLog` 相当（console / page-error）の区間証跡を実装する（BE-0054）が、`appTrace` に相当するものは持たない | `evidence/intervals.py` · `common/drivers/playwright` |
+| **web** バックエンドでの `appTrace` 区間証跡 | `appTrace` は `os_log`/simctl 由来（iOS 専用）。Playwright バックエンドは代わりに `video` と `deviceLog` 相当（console / page-error）の区間証跡を実装する（BE-0054）が、`appTrace` に相当するものは持たない | `evidence/intervals` · `common/drivers/playwright` |
 | **SwiftUI** と **Jetpack Compose** の画面での `nativeZ` | 報告経路は両方とも実装済みだが（BE-0355）、宣言的な UI ツールキットはどちらも自身でアクセシビリティ要素を生成し、位置の測定元となる実体を外に出さない。SwiftUI は支援技術がプロセスに接続したときに初めて要素を実体化するため、アプリ自身のビューツリーに識別子が現れない。Compose はアプリが宣言した追加データキーを自身のノード生成に通さない。opt-in したアプリの UIKit と Android の `View` による画面は値を報告し、SwiftUI と Compose の画面は `null` になる。診断専用のフィールドで、セレクタも重なり判定もこれを読まない | `BajutsuKit/Sources/BajutsuKit/BajutsuZOrder.swift`・`BajutsuAndroid/…/BajutsuZOrder.kt` |
 
 これらはいずれも各機能ページで該当箇所に注記しています。

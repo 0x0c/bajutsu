@@ -995,8 +995,8 @@ def test_start_bridgeable_prefers_the_reserved_band(monkeypatch: pytest.MonkeyPa
     with socket.socket() as probe:
         probe.bind(("127.0.0.1", 0))
         base = probe.getsockname()[1]
-    monkeypatch.setattr(network, "_BRIDGE_PORT_BASE", base)
-    monkeypatch.setattr(network, "_BRIDGE_PORT_SPAN", 8)
+    monkeypatch.setattr(network.network_collector, "_BRIDGE_PORT_BASE", base)
+    monkeypatch.setattr(network.network_collector, "_BRIDGE_PORT_SPAN", 8)
     c = NetworkCollector()
     port = c.start_bridgeable()
     try:
@@ -1013,8 +1013,8 @@ def test_start_bridgeable_skips_a_taken_band_port(monkeypatch: pytest.MonkeyPatc
         taken.bind(("127.0.0.1", 0))
         taken.listen(1)
         base = taken.getsockname()[1]
-        monkeypatch.setattr(network, "_BRIDGE_PORT_BASE", base)
-        monkeypatch.setattr(network, "_BRIDGE_PORT_SPAN", 8)
+        monkeypatch.setattr(network.network_collector, "_BRIDGE_PORT_BASE", base)
+        monkeypatch.setattr(network.network_collector, "_BRIDGE_PORT_SPAN", 8)
         c = NetworkCollector()
         port = c.start_bridgeable()
         try:
@@ -1034,8 +1034,8 @@ def test_start_bridgeable_raises_when_the_band_is_exhausted(
         taken.bind(("127.0.0.1", 0))
         taken.listen(1)
         base = taken.getsockname()[1]
-        monkeypatch.setattr(network, "_BRIDGE_PORT_BASE", base)
-        monkeypatch.setattr(network, "_BRIDGE_PORT_SPAN", 1)
+        monkeypatch.setattr(network.network_collector, "_BRIDGE_PORT_BASE", base)
+        monkeypatch.setattr(network.network_collector, "_BRIDGE_PORT_SPAN", 1)
         c = NetworkCollector()
         with pytest.raises(OSError, match="reserved bridge band"):
             c.start_bridgeable()

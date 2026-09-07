@@ -556,3 +556,27 @@ def test_a_pep_695_type_parameter_bound_reads_names_too() -> None:
         """
     )
     assert "from collections.abc import Callable" in plan.files["_functions.py"]
+
+
+def test_a_quoted_forward_reference_in_a_type_alias_is_read_as_a_name() -> None:
+    # `BlockedHandler = Callable[[base.Driver], "AlertEvent | None"]` in orchestrator/types.py. The
+    # quote sits in a plain subscript, not an annotation, so reading only annotations leaves
+    # `AlertEvent` unimported and the split file fails ruff's F821 on it.
+    plan = _plan(
+        """
+        from __future__ import annotations
+
+        from collections.abc import Callable
+
+        Handler = Callable[[int], "Alpha | None"]
+
+
+        class Alpha:
+            pass
+
+
+        class Beta:
+            pass
+        """
+    )
+    assert "from .alpha import Alpha" in plan.files["_shared.py"]

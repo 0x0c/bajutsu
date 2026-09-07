@@ -102,7 +102,7 @@ SHELL_SCRIPTS := .githooks/pre-push .githooks/commit-msg .githooks/pre-commit .g
 # Modules whose public surface has migrated to the Google-style docstring standard (BE-0065),
 # enforced by `lint-docstrings`. This list GROWS module-by-module as more migrate; keep it the
 # allowlist (not an ignore list) so an unmigrated module never accidentally falls under the gate.
-DOCSTRING_PATHS := bajutsu/common/ai bajutsu/common/drivers/base bajutsu/common/drivers/actuation bajutsu/common/drivers/coordinate_tree.py bajutsu/common/drivers/fake bajutsu/common/drivers/xcuitest bajutsu/common/drivers/adb bajutsu/common/drivers/playwright bajutsu/common/drivers/xcuitest_live bajutsu/common/assertions bajutsu/common/evidence/network.py bajutsu/common/runner bajutsu/common/scenario bajutsu/mcp bajutsu/cli bajutsu/common/doctor.py bajutsu/analysis/audit bajutsu/analysis/coverage bajutsu/analysis/stats bajutsu/analysis/trace.py bajutsu/triage/heuristic bajutsu/common/report bajutsu/common/evidence/core.py bajutsu/common/evidence/intervals.py bajutsu/common/evidence/redaction.py bajutsu/common/config bajutsu/common/config_source.py bajutsu/codegen/xcuitest.py bajutsu/codegen/common bajutsu/codegen/playwright.py bajutsu/common/backends.py bajutsu/common/capability/capability_preflight.py bajutsu/common/provisioning/requirements.py bajutsu/common/provisioning/provision.py bajutsu/crawl/core.py bajutsu/crawl/serialize.py bajutsu/crawl/guide.py bajutsu/crawl/tabs.py bajutsu/common/agents/protocols bajutsu/common/agents/factory.py bajutsu/common/agents/claude bajutsu/common/agents/claude_backed.py bajutsu/common/agents/claude_triage bajutsu/common/agents/alerts bajutsu/common/agents/ai_config.py bajutsu/common/agents/anthropic_client.py bajutsu/record/loop.py bajutsu/common/screenshots.py bajutsu/common/evidence/visual.py bajutsu/common/drivers/web_network.py bajutsu/common/report/from_grouping.py
+DOCSTRING_PATHS := bajutsu/common/ai bajutsu/common/drivers/base bajutsu/common/drivers/actuation bajutsu/common/drivers/coordinate_tree.py bajutsu/common/drivers/fake bajutsu/common/drivers/xcuitest bajutsu/common/drivers/adb bajutsu/common/drivers/playwright bajutsu/common/drivers/xcuitest_live bajutsu/common/assertions bajutsu/common/evidence/network bajutsu/common/runner bajutsu/common/scenario bajutsu/mcp bajutsu/cli bajutsu/common/doctor bajutsu/analysis/audit bajutsu/analysis/coverage bajutsu/analysis/stats bajutsu/analysis/trace.py bajutsu/triage/heuristic bajutsu/common/report bajutsu/common/evidence/core bajutsu/common/evidence/intervals bajutsu/common/evidence/redaction.py bajutsu/common/config bajutsu/common/config_source bajutsu/codegen/xcuitest.py bajutsu/codegen/common bajutsu/codegen/playwright.py bajutsu/common/backends.py bajutsu/common/capability/capability_preflight.py bajutsu/common/provisioning/requirements.py bajutsu/common/provisioning/provision.py bajutsu/crawl/core.py bajutsu/crawl/serialize.py bajutsu/crawl/guide.py bajutsu/crawl/tabs.py bajutsu/common/agents/protocols bajutsu/common/agents/factory.py bajutsu/common/agents/claude bajutsu/common/agents/claude_backed.py bajutsu/common/agents/claude_triage bajutsu/common/agents/alerts bajutsu/common/agents/ai_config.py bajutsu/common/agents/anthropic_client.py bajutsu/record/loop.py bajutsu/common/screenshots.py bajutsu/common/evidence/visual.py bajutsu/common/drivers/web_network.py bajutsu/common/report/from_grouping.py
 
 # Run the suite with a coverage floor — a regression that quietly drops coverage fails the gate.
 # The floor itself is `fail_under` in pyproject.toml's [tool.coverage.report], not a flag here
@@ -129,7 +129,13 @@ lint:
 # keep their prose docstrings until their turn. D102/D105/D107 are excluded by design: D102 would
 # force docstrings onto the compact `Driver`/`Collector` Protocol `: ...` stubs, and D105/D107
 # (magic methods / __init__) are noise. The google convention is set in pyproject's pydocstyle.
+# The existence guard is not decoration: ruff exits 0 on a path that is not there, so a
+# DOCSTRING_PATHS entry left pointing at a file BE-0411 split into a package would silently stop
+# checking that surface instead of failing.
 lint-docstrings:
+	@for p in $(DOCSTRING_PATHS); do \
+		[ -e "$$p" ] || { echo "DOCSTRING_PATHS names a path that no longer exists: $$p"; exit 1; }; \
+	done
 	uv run ruff check --select D --ignore D102,D105,D107 $(DOCSTRING_PATHS)
 
 # BE-0112: enforce the core / contract / periphery layer model as a static import contract
