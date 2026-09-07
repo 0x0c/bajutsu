@@ -1,28 +1,4 @@
-"""Autonomous crawl engine core (BE-0038).
-
-Breadth-first exploration of an app over the `Driver` abstraction, producing a screen map of
-the reachable screens and the transitions between them. This is the deterministic engine only —
-no AI and no Simulator wiring (those land in later slices). The determinism boundary is the
-whole point: a screen's *identity* (its fingerprint) and the *order* in which candidate actions
-are tried are both pure functions of the element tree, so a crawl of an unchanged app explores
-the same way as far as the app's own non-determinism allows. AI never decides anything here.
-
-Traversal is a **forward walk with deterministic replay for backtracking**: app transitions are
-usually irreversible, so the engine keeps acting on the screen it is already on until that screen
-has no untried action left, then — only to reach another unexplored screen — resets to a clean
-state and replays a recorded path to it (the same way `run` reaches any state). Walking forward
-avoids paying a reset/replay for every single action. Every edge is still a replayable step, and
-every node keeps a recorded path to it.
-
-The engine scales out across **N booted simulators** (BE-0064): a *coordinator* owns the shared
-screen map, frontier and budgets under one lock, while *workers* each drive their own simulator,
-taking frontier entries, exploring them, and running the guide on the screen they land on — so the
-guide's AI round-trips overlap across devices, the primary speedup. What parallelism relaxes is
-only the *exploration order* and the recorded canonical `path_to` (which worker reaches a screen
-first is scheduling-dependent); screen identity, transition/crash detection and the map's content
-stay pure deterministic functions of the element tree, so the crawl is never a verdict. A single
-worker (the default) walks exactly as the serial engine always did.
-"""
+"""Drive the crawl loop: pick the next frontier work, act, and fold the result into the map."""
 
 from __future__ import annotations
 
@@ -31,12 +7,21 @@ import logging
 import re
 import threading
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
 from bajutsu.common.devices import errors as device_errors
 from bajutsu.common.drivers import base
-from bajutsu.common.drivers.elements import screen_size_from_elements, shows_app_ui
-from bajutsu.common.evidence.redaction import PLACEHOLDER
+from bajutsu.common.drivers.elements import shows_app_ui
+
+from ._coordinator import _Coordinator
+from .action import Action
+from .fingerprint import Fingerprint
+from .guide_context import GuideContext
+from .node import Node
+from .screen_map import ScreenMap
+
+if TYPE_CHECKING:
+    from ._shared import OnEvent
 
 _logger = logging.getLogger(__name__)
 
@@ -81,259 +66,29 @@ Recover = Callable[[base.Driver], None]
 # that drives it; the iOS backend is thread-agnostic, so this is also where the run pool builds its lanes.
 WorkerFactory = Callable[[], "tuple[base.Driver, Reset]"]
 
-
-@dataclass(frozen=True)
-class Fingerprint:
-    """A screen's identity.
-
-    `kind` is "id" (stable, identifier-derived) or "structural" (the less-stable fallback for
-    screens with too few accessibility identifiers).
-    """
-
-    value: str
-    kind: str
-
-
-@dataclass(frozen=True)
-class Action:
-    """A replayable action against a screen.
-
-    `kind` is "tap", "type" (text input), "fill" (enter several fields in one step, to cross a
-    precondition that needs more than one field), or "tap_point" (tap a normalized [0,1]
-    coordinate — for a control the accessibility tree can't address, e.g. a custom tab bar a
-    vision guide located). The element is named by `target` (its accessibility identifier —
-    stable, preferred) or, for an id-less element, by `label` (+ `index` to disambiguate
-    duplicates); a "type" carries the text in `value`, a "fill" its (id, value) pairs in `fields`,
-    a "tap_point" its (x, y) in `point` (`label` optional, for logging). All fields are hashable so
-    an Action can key the frontier / tried set.
-
-    `secure` records that the platform marked the field this action enters as a masked input, read
-    off the element at the moment the action was built. The screen map keeps no `Element`, so this
-    is the only place that trait survives to the artifact, where redaction masks the value (BE-0331).
-    """
-
-    kind: str
-    target: str = ""
-    label: str | None = None
-    index: int | None = None
-    value: str | None = None
-    fields: tuple[tuple[str, str], ...] = ()
-    point: tuple[float, float] | None = None
-    secure: bool = False
-
-    @property
-    def key(self) -> str:
-        """Stable identity for de-duplication and the frontier.
-
-        The id, the label[#index], the fill's field set, or the normalized coordinate.
-        """
-        if self.kind == "fill":
-            return "fill:" + ",".join(i for i, _ in self.fields)
-        if self.kind == "tap_point" and self.point is not None:
-            return f"@@{self.point[0]:.4f},{self.point[1]:.4f}"
-        return self.target or f"@{self.label}#{0 if self.index is None else self.index}"
-
-    def as_selector(self) -> base.Selector:
-        if self.target:
-            return {"id": self.target}
-        sel: base.Selector = {}
-        if self.label is not None:
-            sel["label"] = self.label
-        if self.index is not None:
-            sel["index"] = self.index
-        return sel
-
-    def describe(self) -> str:
-        """Name the action and its target, never the value it enters.
-
-        A description is free text that lands in the screen map's node, edge, plan and path fields,
-        where no structural masking rule can reach it (BE-0331). Leaving the value out keeps exactly
-        one field — the action's own `value` — for redaction to govern; `fill` already counted its
-        fields rather than printing them, and replay is unaffected because `perform` reads `value`
-        directly and never parses this string.
-        """
-        if self.kind == "fill":
-            return f"fill {len(self.fields)} fields"
-        if self.kind == "tap_point" and self.point is not None:
-            if self.label:
-                return f"tap tab {self.label!r}"
-            return f"tap point ({self.point[0]:.2f}, {self.point[1]:.2f})"
-        return f"{self.kind} {self.target or (self.label or '?')}"
-
-    def perform(self, driver: base.Driver) -> None:
-        """Execute against the live screen.
-
-        A type action focuses the field (tap) then enters its value; a fill does that for each of
-        its fields in order; a tap_point taps a coordinate (the normalized point scaled to the live
-        screen size); a tap just taps. Replayable because every selector is id- or label-based and
-        every coordinate is normalized to the screen.
-        """
-        if self.kind == "fill":
-            for fid, val in self.fields:
-                sel: base.Selector = {"id": fid}
-                driver.tap(sel)
-                driver.type_text(self._replay_value(driver, sel, val, hint=fid))
-            return
-        if self.kind == "tap_point" and self.point is not None:
-            w, h = screen_size_from_elements(driver.query())
-            driver.tap_point((self.point[0] * w, self.point[1] * h))
-            return
-        driver.tap(self.as_selector())
-        if self.kind == "type":
-            driver.type_text(
-                self._replay_value(
-                    driver,
-                    self.as_selector(),
-                    self.value or "",
-                    hint=f"{self.target} {self.label or ''}",
-                )
-            )
-
-    def _replay_value(
-        self, driver: base.Driver, sel: base.Selector, value: str, *, hint: str
-    ) -> str:
-        """The text to enter, re-deriving a dummy when the recorded value was masked (BE-0331).
-
-        A warm start (`--continue` / `--resume-src`) rebuilds its actions from the persisted screen
-        map, where a masked input's value is the redaction placeholder. Typing that verbatim would
-        fail the very password rule `_input_value` is written to satisfy, so the field's own dummy is
-        derived again from the element the action resolves to — replay fidelity survives masking.
-        """
-        if value != PLACEHOLDER:
-            return value
-        matched = base.find_all(driver.query(), sel)
-        if matched:
-            return _input_value(matched[0])
-        # The tap above already resolved the field, so this is the near-impossible screen change
-        # between the two reads; the action's own record of what it targets still names the field.
-        return value_for_field(hint, self.secure)
-
-
-@dataclass(frozen=True)
-class Node:
-    """A discovered screen.
-
-    Its fingerprint, the identifiers present, the candidate action keys leaving it, `blocked` —
-    actionable controls present but disabled (known but un-pressable until a precondition is met) —
-    and `targets`: per candidate action, the on-screen rectangle it taps, normalized to [0,1] of
-    the screen and keyed by the action's description, so the web UI can highlight on the screenshot
-    where a transition's tap lands.
-    """
-
-    fingerprint: str
-    kind: str
-    ids: tuple[str, ...]
-    actions: tuple[str, ...]
-    blocked: tuple[str, ...] = ()
-    targets: tuple[tuple[str, tuple[float, float, float, float]], ...] = ()
-
-
-@dataclass(frozen=True)
-class Edge:
-    """A transition: taking `action` from screen `src` landed on screen `dst`.
-
-    `alert` holds the OS-prompt button(s) the guard dismissed during this transition (empty when
-    none) — so the graph can show that the step required tapping through a system alert.
-    """
-
-    src: str
-    action: str
-    dst: str
-    alert: tuple[str, ...] = ()
-
-
-@dataclass(frozen=True)
-class Crash:
-    """A path whose last action collapsed the app UI.
-
-    `path` holds the human-readable action descriptions (for the report); `actions` the structured,
-    replayable sequence the same path is built from, so a deterministic repro scenario can be
-    emitted from it (BE-0038). `actions` is empty for a map saved before crashes carried it.
-    """
-
-    path: tuple[str, ...]
-    actions: tuple[Action, ...] = ()
-
-
-@dataclass(frozen=True)
-class Alert:
-    """An OS prompt that appeared mid-crawl and was dismissed by the alert guard.
-
-    `path` is the action sequence that triggered it, `buttons` the dismiss button(s) tapped to
-    clear it.
-    """
-
-    path: tuple[str, ...]
-    buttons: tuple[str, ...]
-
-
-@dataclass(frozen=True)
-class Pruned:
-    """A candidate operation skipped because the same operation was already claimed by another screen.
-
-    A *global* control (e.g. a tab switch) the crawl explores once instead of from every screen
-    that shows it. `src` is the screen where it was skipped, `action` its description, `key` its
-    replay identity, `owner` the screen that did explore it, and `path` the replayable action
-    sequence to reach `src` and perform the op (so a resume can re-walk to here). The WebUI shows
-    these struck through, and a viewer can tap one to resume exploring that branch from `src`.
-    """
-
-    src: str
-    action: str
-    key: str
-    owner: str
-    path: tuple[Action, ...] = ()
-
-
-@dataclass
-class _Work:
-    """One reserved unit of frontier work, handed from `_select_next_work` to a worker.
-
-    The popped `action`, the screen `src_fp` it came from and the `src_path` to replay to reach it,
-    and whether the worker must reset+replay first (`replay_needed`) or is already standing on
-    `src_fp`. Not frozen: `src_path` is a mutable list (it feeds `_replay`, typed `list[Action]`),
-    so `frozen=True` would be only a shallow, misleading guarantee. It is created and consumed
-    within the coordinator, never hashed or shared, so plain mutability is fine (BE-0092).
-    """
-
-    src_fp: str
-    action: Action
-    src_path: list[Action]
-    replay_needed: bool
-
-
-@dataclass
-class ScreenMap:
-    """The crawl's accumulated model: the discovered screens, transitions, crashes, alerts, the live exploration plan, and why it stopped."""
-
-    nodes: dict[str, Node] = field(default_factory=dict)
-    edges: list[Edge] = field(default_factory=list)
-    crashes: list[Crash] = field(default_factory=list)
-    alerts: list[Alert] = field(default_factory=list)
-    # The exploration plan: still-untried operations per screen fingerprint (what the crawl will
-    # try next), refreshed as it advances so a reader can visualize the frontier live.
-    plan: dict[str, list[str]] = field(default_factory=dict)
-    # Operations pruned as duplicate global controls (explored once from their owner screen).
-    pruned: list[Pruned] = field(default_factory=list)
-    # The canonical replayable action path from the entry screen to each discovered screen, keyed by
-    # fingerprint (empty for the entry screen itself). This is what turns a discovered screen into a
-    # committable candidate flow scenario (`flows.py`, BE-0038).
-    paths: dict[str, tuple[Action, ...]] = field(default_factory=dict)
-    # Why the crawl stopped: "completed" (frontier exhausted — everything reachable in the model
-    # was explored), "max_screens", or "max_steps" (a budget was hit, so screens may remain).
-    stop_reason: str = ""
-
-
-# Fires after each change to the map (a new node, edge, or crash). Pure observation so a caller
-# can stream the screen map as it grows (the web UI's live graph) — it never influences which
-# screen is explored next or how a screen is identified, so the crawl stays deterministic.
-OnEvent = Callable[[ScreenMap], None]
-
 # Fires once per newly discovered screen, while the worker's driver is still positioned on it — the
 # moment to capture a per-screen artifact (a screenshot). It receives that worker's driver, so a
 # parallel crawl screenshots each screen on whichever simulator discovered it. Pure observation,
 # like `OnEvent`.
 OnNode = Callable[[base.Driver, "Node"], None]
+
+
+# A plan entry written before BE-0331 spelled a typed operation `type <target>='<value>'`; today
+# `Action.describe` leaves the value out. A `--continue` matches today's descriptions against the
+# persisted plan, so without this the older spelling never matches and every input branch the map
+# had left to explore is dropped in silence — the crawl can then stop as "completed".
+_LEGACY_TYPED_ENTRY = re.compile(r"(?s)^(type .+?)=(['\"]).*\2$")
+
+
+# A guide proposes the replayable actions to try from a screen, given how it was reached
+# (`GuideContext`). The default is the deterministic `candidate_actions`; an AI guide (BE-0038
+# `--guide ai`) proposes richer operations and realistic inputs. Either way the guide only chooses
+# *what to try* — screen identity, transition/crash detection, and the screen map stay
+# deterministic and AI-free, so the crawl is never a verdict.
+Guide = Callable[[base.Driver, list[base.Element], GuideContext], list[Action]]
+
+# Dismisses anything covering the app (an OS alert) and returns the button label(s) it tapped.
+ClearBlocking = Callable[[base.Driver], list[str]]
 
 
 def _id_of(element: base.Element) -> str | None:
@@ -369,13 +124,6 @@ def value_for_field(hint: str, secure: bool) -> str:
     if secure:
         return "Test1234!"
     return "test"
-
-
-# A plan entry written before BE-0331 spelled a typed operation `type <target>='<value>'`; today
-# `Action.describe` leaves the value out. A `--continue` matches today's descriptions against the
-# persisted plan, so without this the older spelling never matches and every input branch the map
-# had left to explore is dropped in silence — the crawl can then stop as "completed".
-_LEGACY_TYPED_ENTRY = re.compile(r"(?s)^(type .+?)=(['\"]).*\2$")
 
 
 def plan_key(entry: str) -> str:
@@ -538,28 +286,6 @@ def is_app_alive(elements: list[base.Element]) -> bool:
     return shows_app_ui(elements)
 
 
-@dataclass(frozen=True)
-class GuideContext:
-    """Side information for the guide about how this screen was reached.
-
-    Currently the OS-alert button(s) just dismissed to get here, so an AI guide can factor them
-    into its next moves.
-    """
-
-    dismissed: tuple[str, ...] = ()
-
-
-# A guide proposes the replayable actions to try from a screen, given how it was reached
-# (`GuideContext`). The default is the deterministic `candidate_actions`; an AI guide (BE-0038
-# `--guide ai`) proposes richer operations and realistic inputs. Either way the guide only chooses
-# *what to try* — screen identity, transition/crash detection, and the screen map stay
-# deterministic and AI-free, so the crawl is never a verdict.
-Guide = Callable[[base.Driver, list[base.Element], GuideContext], list[Action]]
-
-# Dismisses anything covering the app (an OS alert) and returns the button label(s) it tapped.
-ClearBlocking = Callable[[base.Driver], list[str]]
-
-
 def _deterministic_guide(
     _driver: base.Driver, elements: list[base.Element], _context: GuideContext
 ) -> list[Action]:
@@ -632,218 +358,6 @@ def _action_targets(
             x, y, fw, fh = rect
             out.append((a.describe(), (x / w, y / h, fw / w, fh / h)))
     return tuple(out)
-
-
-class _Coordinator:
-    """The crawl's shared concurrent state behind one lock.
-
-    Owns the screen map, the frontier (`path_to` shortest known paths + `pending` untried actions),
-    the global-control `claimed` table, the in-flight `discovering` set, and the step/active/stopped
-    budgets. Every mutation of that state goes through a method here, so the whole lock discipline
-    lives in one reviewable place and the device-walk (`crawl`'s `_worker`) reads top to bottom with
-    no `with cond:` blocks interleaved through it. Workers call these methods off their own driver
-    threads; `path_to` / `pending` / `failure` / `screen_map` are read single-threaded by bootstrap
-    and after join (BE-0092).
-    """
-
-    def __init__(
-        self,
-        screen_map: ScreenMap,
-        *,
-        max_screens: int,
-        max_steps: int,
-        prune_global: bool,
-        on_event: OnEvent | None,
-    ) -> None:
-        self._cond = threading.Condition()
-        self._sm = screen_map
-        self._max_screens = max_screens
-        self._max_steps = max_steps
-        self._prune_global = prune_global
-        self._on_event = on_event
-        # A known replayable path to each discovered screen (set once at discovery, never mutated),
-        # and the still-untried actions per screen. The strategy is a *forward walk*: a worker keeps
-        # acting on the screen its driver is on until it has no untried action left, resetting +
-        # replaying only to reach another screen. Read single-threaded by bootstrap / after join.
-        self.path_to: dict[str, list[Action]] = {}
-        self.pending: dict[str, list[Action]] = {}
-        # When pruning global controls, the first screen to offer an operation (by replay key) claims
-        # and explores it; later screens offering the same key skip it (a tab bar / nav button reused
-        # across screens collides and is pruned to one exploration).
-        self._claimed: dict[str, str] = {}
-        # Fingerprints a worker is currently discovering (guide in flight), so two workers don't
-        # double-discover the same new screen.
-        self._discovering: set[str] = set()
-        self._steps = 0  # shared action budget counter
-        self._active = 0  # workers holding a popped action (mid step) — done at 0 with no frontier
-        self._stopped = False  # a budget was hit; no worker takes more work
-        self.failure: list[
-            Exception
-        ] = []  # the first unexpected worker error, re-raised after join
-
-    @property
-    def screen_map(self) -> ScreenMap:
-        return self._sm
-
-    def _emit(self) -> None:  # holding the lock (it reads `pending`)
-        # Refresh the plan (the live frontier: still-untried operations per screen) before each
-        # notification, so a watcher sees what the crawl will try next as it advances.
-        self._sm.plan = {
-            fp: [a.describe() for a in acts] for fp, acts in self.pending.items() if acts
-        }
-        if self._on_event is not None:
-            self._on_event(self._sm)
-
-    def emit(self) -> None:
-        """The authoritative final/bootstrap notification (acquires the lock)."""
-        with self._cond:
-            self._emit()
-
-    def _finish(self, reason: str) -> None:  # holding the lock
-        # Signal the stop; the single authoritative final `emit()` runs after join (so it captures
-        # any late records a worker added between this signal and its own exit).
-        if not self._sm.stop_reason:
-            self._sm.stop_reason = reason
-        self._stopped = True
-        self._cond.notify_all()
-
-    def _claim(self, fp_value: str, actions: list[Action]) -> list[Action]:
-        # Holding the lock. Without pruning, every action is the screen's own to explore. With it, an
-        # op already claimed by another screen is recorded as Pruned (with a replay path) instead.
-        if not self._prune_global:
-            return list(actions)
-        kept: list[Action] = []
-        for a in actions:
-            owner = self._claimed.get(a.key)
-            if owner is not None and owner != fp_value:
-                path = (*self.path_to.get(fp_value, []), a)  # replay to src, then the pruned op
-                self._sm.pruned.append(Pruned(fp_value, a.describe(), a.key, owner, path))
-            else:
-                self._claimed.setdefault(a.key, fp_value)
-                kept.append(a)
-        return kept
-
-    def _publish(self, node: Node, actions: list[Action]) -> list[Action]:
-        # Holding the lock: register the node (keyed by its fingerprint) and claim its operations.
-        # Returns the screen's frontier (its actions not already claimed elsewhere).
-        self._sm.nodes[node.fingerprint] = node
-        # The path to reach this screen is already known (set before publish: [] for the entry, the
-        # discovering edge's path otherwise) — persist it so a discovered screen carries a
-        # committable candidate flow (BE-0038).
-        self._sm.paths[node.fingerprint] = tuple(self.path_to.get(node.fingerprint, ()))
-        return self._claim(node.fingerprint, actions)
-
-    def publish(self, node: Node, actions: list[Action]) -> list[Action]:
-        """Register a node and claim its operations; return its frontier (used by bootstrap)."""
-        with self._cond:
-            return self._publish(node, actions)
-
-    def select_next_work(self, current_fp: str | None) -> _Work | None:
-        # Pick (and reserve) the next frontier entry to explore, or return None when the worker
-        # should retire — a stop was signalled, a budget is spent, or the frontier is fully drained
-        # with no worker in flight. Continue from the screen the worker is on; else backtrack to the
-        # cheapest entry (shortest known path, then fingerprint) and replay to it. Reserving bumps
-        # steps/active under the lock, so two workers never pop the same action.
-        with self._cond:
-            while True:
-                if self._stopped:
-                    return None
-                if len(self._sm.nodes) >= self._max_screens:
-                    self._finish("max_screens")
-                    return None
-                if self._steps >= self._max_steps:
-                    self._finish("max_steps")
-                    return None
-                if current_fp is not None and self.pending.get(current_fp):
-                    src_fp, replay_needed = current_fp, False
-                elif candidates := [fp for fp, acts in self.pending.items() if acts]:
-                    src_fp = min(candidates, key=lambda fp: (len(self.path_to[fp]), fp))
-                    replay_needed = True
-                elif self._active == 0:
-                    self._finish("completed")  # no frontier and no worker in flight → all explored
-                    return None
-                else:
-                    self._cond.wait()  # another worker is mid-step; it may add frontier
-                    continue
-                action = self.pending[src_fp].pop(0)  # deterministic order
-                src_path = list(self.path_to[src_fp])
-                self._steps += 1
-                self._active += 1
-                return _Work(src_fp, action, src_path, replay_needed)
-
-    def record_alert(self, path: list[Action], dismissed: list[str]) -> None:
-        """Record an OS prompt the guard dismissed mid-step (no budget change)."""
-        with self._cond:
-            self._sm.alerts.append(Alert(tuple(a.describe() for a in path), tuple(dismissed)))
-
-    def record_crash(self, path: list[Action]) -> None:
-        """Record a crash (with its replayable action path), release the reservation, notify."""
-        with self._cond:
-            self._sm.crashes.append(Crash(tuple(a.describe() for a in path), tuple(path)))
-            self._active -= 1
-            self._emit()
-            self._cond.notify_all()
-
-    def record_edge(
-        self,
-        src_fp: str,
-        action: Action,
-        dst_fp: Fingerprint,
-        dismissed: list[str],
-        path: list[Action],
-    ) -> bool:
-        """Record a transition; reserve a newly seen destination for THIS worker to discover.
-
-        Returns True when the destination is new (this worker holds the reservation and must call
-        `finish_discovery`); False for a known/in-flight screen (the step is done, reservation
-        released).
-        """
-        with self._cond:
-            self._sm.edges.append(Edge(src_fp, action.describe(), dst_fp.value, tuple(dismissed)))
-            if dst_fp.value not in self._sm.nodes and dst_fp.value not in self._discovering:
-                self._discovering.add(dst_fp.value)  # reserve so two workers don't double-discover
-                self.path_to[dst_fp.value] = path
-                return True
-            self._active -= 1  # a known/in-flight screen: just the edge, this step is done
-            self._emit()
-            self._cond.notify_all()
-            return False
-
-    def finish_discovery(self, node: Node, actions: list[Action]) -> None:
-        """Publish a freshly discovered screen's node + frontier, release the reservation, notify."""
-        with self._cond:
-            self.pending[node.fingerprint] = self._publish(node, actions)
-            self._discovering.discard(node.fingerprint)
-            self._active -= 1
-            self._emit()
-            self._cond.notify_all()
-
-    def give_back(self, src_fp: str, action: Action) -> None:
-        # Pool failure isolation: a device misbehaved, so hand the popped action back to the front of
-        # its frontier (a healthy worker retries it) and release the reservation.
-        with self._cond:
-            self.pending[src_fp].insert(0, action)
-            self._active -= 1
-            self._cond.notify_all()
-
-    def drop_screen(self, src_fp: str) -> None:
-        # A replay path no longer resolves (lone worker): drop this screen's frontier and release.
-        with self._cond:
-            self.pending[src_fp] = []
-            self._active -= 1
-            self._cond.notify_all()
-
-    def cancel_action(self) -> None:
-        # A selector no longer resolves: drop this action and release the reservation.
-        with self._cond:
-            self._active -= 1
-            self._cond.notify_all()
-
-    def note_failure(self, exc: Exception) -> None:
-        """Record an unexpected worker error (surfaced after join) and stop the crawl."""
-        with self._cond:
-            self.failure.append(exc)
-            self._finish(self._sm.stop_reason or "completed")
 
 
 # C901 and PLR0915 fold each nested function's count into the function enclosing it, so this score

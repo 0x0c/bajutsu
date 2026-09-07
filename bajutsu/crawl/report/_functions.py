@@ -1,17 +1,9 @@
-"""Self-contained HTML screen map for a crawl (BE-0038).
-
-The visual, offline counterpart to the web UI's live graph: a pure, deterministic function of a
-`ScreenMap` (the crawl's already-captured model) into a single HTML page — screens laid out in BFS
-depth columns, transitions drawn as a static inline SVG, each screen linked to its screenshot. No
-device, no model, no JavaScript, no external asset, so it opens straight from the run dir. It only
-visualizes what the crawl already found; it never influences the (deterministic) exploration.
-"""
+"""Lay a screen map out deterministically and render it as one self-contained page."""
 
 from __future__ import annotations
 
 import functools
 from collections import deque
-from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
 from jinja2 import Environment, FileSystemLoader
@@ -20,6 +12,10 @@ from bajutsu.common.evidence.sink import RunArtifactWriter
 from bajutsu.common.run_meta.files import RunArtifactReader
 from bajutsu.crawl.core import ScreenMap
 
+from .box import Box
+from .edge_line import EdgeLine
+from .layout import Layout
+
 # Box + grid geometry. The *layout algorithm* is ported from the web UI's layered graph
 # (templates/serve.js); these constants are retuned for the static card (a smaller thumbnail, no
 # expand button), so they intentionally differ from the live UI's. A card is NW by NH, columns are
@@ -27,37 +23,9 @@ from bajutsu.crawl.core import ScreenMap
 _NW, _NH, _COLW, _ROWH, _PAD = 176, 200, 240, 230, 24
 
 
-@dataclass(frozen=True)
-class Box:
-    """One screen laid out on the grid: its position and the bits the card shows."""
-
-    fp: str
-    kind: str
-    ids: tuple[str, ...]
-    actions: tuple[str, ...]
-    x: int
-    y: int
-    has_shot: bool
-
-
-@dataclass(frozen=True)
-class EdgeLine:
-    """One transition drawn as an SVG path, with the alert marker's anchor."""
-
-    d: str  # SVG path data (a bezier from the source card's right edge to the target's left)
-    alert: bool  # the transition tapped through an OS prompt the guard dismissed
-    mark_x: int
-    mark_y: int
-
-
-@dataclass(frozen=True)
-class Layout:
-    """The whole screen map placed on a grid: positioned boxes, drawn edges, and the canvas size."""
-
-    boxes: list[Box]
-    edges: list[EdgeLine]
-    width: int
-    height: int
+# The shared Jinja templates live at the package root (`bajutsu/templates/`), one level up now
+# that this module is inside the `crawl/` package (BE-0257).
+_TEMPLATE_DIR = Path(__file__).resolve().parent.parent.parent / "templates"
 
 
 def layout(screen_map: ScreenMap, have_screens: frozenset[str] = frozenset()) -> Layout:
@@ -140,11 +108,6 @@ def _edges(screen_map: ScreenMap, pos: dict[str, tuple[int, int]]) -> list[EdgeL
             d = f"M{x1},{y1} C{mx},{y1} {mx},{y2} {x2},{y2}"
             lines.append(EdgeLine(d=d, alert=alert, mark_x=mx, mark_y=(y1 + y2) // 2 - 4))
     return lines
-
-
-# The shared Jinja templates live at the package root (`bajutsu/templates/`), one level up now
-# that this module is inside the `crawl/` package (BE-0257).
-_TEMPLATE_DIR = Path(__file__).resolve().parent.parent / "templates"
 
 
 @functools.lru_cache(maxsize=1)

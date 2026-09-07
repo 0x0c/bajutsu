@@ -182,11 +182,11 @@ _PERIPHERY_EXCLUSIONS: tuple[tuple[str, str], ...] = (
     ("bajutsu/common/agents/enrich.py", "the enrichment-agent surface a run never invokes"),
     # crawl/: record imports the crawl engine core (`core` / `serialize` / `__init__`, swept in); the
     # guide / report / repro / flows / tabs siblings are periphery the run never imports.
-    ("bajutsu/crawl/guide.py", "crawl's human-facing guide output, an authoring path"),
-    ("bajutsu/crawl/report.py", "crawl's report renderer, a post-crawl authoring path"),
+    ("bajutsu/crawl/guide/", "crawl's human-facing guide output, an authoring path"),
+    ("bajutsu/crawl/report/", "crawl's report renderer, a post-crawl authoring path"),
     ("bajutsu/crawl/repro.py", "crawl's repro-scenario emitter, an authoring path"),
     ("bajutsu/crawl/flows.py", "crawl's flow-analysis helpers, an authoring path"),
-    ("bajutsu/crawl/tabs.py", "crawl's tab-tracking helpers, an authoring path"),
+    ("bajutsu/crawl/tabs/", "crawl's tab-tracking helpers, an authoring path"),
     # cli/commands/: only the feature-less commands live here now (BE-0257 follow-on feature
     # colocation moved every other command beside its owning feature — `run`/`crawl`/`record`/
     # `triage`/`mcp`/`codegen`/`serve`/`worker`/`approve`/`audit`/`coverage`/`impact`/`stats`/

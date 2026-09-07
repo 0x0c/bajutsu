@@ -233,7 +233,7 @@ declared:
    the `Driver` Protocol (`common/drivers/base`).
 3. **Periphery** — the consumers of the contract, each removable behind an optional extra:
    `serve/`, `mcp/`, the codegen emitters, the AI / agent paths (`agents/` — `protocols`, `ai_config`,
-   `anthropic_client`, `enrich`, `alerts`, … — plus `record/`, `triage/`, `crawl/guide.py`, …),
+   `anthropic_client`, `enrich`, `alerts`, … — plus `record/`, `triage/`, `crawl/guide`, …),
    and the `github/actions.py` / `run/notify` helpers (the rest of `github/` — `app` / `errors` — is
    core-safe, so `config_source` reaches it without pulling the periphery in).
 

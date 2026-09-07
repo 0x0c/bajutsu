@@ -98,7 +98,7 @@ def test_run_path_top_level_modules_are_relevant() -> None:
         # `bajutsu.common.agents.protocols` executes `common/agents/__init__.py` on import, same as
         # `crawl/__init__.py` below.
         "bajutsu/common/agents/__init__.py",
-        "bajutsu/crawl/core.py",
+        "bajutsu/crawl/core/_functions.py",
         # record imports `screen_identity` through the package re-export, so `__init__` is on the
         # on-device import path — and `__init__` unconditionally imports `serialize` too, putting it
         # on that path as well (the periphery siblings are not — see the parity test below).
@@ -125,11 +125,11 @@ def test_non_run_path_top_level_modules_are_not_relevant() -> None:
         # The crawl engine core/serialize/__init__ trigger (above), but the periphery siblings in the
         # same package do not — the on-device run never imports them, so `crawl/**` must not be swept
         # wholesale. All five are pinned so the boundary is fully covered, not just sampled.
-        "bajutsu/crawl/guide.py",
-        "bajutsu/crawl/report.py",
+        "bajutsu/crawl/guide/proposal.py",
+        "bajutsu/crawl/report/layout.py",
         "bajutsu/crawl/repro.py",
         "bajutsu/crawl/flows.py",
-        "bajutsu/crawl/tabs.py",
+        "bajutsu/crawl/tabs/tab_target.py",
     ):
         assert is_relevant([module]) is False, module
 
@@ -294,7 +294,7 @@ def test_serve_analytics_modules_are_relevant_on_no_lane_except_web_serve() -> N
     # to none.
     for lane in ("ios", "android", "web"):
         assert is_relevant(["bajutsu/analysis/stats.py"], lane) is False, lane
-        assert is_relevant(["bajutsu/crawl/report.py"], lane) is False, lane
+        assert is_relevant(["bajutsu/crawl/report/layout.py"], lane) is False, lane
     assert is_relevant(["bajutsu/serve/app.py"], "web") is True
     assert is_relevant(["bajutsu/serve/app.py"], "android") is False
     assert is_relevant(["bajutsu/serve/app.py"], "ios") is False

@@ -1,73 +1,26 @@
-"""AI guide for the autonomous crawl (BE-0038).
-
-The guide proposes which replayable actions to try from a screen — taps and *realistic* text
-inputs that may open a new screen or enable a disabled control whose precondition isn't obvious
-(a valid email, a password that meets the rules). It only influences **what to explore**: screen
-identity, transition/crash detection and the screen map stay deterministic in
-[`core.py`](core.py), so the crawl is never a verdict (prime directive #1).
-
-The model call sits behind an ``ActionProposer`` protocol, so the guide is exercised in the gate
-with a scripted fake — no LLM, mirroring how `record` tests the authoring agent. The proposer's
-actions are unioned with the deterministic `candidate_actions` as a safety net, so the crawl
-still advances if the model proposes nothing useful.
-"""
+"""Adapt a proposer to the crawl's guide seam, running the BE-0038 pipeline around it."""
 
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass, field
-from typing import Any, Protocol
+from typing import Any
 
-from bajutsu.common.agents.ai_config import AiConfig, language_instruction
-from bajutsu.common.agents.claude_backed import ClaudeBackedAgent
-from bajutsu.common.ai import (
-    AiBackend,
-    ContentPart,
-    ImagePart,
-    Message,
-    MessageRequest,
-    NamedTool,
-    TextPart,
-    ToolDef,
-)
-from bajutsu.common.ai.prompts import NEVER_JUDGE_BOUNDARY, render_elements
-from bajutsu.common.analytics import usage
+from bajutsu.common.agents.ai_config import AiConfig
+from bajutsu.common.ai import ContentPart, ImagePart, TextPart
+from bajutsu.common.ai.prompts import render_elements
 from bajutsu.common.drivers import base
 from bajutsu.common.evidence.redaction import Redactor
 from bajutsu.common.screenshots import screenshot_bytes
 from bajutsu.crawl import core as crawl
 from bajutsu.crawl import tabs as crawl_tabs
 
-MODEL = "claude-opus-4-8"
+from ._secure_fields import _SecureFields
+from .action_proposer import ActionProposer
+from .proposal import Proposal
 
 # Receives the AI's reasoning as it explores, so a watcher (the crawl log / the web UI) can see
 # what the model is thinking and which operations it chose.
 Report = Callable[[str], None]
-
-
-@dataclass
-class Proposal:
-    """The proposer's output for one screen.
-
-    The operations to try, plus `thought` — the model's short reasoning, surfaced live so a watcher
-    sees what the AI is doing.
-    """
-
-    actions: list[crawl.Action] = field(default_factory=list)
-    thought: str = ""
-    tokens: int = 0  # tokens the model spent on this proposal (0 when unknown / no AI call)
-
-
-class ActionProposer(Protocol):
-    """Proposes the operations to try from a screen, given its elements, screenshot, the deterministic candidates, and any OS prompt just dismissed."""
-
-    def propose(
-        self,
-        elements: list[base.Element],
-        screenshot: bytes | None,
-        candidates: list[crawl.Action],
-        dismissed: tuple[str, ...],
-    ) -> Proposal: ...
 
 
 def ai_guide(
@@ -162,83 +115,12 @@ def make_guide(
     BE-0163). `ai` and `redactor` thread the BE-0047 data-sovereignty guarantees (provider config +
     textual-input redaction) into every AI call the guide makes (BE-0097).
     """
+    # Imported in the body, not at module load: the proposer calls three helpers from this module,
+    # so rule 5 breaks the cycle the split creates on the factory's single edge back into it.
+    from .claude_action_proposer import ClaudeActionProposer
+
     proposer: ActionProposer = ClaudeActionProposer(ai=ai, redactor=redactor)
     return ai_guide(proposer, report=report, tab_locator=crawl_tabs.ClaudeTabLocator(ai=ai))
-
-
-# --- Claude-backed proposer ---------------------------------------------------------------
-
-_SYSTEM = f"""You drive a breadth-first crawl of an iOS app to discover as many distinct screens \
-as possible. You are given the current screen (a screenshot and its element list) and the \
-operations a DETERMINISTIC inspector already found here. Reason about what is possible and \
-propose the operations most likely to reveal a NEW screen or to unblock a disabled control whose \
-enabling condition is not obvious.
-
-Rules:
-- Build on the inspector's operations: keep the useful ones, and **combine** them when a single \
-operation isn't enough — e.g. a `fill` that enters several fields at once so a submit button \
-validates, since a button can stay disabled until the whole form is valid.
-- For a text field, supply a realistic value for what it asks (a valid email, a password meeting \
-common rules, a plausible name/number) — this is how you enable a control the placeholder can't.
-- Switch through a tab bar's tabs before drilling into a tab's own content.
-- Add any operation the inspector skipped (e.g. an element with no id, addressed by `label`).
-- Address each element by `id` when it has one (most stable), else by `label` (+ `index`).
-- If an OS prompt was just dismissed to reach this screen (noted below), take it into account — \
-the app asked for something (a permission, to save a password); pick what makes sense next.
-- You only choose what to TRY. {NEVER_JUDGE_BOUNDARY}"""
-
-_PROPOSE_TOOL: ToolDef = ToolDef(
-    name="propose_actions",
-    description="Propose the operations to try from this screen, most promising first.",
-    input_schema={
-        "type": "object",
-        "properties": {
-            "thought": {
-                "type": "string",
-                "description": "one short sentence: what this screen is and why you'll try these "
-                "operations (shown live to the watcher)",
-            },
-            "actions": {
-                "type": "array",
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "action": {"type": "string", "enum": ["tap", "type", "fill"]},
-                        "id": {
-                            "type": "string",
-                            "description": "accessibility identifier (preferred)",
-                        },
-                        "label": {
-                            "type": "string",
-                            "description": "exact label when there is no id",
-                        },
-                        "index": {"type": "integer", "description": "0-based pick among matches"},
-                        "value": {
-                            "type": "string",
-                            "description": "text to enter (for a type action)",
-                        },
-                        "fields": {
-                            "type": "array",
-                            "description": "for a `fill`: every field to enter at once, with a "
-                            "realistic value — use this when a control activates only after several "
-                            "fields are valid (e.g. email + password)",
-                            "items": {
-                                "type": "object",
-                                "properties": {
-                                    "id": {"type": "string"},
-                                    "value": {"type": "string"},
-                                },
-                                "required": ["id", "value"],
-                            },
-                        },
-                    },
-                    "required": ["action"],
-                },
-            },
-        },
-        "required": ["thought", "actions"],
-    },
-)
 
 
 def _render_elements(elements: list[base.Element]) -> str:
@@ -277,24 +159,6 @@ def _content(
         text = redactor.redact_text(text)
     content.append(TextPart(text=text))
     return content
-
-
-@dataclass(frozen=True)
-class _SecureFields:
-    """How the screen's platform-marked masked inputs can be addressed (BE-0331).
-
-    A value the guide invents for such a field is masked in the screen map, and the map keeps no
-    element to read the trait back from, so it has to be carried on the action the guide proposes.
-    Labels are collected beside identifiers because the tool schema invites label targeting for an
-    id-less element — the action that would otherwise reach a password field unmarked.
-    """
-
-    ids: frozenset[str]
-    labels: frozenset[str]
-
-    def covers(self, target: str, label: str | None) -> bool:
-        """Whether an action addressed this way enters a masked input."""
-        return bool(target and target in self.ids) or bool(label and label in self.labels)
 
 
 def _secure_fields(elements: list[base.Element]) -> _SecureFields:
@@ -358,57 +222,3 @@ def _proposal_from(payload: dict[str, Any], cap: int, secure: _SecureFields) -> 
         actions=_actions_from(payload, cap, secure),
         thought=str(payload.get("thought") or ""),
     )
-
-
-class ClaudeActionProposer(ClaudeBackedAgent):
-    """Asks Claude for the screen's candidate operations via a forced tool call.
-
-    Talks to the model through the vendor-neutral backend (BE-0104).
-    """
-
-    def __init__(
-        self,
-        backend: AiBackend | None = None,
-        model: str | None = None,
-        max_tokens: int = 1024,
-        max_actions: int = 8,
-        *,
-        ai: AiConfig | None = None,
-        redactor: Redactor | None = None,
-    ) -> None:
-        super().__init__(
-            backend=backend, ai=ai, default_model=MODEL, model=model, redactor=redactor
-        )
-        self._lang = language_instruction(ai)  # output-language suffix, empty for `auto` (BE-0188)
-        self._max_tokens = max_tokens
-        self._max_actions = max_actions
-
-    def propose(
-        self,
-        elements: list[base.Element],
-        screenshot: bytes | None,
-        candidates: list[crawl.Action],
-        dismissed: tuple[str, ...],
-    ) -> Proposal:
-        secure = _secure_fields(elements)
-        if self._redactor is not None:
-            elements = self._redactor.redact_elements(elements)
-        content = _content(elements, screenshot, candidates, dismissed, self._redactor)
-        response = self._ensure_backend().create_message(
-            MessageRequest(
-                system=_SYSTEM + self._lang,
-                messages=[Message(role="user", content=content)],
-                tools=[_PROPOSE_TOOL],
-                tool_choice=NamedTool(name="propose_actions"),
-                model=self._model,
-                max_tokens=self._max_tokens,
-            )
-        )
-        # reporting only (BE-0104) — never on the pass/fail path
-        self._record_usage(response)
-        block = response.first_tool_use()
-        if block is None:
-            return Proposal()
-        proposal = _proposal_from(block.input, self._max_actions, secure)
-        proposal.tokens = usage.of(response.usage).total_tokens
-        return proposal
