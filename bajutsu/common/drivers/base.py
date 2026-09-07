@@ -495,7 +495,7 @@ class RawSource:
     already looked wrong" apart from "bajutsu's own processing changed it". `parsed_input` is the same
     read *after* a backend's own structural transform of it, when that transform actually changed
     something: adb's resident channel strips SystemUI decor windows (`narrowed_root`) before
-    handing the result to `parse_hierarchy`, so `parsed_input` is what the parser actually consumed.
+    handing the tree to `elements_with_identities`, so `parsed_input` is what the parser consumed.
     `None` when the backend applies no such transform (the dump-subprocess path, XCUITest) or the
     transform left `text` unchanged — `text` alone already describes what was parsed. `suffix` names the
     format `text` is actually written in (adb: `.xml`; XCUITest's `GET /elements` body is undecoded JSON,
