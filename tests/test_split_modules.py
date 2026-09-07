@@ -532,3 +532,27 @@ def test_a_tuple_unpacking_assignment_binds_every_one_of_its_names() -> None:
     assert "from ._shared import _FIRST" in plan.files["alpha.py"]
     assert "from ._shared import _SECOND" in plan.files["beta.py"]
     assert "from ._shared import _FIRST as _FIRST" in plan.files["__init__.py"]
+
+
+def test_a_pep_695_type_parameter_bound_reads_names_too() -> None:
+    # `def _wedge_guard[F: Callable[..., Any]](method: F) -> F` in drivers/playwright.py. Skipping
+    # the bound leaves `Callable` unimported, and the split file fails ruff's F821 on it.
+    plan = _plan(
+        """
+        from collections.abc import Callable
+        from typing import Any
+
+
+        class Alpha:
+            pass
+
+
+        class Beta:
+            pass
+
+
+        def guard[F: Callable[..., Any]](method: F) -> F:
+            return method
+        """
+    )
+    assert "from collections.abc import Callable" in plan.files["_functions.py"]

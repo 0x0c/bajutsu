@@ -209,11 +209,11 @@ _PERIPHERY_EXCLUSIONS: tuple[tuple[str, str], ...] = (
 # that each stays claimed by at least one lane (none orphaned by this exclusion), and the per-lane
 # surface tests pin which lane(s).
 _LANE_CLAIMED: tuple[str, ...] = (
-    "bajutsu/common/drivers/adb.py",
+    "bajutsu/common/drivers/adb/",
     "bajutsu/common/drivers/coordinate_tree.py",
-    "bajutsu/common/drivers/playwright.py",
-    "bajutsu/common/drivers/xcuitest.py",
-    "bajutsu/common/drivers/xcuitest_live.py",
+    "bajutsu/common/drivers/playwright/",
+    "bajutsu/common/drivers/xcuitest/",
+    "bajutsu/common/drivers/xcuitest_live/",
     "bajutsu/common/platform_lifecycle/environments/android.py",
     "bajutsu/common/platform_lifecycle/environments/web.py",
     "bajutsu/common/platform_lifecycle/environments/xcuitest.py",
@@ -276,7 +276,7 @@ _RUN_PATH = (
 # which meant a new `common/drivers/<foo>.py` fired nothing and silently under-triggered every required check.
 _LANE_PATHS: dict[str, str] = {
     "ios": (
-        r"|bajutsu/common/drivers/(?:xcuitest|xcuitest_live)\.py$"
+        r"|bajutsu/common/drivers/(?:xcuitest|xcuitest_live)/"
         # The XCUITest lifecycle environments (cold spawn, the warm resident lease, the BE-0292
         # bundled runner) — the iOS half of the `platform_lifecycle/` carve-out above.
         r"|bajutsu/common/platform_lifecycle/environments/(?:xcuitest|xcuitest_live)\.py$"
@@ -318,7 +318,7 @@ _LANE_PATHS: dict[str, str] = {
         # Only the adb driver and the Python side of the resident UI Automator channel (BE-0245) this
         # lane exercises. coordinate_tree.py is adb.py's own read/settle core (BE-0254) — a change to
         # it can change adb's runtime behavior even though adb.py itself is untouched.
-        r"|bajutsu/common/drivers/adb\.py$"
+        r"|bajutsu/common/drivers/adb/"
         r"|bajutsu/common/drivers/coordinate_tree\.py$"
         r"|bajutsu/common/backend_cli/adb_resident/"
         # The Android lifecycle environment (boot, install, the BE-0236 provision profile) — the
@@ -346,7 +346,7 @@ _LANE_PATHS: dict[str, str] = {
         r"|scripts/android_pool_e2e\.sh$"
     ),
     "web": (
-        r"|bajutsu/common/drivers/playwright\.py$"
+        r"|bajutsu/common/drivers/playwright/"
         # The web lifecycle environment (browser launch, context teardown) — the web half of the
         # `platform_lifecycle/` carve-out.
         r"|bajutsu/common/platform_lifecycle/environments/web\.py$"

@@ -1,44 +1,13 @@
-"""adb backend (headless, coordinate-based).
-
-Parses `uiautomator dump` XML into normalized Elements and acts via `adb shell input tap/swipe/text`.
-adb has no semantic tap, so a tap resolves the target's frame center first — a coordinate
-round-trip. Like a device tree that goes near-empty during a screen transition, `uiautomator dump`
-intermittently yields a null-root/empty result mid-transition, so this reuses the shared
-*resolve-with-retry, fail-ambiguity-fast* discipline unchanged: retry a bounded number of times, and
-still fail immediately on an ambiguous (2+) match rather than tapping whatever matched first.
-
-The XML attribute names follow UI Automator's `uiautomator dump` schema; the selector mapping is
-`resource-id` (id, package prefix stripped) → `identifier`, `text` → `label`, `content-desc` →
-`value`, and the widget `class` (plus `clickable` and enabled/selected/checked state) → `traits`. The value channel
-is `content-desc`, not `text`, because the showcase mirrors its assertion state value into
-`content-desc` (SPEC §2.1: a `uiautomator dump` exposes `content-desc` but not Compose's
-`stateDescription`), while `text` carries the visible label — the Android peer of iOS's
-accessibilityLabel / accessibilityValue split. Tuned against the Android showcase on an emulator
-(BE-0007 Unit 7): with `text` → `value` a `value` assertion read the visible string ("Matches: 5",
-"Not favorited") instead of the mirrored value ("5", "off").
-
-A `clickable` node also carries the `button` trait, and a clickable node with no own `text`/
-`content-desc` derives its `label` from its descendants' text — so a Compose `NavigationBarItem`
-(a clickable `android.view.View` whose caption lives in a child `TextView`) resolves the shared
-cross-backend tab selector `{ label, traits: [button] }` (BE-0107), the same way iOS reaches a tab:
-the adb driver catching up to that established contract (BE-0223). Here `button` means *tappable*
-(the node responds to a tap), which is broader than a `button` trait derived from the widget type
-itself — so a bare `traits: [button]` matches any tappable row or container; pair it with a `label`
-(as every shared scenario does) to address one control.
-"""
+"""The Android driver: adb plus UI Automator behind the common `Driver` seam."""
 
 from __future__ import annotations
 
-import logging
 import math
-import re
 import subprocess
 import threading
 import time
-from collections.abc import Callable, Mapping
-from dataclasses import dataclass, field
+from collections.abc import Callable
 from pathlib import Path
-from xml.etree import ElementTree as ET
 
 from bajutsu.common import stall_diagnostics
 from bajutsu.common.backend_cli import adb
@@ -48,38 +17,17 @@ from bajutsu.common.drivers.coordinate_tree import CoordinateTreeDriver, StableK
 from bajutsu.common.drivers.elements import screen_size_from_elements
 from bajutsu.common.evidence import intervals
 
+from ._catchup import _Catchup
+from ._functions import _parse_wm_size, parse_hierarchy_with_identities
+from ._shared import NodeIdentity, logger
+from .act_outcome import ActOutcome
+from .act_request import ActRequest
+from .adb_act_uncertain import AdbActUncertain
+from .adb_act_unsupported import AdbActUnsupported
+from .adb_resident_error import AdbResidentError
+from .hierarchy_read import HierarchyRead
+
 RunFn = Callable[[list[str]], str]
-
-
-# A resident UI Automator server (BE-0245) returns the hierarchy over an already-open channel,
-# skipping the ~2.4 s per-invocation `uiautomator dump` startup. Its response is UI Automator's own
-# XML, unchanged, so `parse_hierarchy` consumes it identically — only the transport differs.
-@dataclass(frozen=True)
-class HierarchyRead:
-    """One resident-channel read: the hierarchy XML and its read mark (BE-0332 Unit 3).
-
-    `mark` is the device-clock timestamp (`SystemClock.uptimeMillis`) of the most recent accessibility
-    event the resident reader had observed when it served this dump. `AdbDriver` trusts a read once its
-    `mark` postdates the mark it took before actuating, so a stable-but-stale tree — one that agrees
-    with itself yet predates the last gesture — is no longer accepted (the read-lag defect). It is None
-    on the `uiautomator dump` fallback, which carries no such stamp; there the wall-clock budget stands
-    in, exactly as before this unit.
-
-    `raw` is the body exactly as the resident server answered it, before `narrow_to_active_window`
-    strips SystemUI decor windows — `text` is what that narrowing produced. None when the caller applies
-    no such transform, so a `rawTree` capture (`RawSourceProvider`) has both halves to diff a mismatch
-    against: the device's own dump, and bajutsu's own processing of it.
-
-    `native_z` maps each opted-in view's content key to its own `View.getZ()` (BE-0355 Unit 3), keyed
-    the way it is because the device measures those values in a second walk whose node sequence does
-    not line up with the dumped body's. Empty on the dump fallback, on a server that does not report
-    it, and on an app that opted no view in.
-    """
-
-    text: str
-    mark: float | None = None
-    raw: str | None = None
-    native_z: dict[str, float] = field(default_factory=dict)
 
 
 # Takes the mark a read must postdate (BE-0332 Unit 4): the resident server blocks until an
@@ -93,48 +41,6 @@ HierarchyFetch = Callable[[float | None], HierarchyRead]
 # failing a read, never accepting a stale tree in the bargain.
 ClockFetch = Callable[[], float | None]
 
-# The four accessibility fields that name one already-chosen element to the resident server:
-# `resource-id`, `content-desc`, `text`, `class`, verbatim from the dump.
-NodeIdentity = tuple[str, str, str, str]
-
-
-@dataclass(frozen=True)
-class ActRequest:
-    """One device-side actuation: what to do, and which element to do it to.
-
-    The host has already decided *which* element — `resolve_unique` ran here, so an ambiguous selector
-    failed before this was built. What crosses to the device is that element's identity, plus where it
-    sat among the nodes sharing that identity (`index` of `count`), so the device can confirm it is
-    looking at the same screen before it injects. No coordinate crosses: the device reads the bounds
-    itself, microseconds before the touch, from a dump of its own.
-    """
-
-    kind: str  # "tap" | "longPress" | "doubleTap"
-    identity: NodeIdentity
-    index: int  # the element's ordinal among the nodes sharing `identity`, in document order
-    count: int  # how many such nodes the host saw — the device refuses if its own count differs
-    since: float | None  # the device-clock mark the read behind the gesture must postdate
-    duration_ms: int | None  # press-and-hold length, for "longPress"
-
-
-@dataclass(frozen=True)
-class ActOutcome:
-    """What the device did with one `ActRequest`, and whether the tree has caught up with it.
-
-    `published_mark` is the whole reason this is not a bare bool. The device answers it from the
-    accessibility event stream it is already observing — the one place the question "has this gesture
-    reached the tree yet?" can be answered directly, rather than inferred by re-reading trees a round
-    trip away. When it is set, the read that follows this gesture cannot describe the pre-gesture
-    screen, so the driver arms no read-lag barrier for it (BE-0339 Unit 5).
-
-    None is the honest answer for every case the device could not confirm — a gesture that published
-    nothing because it moved no frame, one whose publish outran the endpoint's budget, and a server
-    old enough not to report at all — and it restores the barrier exactly as it stood before.
-    """
-
-    acted: bool  # False is the `stale` reply: the identity no longer names the same nodes there
-    published_mark: float | None  # the device-clock time of an event postdating the injection
-
 
 # Perform one gesture on the device, against an element the host already resolved. `acted` is False when
 # it answered `stale` — the identity no longer names the same nodes there, so the host re-resolves rather
@@ -142,340 +48,9 @@ class ActOutcome:
 # the driver degrades to its own coordinate path.
 ActFn = Callable[[ActRequest], ActOutcome]
 
-logger = logging.getLogger("bajutsu.adb.resident")
-
 # Android's `uiautomator` dump reports bounds in raw display pixels, so that is the space stamped on
 # this backend's actuation records — a coordinate only means something alongside its unit.
 _UNIT = "pixel"
-
-
-class AdbResidentError(RuntimeError):
-    """The resident hierarchy channel failed to answer a read.
-
-    An infrastructure failure, kept distinct from a test outcome (like `XcuitestChannelError`): the
-    driver catches it, logs loudly, and degrades to the `uiautomator dump` subprocess rather than
-    reading a failed channel as an empty screen.
-    """
-
-
-class AdbActUnsupported(AdbResidentError):
-    """The resident channel serves reads but has no actuation endpoint (an older server 404s `/act`).
-
-    Held apart from its base so the driver can tell a *permanent* absence from a *transient* fault. The
-    absence is a property of the deployed server and will not change within the lease, so the driver
-    latches it and stops probing. A socket blip is the opposite: the endpoint is there, and giving up on
-    it for the rest of the lease would put every later gesture back on the coordinate path this exists
-    to avoid — under exactly the flaky conditions that produced the blip.
-    """
-
-
-class AdbActUncertain(AdbResidentError):
-    """The actuation request reached the device, and whether it applied is unknown.
-
-    The device injects the gesture *before* it writes its response, so a socket lost after the request
-    went out cannot be read as "nothing happened". Falling back to a coordinate injection here would
-    actuate a second time — a tap fired twice, or a double tap landing as four contacts — which is the
-    retry-an-already-applied-gesture hazard this item's design rejected. Held apart from its base so
-    the driver can do *less* rather than more: it treats the gesture as having happened and lets the
-    step's own condition wait fail loudly if it did not, because a missed gesture fails one assertion
-    while an extra one can navigate the screen out from under the rest of the scenario.
-    """
-
-
-# uiautomator's bounds attribute, e.g. "[0,100][200,220]".
-_BOUNDS = re.compile(r"\[(-?\d+),(-?\d+)\]\[(-?\d+),(-?\d+)\]")
-
-
-def _strip_pkg(resource_id: str) -> str | None:
-    """The local id from a UI Automator resource-id: `com.app:id/foo` → `foo`.
-
-    Native `android:id`s carry the `<package>:id/` prefix; a Compose `testTag` surfaced via
-    `testTagsAsResourceId` has none, so it passes through verbatim (`stable.refresh`). Matching is
-    exact on the local name — no `.`↔`_` normalization, which could conflate distinct ids and break
-    determinism (the Views `stable.refresh`→`stable_refresh` case is left to a scenario variant).
-    """
-    # `or None` maps both an absent resource-id and a malformed one with no local name
-    # (`com.app:id/`) to None, so the identifier is never an empty string that no selector matches.
-    return resource_id.rsplit("/", 1)[-1] or None
-
-
-def _norm_class(class_name: str) -> str:
-    """Widget class to a trait token: `android.widget.Button` → `button`."""
-    simple = class_name.rsplit(".", 1)[-1]
-    return simple[:1].lower() + simple[1:] if simple else simple
-
-
-def _bounds(raw: str, malformed_count: list[int] | None = None) -> base.Frame:
-    """The `(x, y, w, h)` frame from a node's `bounds` attribute, or the origin frame if absent/malformed.
-
-    The origin-frame default is silent by design where it is expected — a genuinely bounds-less node
-    is not a fault — but a *malformed* attribute (present, non-empty, yet unparseable) tallies into
-    `malformed_count` when given, so the caller can warn once per parse rather than once per node: a
-    single dump with many such nodes would otherwise flood the log with one line per node, each
-    occurrence individually indistinguishable from the fine, silent default. A node whose bounds stay
-    malformed across a `_settle` poll's repeated reads still warns once per read (up to ~80 reads per
-    call) — this collapses the per-node flood within one read, not the per-read flood across a poll.
-    """
-    m = _BOUNDS.search(raw or "")
-    if not m:
-        if raw and malformed_count is not None:
-            malformed_count[0] += 1
-        return (0.0, 0.0, 0.0, 0.0)
-    x1, y1, x2, y2 = (float(v) for v in m.groups())
-    return (x1, y1, x2 - x1, y2 - y1)
-
-
-# `wm size` prints "Physical size: WxH" and, when the display has been resized, an "Override size:
-# WxH" that is the effective resolution — the override wins when present (BE-0326).
-_WM_SIZE = re.compile(r"^\s*(Physical|Override)\s+size:\s*(\d+)x(\d+)\s*$", re.MULTILINE)
-
-
-def _parse_wm_size(out: str) -> base.Point:
-    """Parse `adb shell wm size` output to the display `(w, h)` in pixels.
-
-    Prefers an Override size over the Physical size; fails loudly (determinism first) rather than
-    guessing a viewport if the output carries neither.
-    """
-    physical: base.Point | None = None
-    override: base.Point | None = None
-    for label, w, h in _WM_SIZE.findall(out or ""):
-        if label == "Override":
-            override = (float(w), float(h))
-        else:
-            physical = (float(w), float(h))
-    size = override or physical
-    if size is None:
-        raise ValueError(f"could not parse `wm size` output: {out!r}")
-    return size
-
-
-def _derived_label(node: ET.Element) -> str | None:
-    """The accessible name of a labelless control, joined from its descendants' visible text.
-
-    A Compose `NavigationBarItem` (and any icon-plus-caption control) dumps as a clickable node
-    with no own `text`/`content-desc`; its visible caption lives in a child `TextView`. Mirroring
-    how an accessibility service names a focusable container, the control's label is its
-    descendants' text in document order — so a tab is addressable by its caption ("Log"), the same
-    way the XCUITest backend exposes each tab as a label-bearing button (BE-0107).
-
-    A nested clickable descendant is its own control (it independently gains the `button` trait and
-    derives its own label), so its subtree is skipped rather than folded into this label — which
-    also keeps two nested clickables from both deriving the same joined text (BE-0223).
-
-    Only `text` is folded in, not `content-desc`: `content-desc` is this driver's *value* channel
-    (SPEC §2.1 mirrors assertion state into it), so pulling it into the label would risk a mirrored
-    value bleeding into the name. This is a deliberate limit — an icon-only caption carried solely
-    in `content-desc` (no `TextView`) is not a showcase pattern, and would need the value/label
-    split reconciled first.
-    """
-    parts: list[str] = []
-
-    def collect(parent: ET.Element) -> None:
-        for child in parent:
-            if child.get("clickable") == "true":
-                continue  # a separate control; its text belongs to its own element
-            if text := child.get("text"):
-                parts.append(text)
-            collect(child)
-
-    collect(node)
-    return " ".join(parts) or None
-
-
-def _traits(node: ET.Element) -> list[str]:
-    out: list[str] = []
-    cls = node.get("class") or ""
-    if cls:
-        out.append(_norm_class(cls))
-    # A clickable node is tappable, so it carries the button trait — the shared cross-backend tab
-    # selector `{ label, traits: [button] }` (BE-0107) resolves on adb because a Compose
-    # NavigationBarItem dumps as a clickable `android.view.View`, whose class alone ("view") never
-    # yields it (BE-0223). Note this `button` means "tappable", broader than a `button` derived from
-    # the widget type — so a bare `traits: [button]` matches any tappable node; pair it with a label.
-    # Guarded so a widget already mapped to `button` by class (a Views Button) is not tagged twice.
-    if node.get("clickable") == "true" and base.Trait.BUTTON not in out:
-        out.append(base.Trait.BUTTON)
-    # UI Automator dumps a masked input as `password="true"`, whatever widget class backs it, so the
-    # normalized trait comes from the flag rather than from `class` (BE-0331).
-    if node.get("password") == "true":
-        out.append(base.Trait.SECURE_TEXT_FIELD)
-    if node.get("enabled") == "false":
-        out.append(base.Trait.NOT_ENABLED)
-    # A UI Automator checkbox/switch reports its state as `checked`; a list selection as `selected`.
-    if node.get("selected") == "true" or node.get("checked") == "true":
-        out.append(base.Trait.SELECTED)
-    return out
-
-
-def _to_element(node: ET.Element, malformed_bounds: list[int] | None = None) -> base.Element:
-    desc = node.get("content-desc") or ""
-    text = node.get("text") or ""
-    # `text` is the visible label; `content-desc` is where the showcase mirrors the assertion value
-    # (SPEC §2.1). `label` falls back to `content-desc` for an element that carries only a content
-    # description (an icon-only control). A clickable control with neither derives its label from
-    # its descendants' text (BE-0223); derivation is scoped to clickable nodes so non-interactive
-    # layout containers stay label-less rather than flooding the tree with synthetic labels.
-    label: str | None = text or desc
-    if not label and node.get("clickable") == "true":
-        label = _derived_label(node)
-    return {
-        "identifier": _strip_pkg(node.get("resource-id") or ""),
-        "label": label or None,
-        "value": desc or None,
-        "traits": _traits(node),
-        "frame": _bounds(node.get("bounds") or "", malformed_bounds),
-        # `dumpWindowHierarchy`'s XML has no z attribute, so a measured position arrives beside the
-        # body and is matched in by `_elements_from_nodes` (BE-0355). Absent until then.
-        "nativeZ": None,
-    }
-
-
-def _warn_malformed_bounds(count: int) -> None:
-    """Log once per parse for however many nodes carried a malformed `bounds` attribute (never zero)."""
-    logger.warning(
-        "%d node(s) had a bounds attribute that did not match the expected format; "
-        "their frames defaulted to (0,0,0,0)",
-        count,
-    )
-
-
-def _identity(node: ET.Element) -> NodeIdentity:
-    """The accessibility fields that name a node to the device, verbatim from the dump.
-
-    Verbatim — not `_to_element`'s derived `identifier` / `label` — because the resident server matches
-    these against its own dump's raw attributes. Deriving on one side and matching on the other is the
-    kind of drift that turns a resolvable element into a permanent `stale`.
-    """
-    return (
-        node.get("resource-id") or "",
-        node.get("content-desc") or "",
-        node.get("text") or "",
-        node.get("class") or "",
-    )
-
-
-def _native_z_key(node: ET.Element, occurrence: int) -> str:
-    """What names a node to the device's own second walk, recomputed from the dumped `<node>`.
-
-    Bounds, class, and package, plus how many nodes agreeing on all three came before it. The device
-    cannot key its readings by document-order position — it measures them in a walk over the active
-    window while the body spans every window — and cannot key them by identity either, since the
-    four accessibility fields `_identity` uses are deliberately not unique. Both sides walk the same
-    accessibility tree depth-first, so the occurrence count agrees, *scoped to the active window*:
-    `narrow_to_active_window` drops SystemUI's own windows from the body before this key is computed,
-    but not a second window of the app under test itself (a dialog over its own main window). Two
-    opted-in nodes sharing bounds, class, and package across the app's own windows would shift each
-    other's occurrence count and could match onto the wrong one — narrower than the false-authority
-    failure mode `nativeZ` exists to avoid overall (BE-0355), since it needs bounds- and
-    class-identical nodes across the same app's own windows, but not yet closed. Kept in sync with
-    `ResidentServerTest.kt`'s `nativeZHeader`.
-    """
-    # The verbatim `[l,t][r,b]` corners, not `_bounds`' (x, y, width, height) `Frame`: the device
-    # keys by the screen rect it read, so deriving anything here would only be a second chance to
-    # disagree.
-    match = _BOUNDS.match(node.get("bounds") or "")
-    corners = ",".join(match.groups()) if match else ""
-    return f"{corners}|{node.get('class') or ''}|{node.get('package') or ''}|{occurrence}"
-
-
-def _elements_from_nodes(
-    nodes: list[ET.Element], native_z: Mapping[str, float] | None = None
-) -> list[base.Element]:
-    """`_to_element` over every node, warning once for the parse if any `bounds` was malformed.
-
-    The one place both `parse_hierarchy` and `parse_hierarchy_with_identities` build their `Element`
-    list, so the malformed-bounds tally and its warning are counted and logged once, not duplicated at
-    each call site — and the one place a device-measured `nativeZ` is matched onto the node it belongs
-    to (BE-0355).
-    """
-    malformed_bounds = [0]
-    els = [_to_element(n, malformed_bounds) for n in nodes]
-    if malformed_bounds[0]:
-        _warn_malformed_bounds(malformed_bounds[0])
-    if native_z:
-        seen: dict[str, int] = {}
-        for node, el in zip(nodes, els, strict=True):
-            stem = _native_z_key(node, 0).rsplit("|", 1)[0]
-            occurrence = seen.get(stem, 0)
-            seen[stem] = occurrence + 1
-            el["nativeZ"] = native_z.get(f"{stem}|{occurrence}")
-    return els
-
-
-def parse_hierarchy_with_identities(
-    text: str, native_z: Mapping[str, float] | None = None
-) -> tuple[list[base.Element], list[NodeIdentity]]:
-    """`parse_hierarchy`, plus each element's device-addressable identity, index-aligned.
-
-    Both lists walk the same `<node>` sequence in document order, so element *i* is named by identity
-    *i*. Produced together rather than by two passes so the alignment cannot drift.
-    """
-    root = slice_hierarchy_root(text)
-    if root is None:
-        return [], []
-    nodes = list(root.iter("node"))
-    return _elements_from_nodes(nodes, native_z), [_identity(n) for n in nodes]
-
-
-def slice_hierarchy_root(text: str) -> ET.Element | None:
-    """Slice the `<hierarchy>` XML out of a UI Automator dump and parse its root, or `None`.
-
-    UI Automator output — over the adb subprocess or the resident channel — can be wrapped in a
-    status line ("UI hierarchy dumped to: …") or replaced by "null root node returned by
-    UiTestAutomationBridge" mid-transition. The XML is located by its `<hierarchy>` tags so the
-    surrounding chatter is ignored; a missing or unparseable tree yields `None`, letting each caller
-    apply its own degrade (`parse_hierarchy` an empty list, the resident path the original text).
-    """
-    start = text.find("<hierarchy")
-    end = text.rfind("</hierarchy>")
-    if start == -1 or end == -1:
-        return None
-    try:
-        # The dump is UI Automator's own output over our channel — a DTD/entity-free tree of
-        # attribute-only <node>s — not attacker-supplied XML, so the stdlib parser is safe here.
-        return ET.fromstring(text[start : end + len("</hierarchy>")])  # noqa: S314
-    except ET.ParseError:
-        return None
-
-
-def parse_hierarchy(text: str) -> list[base.Element]:
-    """Parse `uiautomator dump` output into Elements (empty on a null-root/garbled dump).
-
-    `exec-out uiautomator dump /dev/tty` prints the `<hierarchy>` XML; a missing/unparseable tree
-    yields `[]`, which the transient-empty retry rides over.
-    """
-    root = slice_hierarchy_root(text)
-    if root is None:
-        return []
-    # Every `<node>` is an element; the `<hierarchy>` root itself is not a UI node.
-    return _elements_from_nodes(list(root.iter("node")))
-
-
-@dataclass
-class _Catchup:
-    """One gesture's outstanding read-lag barrier: has the tree published the gesture yet?
-
-    Android moves the content before it publishes the accessibility update naming the new frames, so a
-    read taken in between describes the pre-gesture screen. `AdbDriver._advance_catchup` folds each read
-    into this state and closes the barrier once the tree has demonstrably caught up.
-
-    Two answers to "caught up?" live here, and `_advance_catchup` prefers the first available. When the
-    resident channel stamps reads with a device event mark (BE-0332 Unit 3), a read caught up the moment
-    its mark postdates `actuation_mark` — a genuine ordering test that releases as soon as the device
-    publishes an update. On the `uiautomator dump` fallback, which carries no mark, `actuation_mark` is
-    None and the barrier falls back to the projection-changed-and-dwelt heuristic (`pre_key`/`key`/
-    `since`) bounded by `deadline`.
-    """
-
-    pre_key: StableKey  # the projection the screen had when the gesture fired
-    deadline: float  # wall-clock ceiling on waiting for the gesture to show up
-    key: StableKey | None  # the newest non-degenerate projection seen since
-    since: float  # when `key` was first seen — the dwell is measured from here
-    actuation_mark: (
-        float | None
-    )  # the device-clock mark taken before the gesture (None on the dump path)
-    armed_at: float  # when the gesture fired — how long the barrier took is measured from here, and
-    # `since` cannot stand in for it because the dwell logic overwrites that
 
 
 class AdbDriver(CoordinateTreeDriver):

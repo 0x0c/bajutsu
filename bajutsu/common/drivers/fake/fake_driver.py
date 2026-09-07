@@ -1,17 +1,14 @@
-"""In-memory fake driver implementing the Driver Protocol.
-
-Lets the orchestrator (the Tier2 runner) be tested without a Simulator. The
-`react` callback scripts "the screen changes in response to an action".
-"""
+"""The in-memory driver the runner's own tests run against, with no device anywhere."""
 
 from __future__ import annotations
 
-import time
 from collections.abc import Callable, Sequence
 
 from bajutsu.common.drivers import base
 from bajutsu.common.drivers.actuation import Actuation, ActuationLog, Drained
-from bajutsu.common.evidence.network import NetworkExchange, ScreenTransition
+from bajutsu.common.evidence.network import NetworkExchange
+
+from .fake_network_collector import FakeNetworkCollector
 
 # Hook that mutates state in response to an action: react(driver, kind, arg)
 React = Callable[["FakeDriver", str, object], None]
@@ -20,33 +17,6 @@ React = Callable[["FakeDriver", str, object], None]
 # arbitrary but fixed choice; leaving it empty would make this the one backend whose records cannot be
 # read uniformly with the rest.
 _UNIT = "point"
-
-
-class FakeNetworkCollector:
-    """A deterministic in-process `network.Collector` over a fixed exchange list (BE-0020 tests).
-
-    Real test data, not a behavior mock: it just replays the exchanges it was seeded with, so a
-    network-capable fallback can be exercised end to end on the Linux gate without a device.
-    """
-
-    def __init__(self, exchanges: list[NetworkExchange]) -> None:
-        now = time.monotonic()
-        self._items: list[tuple[NetworkExchange, float]] = [(ex, now) for ex in exchanges]
-
-    def snapshot(self) -> list[NetworkExchange]:
-        return [ex for ex, _ in self._items]
-
-    def snapshot_timed(self) -> list[tuple[NetworkExchange, float]]:
-        return list(self._items)
-
-    def transitions_snapshot_timed(self) -> list[tuple[ScreenTransition, float]]:
-        return []  # the fake driver seeds no screen-transition events (BE-0310)
-
-    def clear(self) -> None:
-        self._items.clear()
-
-    def stop(self) -> None:
-        pass  # nothing to release
 
 
 class FakeDriver:

@@ -93,6 +93,9 @@ class _References(cst.CSTVisitor):
     def visit_FunctionDef(self, node: cst.FunctionDef) -> bool:
         for decorator in node.decorators:
             decorator.visit(self)
+        if node.type_parameters is not None:
+            # A PEP 695 bound reads names too: `def f[F: Callable[..., Any]](…)` needs `Callable`.
+            node.type_parameters.visit(self)
         node.params.visit(self)
         if node.returns is not None:
             node.returns.visit(self)
@@ -102,6 +105,8 @@ class _References(cst.CSTVisitor):
     def visit_ClassDef(self, node: cst.ClassDef) -> bool:
         for decorator in node.decorators:
             decorator.visit(self)
+        if node.type_parameters is not None:
+            node.type_parameters.visit(self)
         for base in node.bases:
             base.visit(self)
         for kwarg in node.keywords:
