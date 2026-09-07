@@ -238,6 +238,37 @@ def test_composed_bind_records_triple_sha_provenance(tmp_path: Path) -> None:
     assert "sha256" not in prov
 
 
+def test_a_composed_binds_job_carries_its_per_leg_shas_to_the_worker(tmp_path: Path) -> None:
+    """A job dispatched off a composed bind carries the triple, not a single-zip reference.
+
+    Every other test of this seam hand-writes the spec, so nothing else reaches `Upload.worker_ref`'s
+    composed branch from a real bind. That branch failing open is silent and total: `_bundle_urls`
+    would take the single-zip path and sign `uploads/<compositionId>.zip`, a key BE-0268 never
+    writes, so every run off a composed bundle would fail with `bundle unavailable` — with the gate
+    still green. The `scenarios_filename` assertion covers the other half, since composing against a
+    display default instead of the name the bind used builds a different tree under the same id.
+    """
+    state = _state(tmp_path)
+    config_sha = _store_artifact(state, tmp_path, "config", _SCENARIOS_ONLY_CONFIG)
+    scenarios_sha = _store_artifact(state, tmp_path, "scenarios", b"- name: login\n  steps: []\n")
+
+    _, status = ops.bind_composition(
+        state,
+        {"config": config_sha, "scenarios": scenarios_sha, "scenariosName": "login.yml"},
+    )
+    assert status == 200
+    assert state.binding.upload is not None
+
+    payload, status = ops.start_run(state, {"target": "demo", "scenario": "login.yaml"})
+    assert status == 200, payload
+
+    assert state.jobs[payload["jobId"]].bundle == {
+        "id": state.binding.upload.sha256,  # the composition key, not any one file's digest
+        "artifacts": {"config": config_sha, "scenarios": scenarios_sha},
+        "scenarios_filename": "login.yml",  # what the bind composed with, not a picker default
+    }
+
+
 def test_composed_bind_does_not_seed_the_orgs_it_declares(tmp_path: Path) -> None:
     # A compose binds artifacts uploaded over the API, so its config's content is not the operator's
     # — the same trust line BE-0121 draws for that file's `build:`. Seeding from it would write rows
