@@ -85,6 +85,9 @@ docs/api/roadmap.md
 
 # serve upload temp dirs (BE-0073) — never commit extracted bundles
 uploads/
+# ...but not the source package of the same name (BE-0411). The pattern above is unanchored,
+# so it swallowed `bajutsu/serve/uploads/` whole the moment that module became a directory.
+!bajutsu/serve/uploads/
 demos/showcase/scenarios/baselines/
 
 # APM's package cache (BE-0390) — rebuilt from apm.lock.yaml by `make skills`, never committed.

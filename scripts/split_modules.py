@@ -1037,6 +1037,29 @@ def plan_split(source: str, *, name: str = "<module>", allow_file_paths: bool = 
     return SplitPlan(files=files, notes=tuple(notes + cycle_notes))
 
 
+def _refuse_if_ignored(package: Path) -> None:
+    """Refuse a package path `.gitignore` would swallow, before anything is written.
+
+    A module becoming a directory can walk straight into an unanchored directory pattern —
+    `uploads/` caught `bajutsu/serve/uploads/` this way. `git add` then skips the whole package
+    without a word, so the split survives every local check and only fails once CI clones it.
+    """
+    try:
+        ignored = subprocess.run(
+            # The trailing slash matters: a directory-only pattern such as `uploads/` matches a
+            # path git can see is a directory, and the package does not exist yet.
+            ["git", "check-ignore", "-q", f"{package.name}/"],
+            # Asked of the repository that owns the path, not of the process's own working
+            # directory, which `git check-ignore` would otherwise measure the path against.
+            cwd=package.parent,
+            check=False,
+        ).returncode
+    except OSError:
+        return  # No git here to ask; the split is no worse off than before the check existed.
+    if ignored == 0:
+        raise SplitError(f"{package}/ is gitignored; `git add` would skip the whole package")
+
+
 def apply_split(path: Path, plan: SplitPlan) -> Path:
     """Replace `path` with the package `plan` describes, and return the new directory.
 
@@ -1044,6 +1067,7 @@ def apply_split(path: Path, plan: SplitPlan) -> Path:
     of what the split rewrote, so a file that does not even parse must not cost it.
     """
     package = path.with_suffix("")
+    _refuse_if_ignored(package)
     package.mkdir()
     try:
         for filename, source in plan.files.items():

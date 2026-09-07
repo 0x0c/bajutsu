@@ -1780,6 +1780,19 @@ def test_a_generated_file_that_will_not_compile_costs_no_original(tmp_path: Path
     assert not (tmp_path / "sample").exists()
 
 
+def test_a_gitignored_package_path_is_refused_before_anything_is_written(tmp_path: Path) -> None:
+    # `git add` skips an ignored directory in silence, so the split would pass every local check
+    # and only surface once CI cloned the branch without the package in it.
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    (tmp_path / ".gitignore").write_text("sample/\n", encoding="utf-8")
+    path = _module(tmp_path, "sample", _END_TO_END["plain"])
+    plan = SplitPlan(files={"__init__.py": "", "alpha.py": "class Alpha: ...\n"}, notes=())
+    with pytest.raises(SplitError, match="gitignored"):
+        apply_split(path, plan)
+    assert path.exists()
+    assert not (tmp_path / "sample").is_dir()
+
+
 def test_a_lookalike_import_does_not_pass_for_type_checking() -> None:
     # Decided from the alias, not from the rendered line: `IS_TYPE_CHECKING` contains the string.
     plan = _plan(
