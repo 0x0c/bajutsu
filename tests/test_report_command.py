@@ -14,7 +14,7 @@ from typer.testing import CliRunner
 from bajutsu.cli import app
 from bajutsu.common.assertions import AssertionResult
 from bajutsu.common.orchestrator import RunResult, StepOutcome
-from bajutsu.common.report import rerender_html, write_report
+from bajutsu.common.report import rerender_html, scenario_render_inputs, write_report
 from bajutsu.common.scenario import dump_scenario_file, load_scenarios
 
 runner = CliRunner()
@@ -25,8 +25,6 @@ SCENARIO = "- name: smoke\n  steps:\n    - tap: { id: home.start }\n  expect:\n 
 def _bake(run_dir: Path) -> None:
     """Bake a run dir the way the pipeline does: results + manifest + scenario.yaml + report.html."""
     scenarios = load_scenarios(SCENARIO)
-    from bajutsu.common.report import scenario_render_inputs
-
     definitions, sources = scenario_render_inputs(scenarios)
     results = [
         RunResult(
@@ -78,6 +76,41 @@ def test_report_all_rebakes_every_run(tmp_path: Path) -> None:
     assert all(
         (runs / rid / "report.html").read_text(encoding="utf-8") != "STALE" for rid in ("r1", "r2")
     )
+
+
+# `after: { on: always, steps: [{ back: {} }] }`, as in demos/showcase/scenarios/before_after.yaml.
+# `back` takes no arguments, so it dumps to `{}` — a scenario.yaml baked with this step must still
+# reload for `bajutsu report` to re-render it offline (regression for the bug this was found from,
+# where the pruning in `scenario_dict`/`dump_scenarios` dropped the `back` key along with its empty
+# value, and `load_scenario_file` then failed the one-action rule, §6.2, on reload).
+FIELDLESS_ACTION_SCENARIO = (
+    "- name: smoke\n"
+    "  steps:\n"
+    "    - tap: { id: home.start }\n"
+    "  expect:\n"
+    "    - exists: { id: home.title }\n"
+    "  after:\n"
+    "    - on: always\n"
+    "      steps: [{ back: {} }]\n"
+)
+
+
+def test_report_rerenders_a_run_with_a_fieldless_after_step(tmp_path: Path) -> None:
+    run_dir = tmp_path / "runs" / "r1"
+    scenarios = load_scenarios(FIELDLESS_ACTION_SCENARIO)
+    definitions, sources = scenario_render_inputs(scenarios)
+    results = [RunResult(scenario="smoke", ok=True, steps=[], backend="xcuitest")]
+    run_dir.mkdir(parents=True, exist_ok=True)
+    (run_dir / "scenario.yaml").write_text(dump_scenario_file(scenarios), encoding="utf-8")
+    write_report(run_dir, run_dir.name, results, definitions, sources, source_name="smoke.yaml")
+    (run_dir / "report.html").write_text("STALE", encoding="utf-8")  # simulate an old/edited bake
+
+    result = runner.invoke(app, ["report", "r1", "--runs", str(tmp_path / "runs")])
+
+    assert result.exit_code == 0
+    assert (run_dir / "report.html").read_text(
+        encoding="utf-8"
+    ) != "STALE"  # re-rendered, not crashed
 
 
 def test_report_missing_run_exits_two(tmp_path: Path) -> None:

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import Any, cast
+from typing import Any
 
 from pydantic import BaseModel
 
@@ -13,21 +13,6 @@ from bajutsu.common.scenario.models import Mock, Scenario
 
 # Placeholder a literal `totp.secret` seed is masked with in an evidence snapshot (BE-0152).
 _TOTP_PLACEHOLDER = "<redacted>"
-
-
-def _prune(obj: Any) -> Any:
-    """Drop None / empty-list / empty-dict entries for readable output."""
-    if isinstance(obj, dict):
-        out: dict[str, Any] = {}
-        for key, value in obj.items():
-            pruned = _prune(value)
-            if pruned is None or pruned == [] or pruned == {}:
-                continue
-            out[key] = pruned
-        return out
-    if isinstance(obj, list):
-        return [_prune(v) for v in obj]
-    return obj
 
 
 def _mask_totp_secrets(node: Any) -> Any:
@@ -70,7 +55,7 @@ def redact_totp_secrets(scenario: Scenario) -> Scenario:
 
 
 def scenario_dict(scenario: Scenario) -> dict[str, Any]:
-    """A pruned, alias-keyed dict of one scenario (for the rich report view).
+    """An alias-keyed dict of one scenario, with unset fields dropped (for the rich report view).
 
     Drops default-valued fields for the same reason `redact_totp_secrets` does: a model dump that
     emits every default is not reloadable, because a validator reading `model_fields_set` cannot tell
@@ -79,15 +64,14 @@ def scenario_dict(scenario: Scenario) -> dict[str, Any]:
     non-None defaults that `exclude_none` keeps — so the `scenario.yaml` written beside a run's
     results failed to reload, against `dump_scenarios`' own round-trip contract. Excluding them also
     keeps the snapshot as terse as the author wrote it, which is what `dump_block` already does.
+
+    Nothing here touches a value once `model_dump` has produced it: a step's own fieldless action
+    (`back: {}`) must survive verbatim or reloading fails the one-of-N-required invariant (§6.2 /
+    §6.4), and a free-form `dict[str, Any]` field (`push.payload`) is author data pydantic's own
+    `exclude_none`/`exclude_defaults` never look inside — a generic post-pass dropping `None` /
+    `[]` there would silently change what a re-run sends, which used to be this function's bug.
     """
-    return cast(
-        "dict[str, Any]",
-        _prune(
-            scenario.model_dump(
-                mode="json", by_alias=True, exclude_none=True, exclude_defaults=True
-            )
-        ),
-    )
+    return scenario.model_dump(mode="json", by_alias=True, exclude_none=True, exclude_defaults=True)
 
 
 def dump_scenarios(scenarios: list[Scenario]) -> str:
@@ -108,7 +92,7 @@ def dump_scenario_file(scenarios: list[Scenario], description: str | None = None
 
 
 def dump_block(items: Sequence[BaseModel]) -> str:
-    """Serialize models as a `- …` YAML sequence block — one pruned, alias-keyed item each.
+    """Serialize models as a `- …` YAML sequence block — one alias-keyed item each.
 
     Alias keying matches `scenario_dict`, but a scoped block also drops default-valued fields
     (`exclude_defaults`), so a single spliced step / assertion stays as terse as the author wrote it
@@ -117,11 +101,7 @@ def dump_block(items: Sequence[BaseModel]) -> str:
     """
     return _yaml.safe_dump(
         [
-            _prune(
-                item.model_dump(
-                    mode="json", by_alias=True, exclude_none=True, exclude_defaults=True
-                )
-            )
+            item.model_dump(mode="json", by_alias=True, exclude_none=True, exclude_defaults=True)
             for item in items
         ]
     )

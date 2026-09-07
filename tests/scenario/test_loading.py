@@ -243,6 +243,33 @@ def test_provenance_is_pruned_when_absent() -> None:
     assert "from:" not in dumped
 
 
+def test_dump_keeps_null_and_empty_list_inside_a_free_form_payload() -> None:
+    # `push.payload` is arbitrary JSON (`dict[str, Any]`), author data that pydantic's own
+    # exclude_none/exclude_defaults never look inside. A `null` or an already-empty list nested
+    # there can be semantically meaningful to whatever reads the payload (e.g. an APNs `badge:
+    # null` clears the badge), so a dump must keep it verbatim rather than guessing it away —
+    # dropping it would send a different push notification on a re-run than the one recorded.
+    text = (
+        "- name: t\n"
+        "  steps:\n"
+        "    - push: { payload: { aps: { alert: hi, badge: null, tags: [] } } }\n"
+    )
+    reloaded = load_scenarios(dump_scenarios(load_scenarios(text)))[0]
+    assert reloaded.steps[0].push is not None
+    assert reloaded.steps[0].push.payload == {"aps": {"alert": "hi", "badge": None, "tags": []}}
+
+
+def test_a_fieldless_step_action_round_trips() -> None:
+    # `back` (and the other zero-argument actions) always dump to `{}` — a step's action key must
+    # survive that even though its value is empty, or re-validation fails the one-action rule
+    # (§6.2) on reload. Regression for the `bajutsu report` re-render failure this was found from.
+    text = "- name: go back\n  steps:\n    - back: {}\n"
+    dumped = dump_scenarios(load_scenarios(text))
+    assert "back: {}" in dumped
+    reloaded = load_scenarios(dumped)[0]
+    assert reloaded.steps[0].back is not None
+
+
 def _step(sid: str) -> Step:
     return Step.model_validate({"tap": {"id": sid}})
 

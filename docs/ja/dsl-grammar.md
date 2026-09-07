@@ -490,6 +490,6 @@ load_scenarios        # この文法に対しパース + 検証
 ## 7. 検証とラウンドトリップ
 
 - `load_scenarios(text) -> list[Scenario]` は上記すべてに対して検証します。トップレベルはシナリオのシーケンスか `{description, scenarios}` マッピングのいずれかが必須で、[§4](#4-個数と排他の制約) のいずれかの規則違反はロードエラーになります（`scenario/load.py`）。
-- `dump_scenarios(scenarios) -> str` は YAML へ戻します。可読性のため `None` / 空リスト / 空辞書を刈り取り、エイリアスキー（`idMatches`、`launchEnv` など）で出力します。出力は **そのまま再ロード可能**で、`record` が依存するラウンドトリップです（`scenario/serialize.py`）。
+- `dump_scenarios(scenarios) -> str` は YAML へ戻します。著者が設定しなかったフィールドだけを落とし、エイリアスキー（`idMatches`、`launchEnv` など）で出力します。出力は **そのまま再ロード可能**で、`record` が依存するラウンドトリップです（`scenario/serialize.py`）。
 
 形の背後にある意味論（セレクタが 0/1/2+ 件にどう解決するか、各アサーションがどう比較するか、wait がどうタイムアウトするか）は [selectors](selectors.md) と [run-loop](run-loop.md) を参照してください。例でシナリオを書き始めるには [scenarios](scenarios.md) を参照してください。

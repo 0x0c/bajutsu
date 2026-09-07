@@ -1102,6 +1102,6 @@ PyYAML（YAML 1.1）は `on`/`off`/`yes`/`no` を真偽値に解決します。`
 ## ラウンドトリップ（読込 ⇄ 書出）
 
 - `load_scenarios(text) -> list[Scenario]`: YAML 文字列 → 検証済みモデル。
-- `dump_scenarios(scenarios) -> str`: モデル → YAML（`None` / 空リスト / 空辞書を間引いて読みやすくします）。
+- `dump_scenarios(scenarios) -> str`: モデル → YAML。著者が設定しなかったフィールドだけを落とします。
 
 `record` の出力はこの `dump_scenarios` を通ります。生成された YAML は `load_scenarios` でそのまま読み戻せます。

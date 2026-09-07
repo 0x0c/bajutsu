@@ -1514,8 +1514,7 @@ whether `record` normalized the intent faithfully.
 ## Round-trip (load ⇄ dump)
 
 - `load_scenarios(text) -> list[Scenario]`: YAML string → validated models.
-- `dump_scenarios(scenarios) -> str`: models → YAML (pruning `None` / empty list / empty dict for
-  readability).
+- `dump_scenarios(scenarios) -> str`: models → YAML, dropping only fields the author never set.
 
 `record`'s output goes through this `dump_scenarios`. The generated YAML reloads cleanly via
 `load_scenarios`.
