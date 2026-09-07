@@ -26,7 +26,6 @@ from bajutsu.common.drivers.adb import (
     AdbActUncertain,
     AdbResidentError,
     HierarchyRead,
-    PanRequest,
     elements_with_identities,
     parse_hierarchy,
 )
@@ -295,29 +294,6 @@ def test_a_device_that_cannot_be_asked_about_its_packages_reinstalls(tmp_path: P
         installed=installed,
     ).start()
     assert len(_installs(calls)) == 4
-
-
-def test_a_pan_crosses_as_whole_pixels_the_way_the_coordinate_path_rounds_them() -> None:
-    # BE-0407 unit 24. The device reads whole pixels, and a `scroll`'s endpoints arrive here as the
-    # floats a screen fraction produced — sent verbatim they parse to nothing, which an on-device run
-    # showed as every pan answering `400 no usable x1` and falling back to `input swipe`, passing
-    # silently. Rounded through `adb.pixel`, the same function `swipe_cmd` uses, so the two channels
-    # cannot aim at different pixels either.
-    port, server = _serve_once()
-    try:
-        adb_resident.act(
-            port,
-            PanRequest(frm=(100.4, 899.6), to=(100.0, 300.0), duration_ms=600, since=None),
-        )
-        query = urllib.parse.parse_qs(
-            urllib.parse.urlparse(_SourceHandler.last_act_path or "").query
-        )
-        assert query["kind"] == ["swipe"]
-        assert (query["x1"], query["y1"]) == (["100"], ["900"])
-        assert (query["x2"], query["y2"], query["durationMs"]) == (["100"], ["300"], ["600"])
-        assert "rid" not in query  # a pan names points, never an element identity
-    finally:
-        server.shutdown()
 
 
 def test_fetch_source_asks_for_native_z_only_when_the_target_opted_in() -> None:

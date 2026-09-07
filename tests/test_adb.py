@@ -2197,7 +2197,7 @@ def _recording_act(
     replies: list[object],
 ) -> tuple[
     adb_driver_mod.ActFn,
-    list[adb_driver_mod.ActRequest | adb_driver_mod.PanRequest],
+    list[adb_driver_mod.ActRequest],
 ]:
     """An `ActFn` serving `replies` in order (holding the last) and recording every request.
 
@@ -2207,11 +2207,9 @@ def _recording_act(
     publish-confirmed, and the channel-fault paths.
     """
     seq = list(replies)
-    seen: list[adb_driver_mod.ActRequest | adb_driver_mod.PanRequest] = []
+    seen: list[adb_driver_mod.ActRequest] = []
 
-    def act(
-        request: adb_driver_mod.ActRequest | adb_driver_mod.PanRequest,
-    ) -> adb_driver_mod.ActOutcome:
+    def act(request: adb_driver_mod.ActRequest) -> adb_driver_mod.ActOutcome:
         seen.append(request)
         reply = seq.pop(0) if len(seq) > 1 else seq[0]
         if isinstance(reply, AdbResidentError):
@@ -2221,13 +2219,6 @@ def _recording_act(
         return adb_driver_mod.ActOutcome(acted=bool(reply), published_mark=None)
 
     return act, seen
-
-
-def _elements(
-    seen: list[adb_driver_mod.ActRequest | adb_driver_mod.PanRequest],
-) -> list[adb_driver_mod.ActRequest]:
-    """Only the element gestures among the recorded requests; a pan names points, not an identity."""
-    return [r for r in seen if isinstance(r, adb_driver_mod.ActRequest)]
 
 
 def test_parse_hierarchy_identities_align_with_the_elements() -> None:
@@ -2250,10 +2241,9 @@ def test_tap_goes_to_the_device_and_injects_no_coordinate() -> None:
     run, calls = _capturing_run([FIXTURE])
     driver = AdbDriver("U", run=run, act=act)
     driver.tap({"id": "stable.submit"})
-    assert [r.kind for r in _elements(seen)] == ["tap"]
-    acted = _elements(seen)[0]
-    assert acted.identity == ("stable.submit", "sent", "送信", "android.widget.Button")
-    assert (acted.index, acted.count) == (0, 1)
+    assert [r.kind for r in seen] == ["tap"]
+    assert seen[0].identity == ("stable.submit", "sent", "送信", "android.widget.Button")
+    assert (seen[0].index, seen[0].count) == (0, 1)
     assert not [c for c in calls if "input" in c]
 
 
@@ -2329,7 +2319,7 @@ def test_the_actuation_record_names_the_channel_that_carried_the_gesture() -> No
     assert (device.gesture, device.via, device.unit) == ("tap", "identity", "pixel")
     assert device.points == ()
     assert device.frame == (0.0, 200.0, 200.0, 100.0)
-    assert [r.kind for r in _elements(seen)] == ["tap"]  # it really went device-side
+    assert [r.kind for r in seen] == ["tap"]  # it really went device-side
 
     coordinate_only = AdbDriver("U", run=lambda a: FIXTURE)  # no `/act` channel at all
     coordinate_only.tap({"id": "stable_refresh"})
@@ -2367,7 +2357,7 @@ def test_the_record_never_carries_the_device_identity_tuple() -> None:
     driver.tap({"id": "stable.submit"})
     (record,) = driver.drain_actuations().records
     assert record.target == "stable.submit"
-    assert _elements(seen)[0].identity == ("stable.submit", "sent", "送信", "android.widget.Button")
+    assert seen[0].identity == ("stable.submit", "sent", "送信", "android.widget.Button")
     assert "送信" not in repr(record) and "sent" not in repr(record)
 
 
@@ -2378,7 +2368,7 @@ def test_long_press_carries_its_duration_to_the_device() -> None:
     run, calls = _capturing_run([FIXTURE])
     driver = AdbDriver("U", run=run, act=act)
     driver.long_press({"id": "stable.submit"}, 0.7)
-    assert [(r.kind, r.duration_ms) for r in _elements(seen)] == [("longPress", 700)]
+    assert [(r.kind, r.duration_ms) for r in seen] == [("longPress", 700)]
     assert not [c for c in calls if "input" in c]
 
 
@@ -2391,7 +2381,7 @@ def test_double_tap_goes_to_the_device_for_its_timing() -> None:
     run, calls = _capturing_run([FIXTURE])
     driver = AdbDriver("U", run=run, act=act)
     driver.double_tap({"id": "stable.submit"})
-    assert [r.kind for r in _elements(seen)] == ["doubleTap"]
+    assert [r.kind for r in seen] == ["doubleTap"]
     assert not [c for c in calls if "sendevent" in c or "input" in c]
 
 
@@ -2529,9 +2519,8 @@ def test_a_confirmed_device_tap_leaves_the_next_read_unblocked() -> None:
 def test_a_confirmed_device_tap_still_leaves_a_pan_its_own_barrier() -> None:
     # Narrowing the barrier is scoped to the gesture the device confirmed, never to the ones that
     # follow it. A pan resolves its catch-up baseline from coordinates and has no `stale` re-resolve to
-    # self-heal with, so `swipe` must arm on *its own* answer — here an unconfirmed one — whatever the
-    # tap before it reported.
-    act, _ = _recording_act([adb_driver_mod.ActOutcome(acted=True, published_mark=98765.0), True])
+    # self-heal with, so `swipe` must keep arming for itself whatever the tap before it reported.
+    act, _ = _recording_act([adb_driver_mod.ActOutcome(acted=True, published_mark=98765.0)])
     run, _calls = _capturing_run([FIXTURE])
     driver = AdbDriver("U", run=run, act=act)
     driver.tap({"id": "stable.submit"})
@@ -2629,34 +2618,6 @@ def test_a_later_actuation_retires_a_seeded_tree() -> None:
     assert driver.query() == parse_hierarchy(FIXTURE)
 
 
-def test_a_pan_goes_to_the_device_and_injects_no_coordinate() -> None:
-    # BE-0407 unit 24: a `scroll`'s endpoints are the host's own numbers, so nothing is resolved on the
-    # device — but the injection still happens in the warm session rather than behind `input swipe`'s
-    # JVM startup, and the reply confirms the pan published. The investigation timed a `scroll` step at
-    # 7.1s, heavier than a tap, because the pan and its confirming read each waited out the same budget.
-    act, seen = _recording_act([adb_driver_mod.ActOutcome(acted=True, published_mark=98765.0)])
-    run, calls = _capturing_run([FIXTURE])
-    driver = AdbDriver("U", run=run, act=act)
-    driver.scroll((100, 900), (100, 300))
-    request = seen[0]
-    assert isinstance(request, adb_driver_mod.PanRequest)
-    assert (request.frm, request.to) == ((100, 900), (100, 300))
-    assert not [c for c in calls if "swipe" in c]
-    # Its own publish confirmation, so no barrier — the read that follows cannot be the pre-pan tree.
-    assert driver._catchup is None
-
-
-def test_a_pan_the_device_cannot_serve_falls_back_to_the_coordinate_swipe() -> None:
-    # The degrade `_device_act` already had, on the pan path: an older server without the endpoint
-    # leaves the gesture to `input swipe` and arms the barrier exactly as it did before this unit.
-    act, _ = _recording_act([adb_driver_mod.AdbActUnsupported("no /act")])
-    run, calls = _capturing_run([FIXTURE])
-    driver = AdbDriver("U", run=run, act=act)
-    driver.scroll((100, 900), (100, 300))
-    assert [c for c in calls if "swipe" in c]
-    assert driver._catchup is not None
-
-
 def test_an_element_from_a_later_read_than_its_peers_falls_back_instead_of_crashing() -> None:
     # `_resolve` re-queries on a transient not-found and `_scroll_into_view` re-settles, so the element
     # handed back can belong to a later read than the tree the caller settled — and the identity map is
@@ -2718,34 +2679,6 @@ def test_a_reply_lost_after_the_request_went_out_does_not_actuate_twice() -> Non
     driver.tap({"id": "stable.submit"})
     assert len(seen) == 1  # no re-resolve loop either: the gesture is not repeated on the device
     assert not [c for c in calls if "input" in c]  # and never on the coordinate path
-
-
-def test_a_pan_whose_reply_was_lost_is_not_injected_a_second_time() -> None:
-    # The pan's peer of the tap rule above, and the more damaging case: a second `input swipe` on top
-    # of a pan the device may already have made scrolls a list twice as far, moving content the rest
-    # of the scenario resolves against. The driver does less — treats it as landed and arms the
-    # barrier — and lets the step's own condition wait fail loudly if it did not.
-    act, seen = _recording_act([adb_driver_mod.AdbActUncertain("reply lost")])
-    run, calls = _capturing_run([FIXTURE])
-    driver = AdbDriver("U", run=run, act=act)
-    driver.scroll((100, 900), (100, 300))
-    assert len(seen) == 1
-    assert not [c for c in calls if "swipe" in c]
-    assert driver._catchup is not None  # armed: the device could confirm nothing
-
-
-def test_a_transient_pan_fault_falls_back_and_keeps_the_channel() -> None:
-    # A socket glitch on this one `/act` says nothing about the next read or the next gesture, so the
-    # pan degrades to `input swipe` and the channel stays in use — the same scoping `_device_act`
-    # applies to its own transient faults.
-    act, _ = _recording_act([AdbResidentError("blip")])
-    run, calls = _capturing_run([FIXTURE])
-    driver = AdbDriver("U", run=run, act=act)
-    driver.scroll((100, 900), (100, 300))
-    assert [c for c in calls if "swipe" in c]
-    assert driver._act_unavailable is False  # not latched: one gesture degraded, not the lease
-    (record,) = driver.drain_actuations().records
-    assert record.accepted is False  # the device path refused it; the coordinate path carried it
 
 
 def test_uninstall_precedes_a_showcase_install() -> None:

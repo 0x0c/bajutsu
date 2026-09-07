@@ -203,9 +203,6 @@ class ResidentServerTest {
             readMark.awaitPostdate(it, POSTDATE_BUDGET_MS)
             device.waitForIdle()
         }
-        // A pan names two points rather than an element, so it takes none of the identity fields
-        // below and resolves nothing here (BE-0407 unit 24).
-        if (kind == "swipe") return respondPan(out, device, readMark, target)
         // Validated, never defaulted. A missing or malformed field here would otherwise pick an
         // element by assumption — `index` 0 of `count` 1 — which is exactly the guess this endpoint
         // exists to refuse. An identity field may legitimately be empty (a node with no text), so
@@ -248,36 +245,6 @@ class ResidentServerTest {
         }
         if (!landed) {
             return respond(out, INJECT_FAILED_STATUS, TEXT, "$kind rejected by the platform\n".bytes())
-        }
-        respondLanded(out, device, readMark, injectedAt)
-    }
-
-    /**
-     * Inject a pan between two host-computed points, in the warm session (BE-0407 unit 24).
-     *
-     * The one gesture whose endpoints the host genuinely owns: a `scroll` step's `from`/`to` are
-     * screen fractions, and a directional `swipe`'s anchor is resolved above the driver, so unlike
-     * [respondAct]'s element gestures there is no identity to re-find here and nothing to answer
-     * `stale` about. What it does share is the reply: the pan is followed to its own publish before
-     * the answer goes out, so the host skips the read-lag barrier for it exactly as it does for a tap
-     * — which is the whole cost this unit removes, since a pan's confirming read used to exhaust the
-     * postdate budget on its own after `input swipe` had already exhausted it once.
-     */
-    private fun respondPan(out: OutputStream, device: UiDevice, readMark: ReadMark, target: String) {
-        val points = PAN_POINTS.map {
-            paramOf(target, it)?.toIntOrNull()
-                ?: return respond(out, BAD_REQUEST, TEXT, "no usable $it\n".bytes())
-        }
-        val (x1, y1, x2, y2) = points
-        val ms = paramOf(target, "durationMs")?.toIntOrNull()
-            ?: return respond(out, BAD_REQUEST, TEXT, "no usable durationMs\n".bytes())
-        val injectedAt = SystemClock.uptimeMillis()
-        // Steps, not milliseconds: `UiDevice.swipe` paces a drag in ~[SWIPE_STEP_MS] increments, the
-        // same conversion [respondAct]'s press-and-hold makes. The host asks for a duration because
-        // that is what keeps a `scroll`'s speed — and so its travel — the same on every device
-        // (BE-0400), and a step count is how this API expresses it.
-        if (!device.swipe(x1, y1, x2, y2, (ms / SWIPE_STEP_MS).coerceAtLeast(1))) {
-            return respond(out, INJECT_FAILED_STATUS, TEXT, "swipe rejected by the platform\n".bytes())
         }
         respondLanded(out, device, readMark, injectedAt)
     }
@@ -812,11 +779,6 @@ class ResidentServerTest {
         // `UiDevice.swipe` paces a drag in steps of about this long, so a press-and-hold's duration is
         // requested as a step count.
         const val SWIPE_STEP_MS = 10
-
-        // The four coordinates a pan names (BE-0407 unit 24), in the order `respondPan` reads them.
-        // Unlike an element gesture's identity fields, these are the host's own numbers: a `scroll`
-        // step's endpoints are screen fractions it resolved, so there is nothing to re-find here.
-        val PAN_POINTS = listOf("x1", "y1", "x2", "y2")
         const val DEFAULT_LONG_PRESS_MS = 700
 
         // The double tap's two intervals, both comfortably inside the platform's 300ms window and

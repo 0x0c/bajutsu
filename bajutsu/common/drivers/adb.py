@@ -132,27 +132,6 @@ class ActRequest:
 
 
 @dataclass(frozen=True)
-class PanRequest:
-    """One device-side pan: the two points to drag between, and how long the drag should take.
-
-    The pan is the one gesture whose endpoints the host genuinely owns — a `scroll` step's are screen
-    fractions it resolved, a directional `swipe`'s anchor is resolved above the driver — so unlike
-    `ActRequest` nothing here names an element and the device answers no `stale`. It goes to the
-    device anyway for the same two reasons a tap does: the injection happens in the warm session
-    rather than behind `adb shell input`'s JVM startup, and the reply confirms the gesture published,
-    which is what lets the driver skip a read-lag barrier a pan would otherwise always arm (BE-0407
-    unit 24).
-    """
-
-    frm: base.Point
-    to: base.Point
-    duration_ms: int
-    since: (
-        float | None
-    )  # the mark the device's own pre-injection read must postdate; see `ActRequest`
-
-
-@dataclass(frozen=True)
 class ActOutcome:
     """What the device did with one `ActRequest`, and whether the tree has caught up with it.
 
@@ -177,12 +156,11 @@ class ActOutcome:
     read: HierarchyRead | None = None
 
 
-# Perform one gesture on the device: an `ActRequest` against an element the host already resolved, or a
-# `PanRequest` between two points it computed. `acted` is False when the device answered `stale` — the
-# identity no longer names the same nodes there, so the host re-resolves rather than letting a
-# coordinate be guessed. Raises `AdbResidentError` when the channel itself fails, which the driver
-# degrades to its own coordinate path.
-ActFn = Callable[["ActRequest | PanRequest"], ActOutcome]
+# Perform one gesture on the device, against an element the host already resolved. `acted` is False when
+# it answered `stale` — the identity no longer names the same nodes there, so the host re-resolves rather
+# than letting a coordinate be guessed. Raises `AdbResidentError` when the channel itself fails, which
+# the driver degrades to its own coordinate path.
+ActFn = Callable[[ActRequest], ActOutcome]
 
 logger = logging.getLogger("bajutsu.adb.resident")
 
@@ -575,10 +553,6 @@ class AdbDriver(CoordinateTreeDriver):
     # across at the two screens' physical scale. The floor keeps a small step from becoming a flick.
     _SCROLL_SPEED_PX_PER_S = 550
     _SCROLL_MIN_DURATION_MS = 600
-    # What a bare `swipe` (no `scroll`'s speed calculation) takes, stated here so the device path can
-    # ask for the same drag `adb.swipe_cmd`'s own default produces — the two must not diverge, or the
-    # same step would travel differently depending on which channel injected it.
-    _SWIPE_DURATION_MS = 300
     # Ceiling on waiting for a read to catch up with a gesture that already moved the content. One
     # number for one phenomenon, shared by two consumers: `read_lag()` hands it to the `scroll` loop
     # (BE-0326), and `_await_catchup` spends it on the actuator path. Android publishes the
@@ -1621,84 +1595,8 @@ class AdbDriver(CoordinateTreeDriver):
         self._actuations.record(
             Actuation(gesture="swipe", via="coordinate", unit=_UNIT, points=(frm, to))
         )
-        if self._device_pan(frm, to, self._SWIPE_DURATION_MS, pre_key, mark):
-            return
         self._act(adb.swipe_cmd(self.serial, frm[0], frm[1], to[0], to[1]))
         self._arm_catchup(pre_key, mark)
-
-    def _device_pan(
-        self,
-        frm: base.Point,
-        to: base.Point,
-        duration_ms: int,
-        pre_key: StableKey | None,
-        mark: float | None,
-    ) -> bool:
-        """Inject a pan in the resident session, or return False to leave it to `adb shell input`.
-
-        The pan's peer of `_device_act`, and the same degrade: every infrastructure reason the device
-        path cannot serve this gesture answers False and the coordinate injection happens exactly as
-        before, so a device without the endpoint is no worse off than one that never had it. What it
-        does *not* share is a `stale` reply — the points are the host's own, so there is nothing on
-        the device to re-find and nothing to disagree about (BE-0407 unit 24).
-
-        Why a pan gains from crossing at all, when the coordinate crosses either way: `input swipe`
-        pays a JVM startup per gesture, and — the larger half — a pan injected there is followed by a
-        read that has to wait out the whole read-lag barrier, because nothing on the host can say when
-        the pan published. The device can, and does, in the reply.
-
-        The `Actuation` record is written by the caller and stays `via="coordinate"` on either path:
-        the point really was computed here, and only the channel that injected it differs.
-        """
-        if self._act_fn is None or self._act_unavailable:
-            return False
-        request = PanRequest(
-            frm=frm,
-            to=to,
-            duration_ms=duration_ms,
-            since=self._catchup.actuation_mark if self._catchup is not None else None,
-        )
-        try:
-            outcome = self._act_fn(request)
-        except AdbActUnsupported as exc:
-            self._actuations.settle(False)
-            self._act_unavailable = True  # permanent for this lease, as on the element path
-            if not self._act_warned:
-                self._act_warned = True
-                logger.warning(
-                    "resident actuation unavailable (%s); falling back to coordinate injection, "
-                    "which resolves a target a round trip before it is touched",
-                    exc,
-                )
-            return False
-        except AdbActUncertain as exc:
-            # The request went out and the device injects before it answers, so re-injecting on the
-            # coordinate path could be a second pan — which on a list is a second scroll, moving the
-            # content twice as far. Treat it as landed and arm the barrier, as the element path does.
-            logger.warning(
-                "resident pan may or may not have landed (%s); continuing as if it did rather than "
-                "injecting a coordinate on top of it",
-                exc,
-            )
-            self.invalidate_settled_cache()
-            self._arm_catchup(pre_key, mark)
-            return True
-        except AdbResidentError as exc:
-            self._actuations.settle(False)
-            logger.warning(
-                "resident pan faulted (%s); this gesture falls back to coordinate injection, the "
-                "channel stays in use",
-                exc,
-            )
-            return False
-        self._actuations.settle(True)
-        self.invalidate_settled_cache()
-        if outcome.published_mark is not None and (mark is None or outcome.published_mark > mark):
-            logger.debug("device pan %r→%r: publish confirmed; no catchup barrier armed", frm, to)
-            self._seed_from_act(outcome.read, mark)
-        else:
-            self._arm_catchup(pre_key, mark)
-        return True
 
     def viewport(self) -> base.Point:
         # The true display size in raw pixels (BE-0326). A lazy list (RecyclerView / LazyColumn) keeps
@@ -1765,10 +1663,6 @@ class AdbDriver(CoordinateTreeDriver):
                 duration_s=duration_ms / 1000,
             )
         )
-        # The step this unit was written for: the investigation timed a `scroll` at 7.1 s, heavier
-        # than a tap, because the pan and its confirming read each waited out the same budget.
-        if self._device_pan(frm, to, duration_ms, pre_key, mark):
-            return
         self._act(adb.swipe_cmd(self.serial, frm[0], frm[1], to[0], to[1], duration_ms))
         self._arm_catchup(pre_key, mark)
 

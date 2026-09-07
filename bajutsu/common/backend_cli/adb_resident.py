@@ -39,7 +39,6 @@ from bajutsu.common.drivers.adb import (
     ClockFetch,
     HierarchyFetch,
     HierarchyRead,
-    PanRequest,
     slice_hierarchy_root,
 )
 
@@ -286,53 +285,19 @@ def fetch_source(
         raise AdbResidentError(f"resident channel unreachable on port {host_port}: {exc}") from exc
 
 
-def _act_fields(request: ActRequest | PanRequest) -> dict[str, str]:
-    """The query the device reads one gesture from: an element's identity, or a pan's two points."""
-    if isinstance(request, PanRequest):
-        # No identity, no ordinal, nothing to answer `stale` about (BE-0407 unit 24): a pan's
-        # endpoints are the host's own numbers — a `scroll`'s screen fractions, a directional
-        # `swipe`'s resolved anchor — so there is nothing for the device to re-find.
-        # Through `adb.pixel`, the same rounding `swipe_cmd` applies, so a pan lands on the same
-        # pixel whichever channel injects it — and so the device, which reads whole pixels, gets a
-        # number it can parse at all. An on-device run caught the omission: every pan answered `400
-        # no usable x1` and fell back to the coordinate path, which passed, silently, exactly as it
-        # would have without this unit.
-        return {
-            "kind": "swipe",
-            "x1": adb.pixel(request.frm[0]),
-            "y1": adb.pixel(request.frm[1]),
-            "x2": adb.pixel(request.to[0]),
-            "y2": adb.pixel(request.to[1]),
-            "durationMs": str(request.duration_ms),
-        }
-    fields = {
-        "kind": request.kind,
-        "index": str(request.index),
-        "count": str(request.count),
-        "rid": request.identity[0],
-        "desc": request.identity[1],
-        "text": request.identity[2],
-        "cls": request.identity[3],
-    }
-    if request.duration_ms is not None:
-        fields["durationMs"] = str(request.duration_ms)
-    return fields
-
-
 def act(
     host_port: int,
-    request: ActRequest | PanRequest,
+    request: ActRequest,
     *,
     timeout: float = 10.0,
     keepalive: Keepalive | None = None,
 ) -> ActOutcome:
-    """Ask the resident server to perform one gesture, in its warm session rather than a round trip away.
+    """Ask the resident server to perform one gesture on an element the host already resolved.
 
-    An element gesture crosses as its four accessibility fields plus its ordinal among the nodes
-    sharing them, never as a coordinate: the device re-finds it in a dump of its own and reads the
-    bounds microseconds before injecting, closing the window in which a settling screen moves out from
-    under a coordinate the host computed a round trip earlier. A pan (`PanRequest`) instead carries the
-    two points the host genuinely owns, and buys the same publish confirmation an element gesture gets.
+    The element crosses as its four accessibility fields plus its ordinal among the nodes sharing them,
+    never as a coordinate: the device re-finds it in a dump of its own and reads the bounds microseconds
+    before injecting, closing the window in which a settling screen moves out from under a coordinate
+    the host computed a round trip earlier.
 
     Returns:
         The device's answer: `acted` False for a `409` — the identity no longer names the same nodes
@@ -348,7 +313,17 @@ def act(
             `404` an older server without the endpoint returns. The driver degrades to its coordinate
             actuators, so a device that cannot serve this is never worse off than before.
     """
-    fields = _act_fields(request)
+    fields = {
+        "kind": request.kind,
+        "index": str(request.index),
+        "count": str(request.count),
+        "rid": request.identity[0],
+        "desc": request.identity[1],
+        "text": request.identity[2],
+        "cls": request.identity[3],
+    }
+    if request.duration_ms is not None:
+        fields["durationMs"] = str(request.duration_ms)
     if request.since is not None:
         fields["since"] = str(request.since)
     # A longer timeout than a read: the server honors the `since` mark and settles before it injects,
@@ -498,7 +473,7 @@ Spawn = Callable[[list[str]], _Process]
 # asks for `nativeZ`, are bound by `ResidentServer` when it builds its own defaults.
 Fetch = Callable[[int, float | None], HierarchyRead]
 ClockProbe = Callable[[int], float | None]
-ActProbe = Callable[[int, "ActRequest | PanRequest"], ActOutcome]
+ActProbe = Callable[[int, ActRequest], ActOutcome]
 
 
 @dataclass(frozen=True)
@@ -667,7 +642,7 @@ class ResidentServer:
             # and a genuine channel death still surfaces through the next `fetch`.
             return self._clock(port)
 
-        def act_on_device(request: ActRequest | PanRequest) -> ActOutcome:
+        def act_on_device(request: ActRequest) -> ActOutcome:
             # Unlike `fetch`, a fault here does not tear the channel down. The reads are still good —
             # an older server answers 404 for this path alone — and the driver's own degrade puts the
             # gesture back on the coordinate actuators. Killing a working read channel over a missing
