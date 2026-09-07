@@ -1,11 +1,4 @@
-"""M4 self-healing triage — read a failed run, diagnose it, propose a minimal fix.
-
-The boundary holds: triage is **advisory** — it never decides pass/fail, only explains a
-failure and suggests an edit a human reviews. `assemble` extracts the failure context from
-a saved run (pure); a `TriageAgent` turns that into a diagnosis. The default
-`HeuristicTriageAgent` is rule-based (no AI, deterministic — it doubles as the test double);
-an AI agent can be dropped in behind the same protocol.
-"""
+"""Assemble a failed run's triage context, label its fixes, and apply them to scenario source."""
 
 from __future__ import annotations
 
@@ -13,9 +6,9 @@ import difflib
 import json
 import re
 from collections.abc import Callable, Iterator, Sequence
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict
 from pathlib import Path
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel
 
@@ -32,79 +25,16 @@ from bajutsu.common.scenario import (
     load_scenarios,
 )
 
-_ACT_TARGETS = (
-    "tap",
-    "double_tap",
-    "long_press",
-    "type",
-    "swipe",
-    "pinch",
-    "rotate",
-    "drag",
-    "scroll",
-)
+from ._lax_metrics import _LaxMetrics
+from .applied_fix import AppliedFix
+from .cross_run_triage_context import CrossRunTriageContext
+from .failed_step import FailedStep
+from .run_evidence import RunEvidence
+from .triage_context import TriageContext
 
-
-@dataclass(frozen=True)
-class FailedStep:
-    """The step that failed — its index, action, and failure reason."""
-
-    index: int
-    action: str
-    reason: str
-
-
-@dataclass(frozen=True)
-class TriageContext:
-    """Everything needed to reason about one failed scenario."""
-
-    scenario: str
-    failure: str
-    failed_step: FailedStep | None
-    failed_expectations: list[str]
-    elements: list[base.Element]  # the a11y tree nearest the failure
-    scenario_yaml: str  # the failing scenario's definition
-    target_id: str | None  # the failing step's selector id, if any
-    evidence: list[str] = field(default_factory=list)
-    screenshot: bytes | None = None  # the screenshot nearest the failure, if one was captured
-
-
-@dataclass(frozen=True)
-class RunEvidence:
-    """One run's evidence for cross-run flaky triage — its verdict and the state nearest its end.
-
-    For a failing run the state is captured nearest the failed step; for a passing run there is no
-    failure, so it is the element tree / screenshot captured at the run's end.
-    """
-
-    run_id: str
-    ok: bool
-    failure: str
-    failed_step: FailedStep | None
-    failed_expectations: list[str]
-    elements: list[base.Element]  # a11y tree nearest the failure (failing) or run end (passing)
-    screenshot: bytes | None = None
-
-
-@dataclass(frozen=True)
-class CrossRunTriageContext:
-    """The delta material to reason about why one scenario intermittently passes and fails (BE-0220).
-
-    Unlike `TriageContext` (one failed run), this gathers the same scenario's evidence across
-    several of its passing and failing runs at a fixed content fingerprint, so an investigator can
-    reason about what *varies* between a pass and a fail — the cross-run counterpart to per-failure
-    triage.
-    """
-
-    scenario: str
-    scenario_hash: str | None  # the runs' shared fingerprint, when known (the grouping key)
-    scenario_yaml: str  # the scenario's definition (shared across the runs at one fingerprint)
-    target_id: str | None  # the failing step's selector id, if any
-    passing: list[RunEvidence]
-    failing: list[RunEvidence]
-
-
-FIX_KINDS = ("renameId", "addIndex", "raiseTimeout")
+if TYPE_CHECKING:
+    from .fix import Fix
+    from .triage import Triage
 _FIX_LABELS = {
     "renameId": "rename id",
     "addIndex": "disambiguate selector",
@@ -112,57 +42,15 @@ _FIX_LABELS = {
 }
 
 
+# A pick chooses one of a step's artifacts of the requested kind. It receives the step's whole
+# artifact list beside them, because choosing a screenshot needs the step's `elements` entry too:
+# the two are only usable together when they describe the same screen.
+type PickArtifact = Callable[[list[dict[str, Any]], list[dict[str, Any]]], dict[str, Any] | None]
+
+
 def fix_summary(kind: str, find: str, replace: str) -> str:
     """A human-readable one-line label for a fix: the kind's label plus find -> replace."""
     return f"{_FIX_LABELS.get(kind, kind)} `{find}` -> `{replace}`"
-
-
-@dataclass(frozen=True)
-class Fix:
-    """A mechanically-applicable edit a human reviews before it is written (`find` -> `replace`).
-
-    Applied over the scenario source.
-    `renameId` replaces a selector id as a whole token (safe to apply everywhere it appears —
-    the classic self-heal). `addIndex` / `raiseTimeout` replace an exact fragment of the
-    failing step (disambiguate an ambiguous match, or lengthen a wait). The boundary still
-    holds: every fix is shown as a diff and written only when the human opts in, and a fragment
-    that no longer matches the source is a safe no-op.
-    """
-
-    kind: str  # one of FIX_KINDS
-    summary: str
-    find: str
-    replace: str
-
-
-@dataclass(frozen=True)
-class Triage:
-    """The triage verdict for one failed scenario — a summary, a category, and suggested fixes."""
-
-    summary: str
-    category: str  # selector | timing | assertion | unknown
-    suggestions: list[str]
-    fix: Fix | None = None
-
-
-class TriageAgent(Protocol):
-    """The triage interface: turn a failed scenario's context into a `Triage` verdict.
-
-    Implemented by the deterministic `HeuristicTriageAgent` (no AI) and by AI-backed agents alike.
-    """
-
-    def triage(self, context: TriageContext) -> Triage: ...
-
-
-class CrossRunTriageAgent(Protocol):
-    """The cross-run interface: diagnose why one scenario intermittently flips at a fixed fingerprint.
-
-    The single-run `TriageAgent` reasons about one failure; this reasons about the delta between
-    passing and failing runs of the same definition. AI-only — there is no deterministic
-    implementation, since spotting the discriminating difference is exactly the judgement an LLM adds.
-    """
-
-    def triage_flaky(self, context: CrossRunTriageContext) -> Triage: ...
 
 
 # --- applying a fix (pure) ---
@@ -196,20 +84,6 @@ def diff_fix(old: str, new: str, path: str) -> str:
     )
 
 
-@dataclass(frozen=True)
-class AppliedFix:
-    """A fix applied to scenario source, packaged for a UI to preview and write back (BE-0147).
-
-    `patched` is the full source with the fix applied; `diff` is its unified diff — empty when
-    `count` is 0 (the fragment no longer matches the source, a safe no-op the diff makes obvious).
-    """
-
-    path: str
-    count: int
-    diff: str
-    patched: str
-
-
 def apply_result(source: str, path: str, fix: Fix) -> AppliedFix:
     """Apply `fix` to `source`, packaging the patched text and unified diff for a UI (BE-0147).
 
@@ -217,20 +91,6 @@ def apply_result(source: str, path: str, fix: Fix) -> AppliedFix:
     """
     patched, count = apply_fix(source, fix)
     return AppliedFix(path, count, diff_fix(source, patched, path) if count else "", patched)
-
-
-# --- laxer guard (BE-0023) ---
-
-
-@dataclass(frozen=True)
-class _LaxMetrics:
-    """The check-strength of a scenario, reduced to counts so before/after are comparable."""
-
-    assertions: int  # every machine check (scenario `expect` + each step `assert`)
-    equals_matchers: int  # value/label matchers pinned to `equals` — the tightest kind
-    id_selectors: int  # selectors anchored on an `id`, the uniqueness anchor
-    waits: int  # bounded condition waits
-    wait_timeout_total: float  # summed wait budget; a raise grows it, a lowering shrinks it
 
 
 def _iter_models(node: Any) -> Iterator[BaseModel]:
@@ -437,12 +297,6 @@ def _target_id(step: Step) -> str | None:
     if step.wait is not None and isinstance(step.wait.until, Gone):
         return step.wait.until.gone.first_id()
     return None
-
-
-# A pick chooses one of a step's artifacts of the requested kind. It receives the step's whole
-# artifact list beside them, because choosing a screenshot needs the step's `elements` entry too:
-# the two are only usable together when they describe the same screen.
-type PickArtifact = Callable[[list[dict[str, Any]], list[dict[str, Any]]], dict[str, Any] | None]
 
 
 def _first(
@@ -738,80 +592,6 @@ def _ids(elements: list[base.Element]) -> list[str]:
 
 def _close(target: str, elements: list[base.Element]) -> list[str]:
     return difflib.get_close_matches(target, _ids(elements), n=3, cutoff=0.6)
-
-
-class HeuristicTriageAgent:
-    """A deterministic, rule-based triage (no AI).
-
-    Categorizes the failure by its shape and points at the likely fix — including a "did you mean"
-    when the target id is absent but a similar id is on screen (the classic self-heal: an id was
-    renamed).
-    """
-
-    def triage(self, context: TriageContext) -> Triage:
-        fs = context.failed_step
-        absent = bool(
-            context.target_id
-            and context.elements
-            and context.target_id not in _ids(context.elements)
-        )
-        hints = []
-        fix: Fix | None = None
-        if absent and context.target_id:
-            close = _close(context.target_id, context.elements)
-            hints.append(
-                f"`{context.target_id}` is not on the captured screen"
-                + (
-                    f" — did you mean {', '.join('`' + c + '`' for c in close)}?"
-                    if close
-                    else " (its id may have changed, or the screen differs from expected)."
-                )
-            )
-            if close:  # a confident rename — the deterministic, whole-token self-heal
-                fix = Fix(
-                    "renameId",
-                    fix_summary("renameId", context.target_id, close[0]),
-                    context.target_id,
-                    close[0],
-                )
-
-        if fs is not None and fs.action == "wait":
-            sugg = [
-                *hints,
-                "Raise the wait timeout, or check the awaited element/condition is reachable.",
-            ]
-            return Triage(
-                "A wait condition was not met before its timeout.", "timing", sugg, fix=fix
-            )
-
-        if fs is not None and fs.action in _ACT_TARGETS:
-            if "件一致" in fs.reason and context.target_id:
-                sugg = [
-                    f"`{context.target_id}` matched multiple elements — add `within` or `index` to disambiguate."
-                ]
-            else:
-                sugg = hints or [
-                    "Verify the selector resolves to exactly one element (see the element tree)."
-                ]
-            return Triage(
-                f"The `{fs.action}` step could not resolve or act on its target.",
-                "selector",
-                sugg,
-                fix=fix,
-            )
-
-        if context.failed_expectations:
-            sugg = [
-                *hints,
-                "Compare each failed expectation below with the screen state at the end of the run.",
-            ]
-            return Triage("An expectation did not hold.", "assertion", sugg)
-
-        return Triage(
-            context.failure or "The scenario failed.",
-            "unknown",
-            ["Inspect the run with `bajutsu trace` and the captured screenshots / logs."],
-        )
 
 
 # --- rendering ---

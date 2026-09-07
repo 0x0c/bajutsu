@@ -1,10 +1,4 @@
-"""Webhook notifications for run results (BE-0099).
-
-A post-verdict side effect: builds a format-neutral summary from the run data,
-filters by configured events, renders to the target format (Slack Block Kit first),
-and POSTs to the configured URL. Delivery failures are logged as warnings, never able
-to change the verdict or exit code. No LLM, no effect on the deterministic gate.
-"""
+"""Project run results into a summary and deliver it to each configured channel."""
 
 from __future__ import annotations
 
@@ -15,48 +9,21 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from collections.abc import Mapping
-from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, TypedDict
+from typing import Any
 
 from bajutsu.common.config import NotifyEndpoint
 from bajutsu.common.orchestrator import RunResult
 from bajutsu.common.scenario import interp
+
+from .failure_summary import FailureSummary
+from .run_notification import RunNotification
 
 logger = logging.getLogger(__name__)
 
 _TIMEOUT_S = 10
 _MAX_RETRIES = 2
 _RETRY_DELAY = 1.0
-
-
-# ---------------------------------------------------------------------------
-# Summary model (format-neutral)
-# ---------------------------------------------------------------------------
-
-
-class FailureSummary(TypedDict):
-    scenario: str
-    failure: str
-    duration_s: float
-
-
-@dataclass
-class RunNotification:
-    """The format-neutral summary projected from run results."""
-
-    run_id: str
-    ok: bool
-    total: int
-    passed: int
-    failed: int
-    source_name: str
-    backend: str
-    duration_s: float
-    failures: list[FailureSummary]
-    failures_remaining: int
-    report_url: str | None
-    engine: str
 
 
 def build_summary(

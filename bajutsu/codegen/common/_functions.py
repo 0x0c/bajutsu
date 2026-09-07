@@ -1,35 +1,17 @@
-"""Shared scenario walk for the codegen emitters (BE-0083).
-
-XCUITest (`xcuitest.py`) and Playwright (`playwright.py`) transpile a scenario the same way
-— merge the launch environment, open the test, emit a launch line, emit each step, then the
-`expect` block, and close — differing only in the per-line target syntax. That walk lives here
-once; each target supplies the variable parts through the `CodeGenerator` protocol, so adding a
-third target (e.g. an Android emitter) is the cost of its line syntax alone, not another copy of
-the skeleton.
-
-This is a pure, deterministic transform: no AI, no device. The per-line builders (`step_lines` /
-`assertion_lines` and the selector/locator helpers behind them) stay in each target's module.
-"""
+"""The target-independent half of codegen: naming, escaping, and assembling a generated file."""
 
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, field
-from typing import Protocol
+from typing import TYPE_CHECKING
 
-from bajutsu.common.scenario import AfterRule, Assertion, Scenario, Step
+from bajutsu.common.scenario import Scenario, Step
 from bajutsu.common.scenario.models.actions import bypass_hint
 
+from .codegen_error import CodegenError
 
-class CodegenError(ValueError):
-    """A codegen request that cannot be fulfilled.
-
-    Raised at generation time (never a silent stub): an unknown emit, an emit on the wrong target
-    (Playwright needs a web target, UI Automator an Android target), or a scenario construct no
-    target can translate faithfully (`if` / `forEach` control flow or an `extract` capture, BE-0297).
-    Both transports — the `codegen` CLI and the serve `/api/codegen` endpoint — translate it into
-    their own error surface.
-    """
+if TYPE_CHECKING:
+    from .code_generator import CodeGenerator
 
 
 # Body lines (launch env, launch, steps, the expect block) sit one level inside the test function;
@@ -53,6 +35,15 @@ _RE_METACHARS = set(r".^$*+?{}[]\|()")
 # `\r\n`, and the Unicode line/paragraph separators (U+2028 / U+2029) — so agent-authored free text
 # folded into a `// TODO` reason can never spill onto an unprefixed physical line (BE-0185).
 _LINE_TERMINATORS = re.compile(r"[\r\n\u2028\u2029]+")
+
+
+# `if` / `forEach` / `extract` are evaluated at run time against the live UI tree — a branch on the
+# current state, a loop over the live match set, a capture of a resolved element's property. A static
+# generated test has no runtime to reproduce that, so no target emits them (they fell through to a
+# no-op `// TODO` stub before BE-0297). Silently dropping a whole branch or loop body is exactly the
+# degradation the determinism-first directive forbids, so codegen refuses loudly at generation time
+# and names `bajutsu run` as the faithful path — rather than emitting a test that quietly does less.
+_RUNTIME_ONLY_HINT = "codegen has no runtime to evaluate it; run the scenario with `bajutsu run`"
 
 
 def _collapse_line_terminators(text: str) -> str:
@@ -184,80 +175,6 @@ def indent_lines(lines: list[str], levels: int = 1) -> list[str]:
     """
     pad = _BODY_INDENT * levels
     return [f"{pad}{line}" if line else "" for line in lines]
-
-
-@dataclass(frozen=True)
-class AfterEmission:
-    """How one target renders a scenario's `after` rules (BE-0392).
-
-    Two shapes cover the three targets. A target whose teardown is *registered* (XCTest's
-    `addTeardownBlock`) fills `prologue` alone; one that must *wrap* the body in a
-    `try`/`catch`/`finally` to observe the outcome (Playwright, UI Automator) fills all three, and
-    `body_indent` is how many extra levels the wrapped body sits at. A target that can express
-    neither must still say so out loud: it returns the labeled `// TODO` lines as its `prologue`,
-    the convention BE-0026 and BE-0314 already use, never a silent skip. All three targets today
-    express the phase natively, so no such fallback is written yet.
-    """
-
-    prologue: list[str] = field(default_factory=list)
-    epilogue: list[str] = field(default_factory=list)
-    body_indent: int = 0
-
-
-class CodeGenerator(Protocol):
-    """The target-specific parts of a generated test file.
-
-    The shared walk supplies the structure (scenario loop, env merge, body indentation, the
-    expect divider); a generator supplies only the syntax of each line for its target language.
-    """
-
-    def file_preamble(self) -> list[str]:
-        """The lines before the first scenario (header comment, imports, class/describe open)."""
-
-    def scenario_open(self, name: str) -> str:
-        """The line opening one scenario's test function/case (carries its own indent)."""
-
-    def after_lines(self, after: list[AfterRule]) -> AfterEmission:
-        """How this target renders the scenario's `after` rules (BE-0392).
-
-        Called even for an empty list, so a target that always needs a wrapper can say so; the
-        default `AfterEmission()` renders nothing and leaves the body where it was.
-        """
-
-    def setup_lines(self, scenario: Scenario) -> list[str]:
-        """Per-scenario setup emitted before the launch (un-indented); empty when none is needed.
-
-        The hook a target uses to install observers that must be in place before navigation — e.g.
-        the Playwright network-exchange recorder, so a request assertion can read traffic that
-        happened during the steps, not only future traffic.
-        """
-
-    def launch_env_line(self, key: str, value: str) -> str:
-        """One launch-environment assignment (un-indented; the walk adds the body indent)."""
-
-    def launch_line(self) -> str:
-        """The line that launches/navigates the app (un-indented)."""
-
-    def step_lines(self, step: Step) -> list[str]:
-        """The lines for one scenario step (un-indented)."""
-
-    def assertion_lines(self, assertion: Assertion) -> list[str]:
-        """The lines for one `expect` assertion (un-indented)."""
-
-    def scenario_close(self) -> str:
-        """The line closing one scenario's test function/case (carries its own indent)."""
-
-    def file_footer(self) -> list[str]:
-        """The lines after the last scenario (class/describe close)."""
-
-
-# `if` / `forEach` / `extract` are evaluated at run time against the live UI tree — a branch on the
-# current state, a loop over the live match set, a capture of a resolved element's property. A static
-# generated test has no runtime to reproduce that, so no target emits them (they fell through to a
-# no-op `// TODO` stub before BE-0297). Silently dropping a whole branch or loop body is exactly the
-# degradation the determinism-first directive forbids, so codegen refuses loudly at generation time
-# and names `bajutsu run` as the faithful path — rather than emitting a test that quietly does less.
-_RUNTIME_ONLY_HINT = "codegen has no runtime to evaluate it; run the scenario with `bajutsu run`"
 
 
 def _reject_runtime_only(step: Step) -> None:

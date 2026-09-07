@@ -128,7 +128,7 @@ _PERIPHERY_EXCLUSIONS: tuple[tuple[str, str], ...] = (
         "the AWS Device Farm submitter — a hosted batch path, not the local on-device run",
     ),
     (
-        "bajutsu/run/notify.py",
+        "bajutsu/run/notify/",
         "run-completion notifications (serve / CI glue), never exercised by a run itself",
     ),
     (
