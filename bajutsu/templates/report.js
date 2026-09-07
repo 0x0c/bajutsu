@@ -177,7 +177,11 @@
     var rb = cells[1] && cells[1].querySelector('.exst'); if(rb) tvStep.appendChild(rb.cloneNode(true));
     var ab = cells[2] && cells[2].querySelector('.act'); if(ab) tvStep.appendChild(ab.cloneNode(true));
     if(cells[3]){ var d = document.createElement('span'); d.className = 'tv-stepdesc'; d.innerHTML = cells[3].innerHTML; tvStep.appendChild(d); }
-    var at = cells[4] ? cells[4].textContent.trim() : '';
+    // The `at` cell can hold two buttons (start + end, no separator between them) for a step
+    // with a visible duration — take the start button's own text so the band shows one instant,
+    // not "1.5s→2.6s" run together. Bare text (network/skip rows) still falls through as-is.
+    var atCell = cells[4], atJump = atCell && atCell.querySelector('.stepjump');
+    var at = atJump ? atJump.textContent.trim() : (atCell ? atCell.textContent.trim() : '');
     if(at){ var a = document.createElement('span'); a.className = 'tv-stepat muted'; a.textContent = at; tvStep.appendChild(a); }
     tvStep.hidden = false;
   }
@@ -412,12 +416,18 @@
           if(Math.abs(ev.clientX - startX) > 2) moved = true;
           applyTime(timeFromClientX(ev.clientX));
         }
+        // `pointerup` isn't guaranteed: the browser can take over a touch/pen gesture mid-drag
+        // (this page scrolls, so a mostly-vertical one started on a mark ends in `pointercancel`
+        // instead) and a mouse released outside the window drops it too. Either dangling listener
+        // left `onMove` running forever, scrubbing on every later pointer move on the page.
         function onUp(){
           document.removeEventListener('pointermove', onMove);
           document.removeEventListener('pointerup', onUp);
+          document.removeEventListener('pointercancel', onUp);
         }
         document.addEventListener('pointermove', onMove);
-        document.addEventListener('pointerup', onUp, {once: true});
+        document.addEventListener('pointerup', onUp);
+        document.addEventListener('pointercancel', onUp);
       });
       marks.addEventListener('click', function(e){
         if(moved){ moved = false; return; }   // this click just ended a drag; already seeked
