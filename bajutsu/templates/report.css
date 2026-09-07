@@ -252,6 +252,12 @@ details.pre[open]>summary::before{transform:rotate(90deg)}
  color:#fff;background:var(--mut);border-radius:5px;padding:.06rem .42rem;min-width:3.1rem;text-align:center}
 .exst.ok{background:var(--ok)} .exst.ng{background:var(--ng)}
 .exreason{color:var(--ng);font-size:.8rem;font-style:italic}
+/* An extra full-width row beneath the check it explains, shown only when the row has a reason —
+   keeps the table at four columns instead of a fifth that is empty on nearly every row. */
+.extbl tr:has(+ .exreasonrow) td{border-bottom:0}
+.exreasonrow td{padding-top:0}
+.exreasonrow td::before{content:"reason";display:block;margin-bottom:.12rem;color:var(--mut);
+ font:600 .64rem -apple-system,system-ui,sans-serif;text-transform:uppercase;letter-spacing:.04em}
 /* Every step's row is a small grid, not a table row, at every viewport width — three columns: a
    leading `id`, the result/action/at/detail/reason stack, and a trailing `view`. `id` and `view`
    both span (and center across) the full row height; between them, result/action/at share a

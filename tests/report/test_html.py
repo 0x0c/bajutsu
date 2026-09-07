@@ -98,11 +98,12 @@ def test_html_expectations_block() -> None:
     assert 'class="expects"' in out
     assert "class='extbl'" in out  # a table, not a list
     # target / comparison are split into their own cells.
-    assert "<th>result</th><th>kind</th><th>target</th><th>comparison</th><th>reason</th>" in out
+    assert "<th>result</th><th>kind</th><th>target</th><th>comparison</th>" in out
+    assert "<th>reason</th>" not in out  # reason is a conditional row, not a mostly-empty column
     assert 'class="exst ok">PASS' in out
     assert 'class="exst ng">FAIL' in out
     assert 'act-kind">exists' in out  # the assertion kind pill (outlined, distinct from an action)
-    assert 'class="exreason"' in out  # the failing expect shows its reason
+    assert "class='exreasonrow'><td colspan='4'><span class=\"exreason\"" in out  # its own row
 
 
 def test_expectations_tokenized_from_definition() -> None:
