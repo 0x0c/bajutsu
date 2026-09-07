@@ -239,12 +239,12 @@ details.pre[open]>summary::before{transform:rotate(90deg)}
  color:#fff;background:var(--mut);border-radius:5px;padding:.06rem .42rem;min-width:3.1rem;text-align:center}
 .exst.ok{background:var(--ok)} .exst.ng{background:var(--ng)}
 .exreason{color:var(--ng);font-size:.8rem;font-style:italic}
-/* Every step's row is a small grid, not a table row, at every viewport width: `id` sits in its
-   own narrow leading column, vertically centered against the whole row; result/action/at share
-   a compact first line, each a label beside its own value; detail spans the width below them,
-   unlabeled; view sits beside detail on the right, its own label beside it too; reason (when the
-   step has one) gets its own line under detail, its label above since it can run to more than
-   one line. Grid track widths are content-sized (`auto`/`1fr`), not hardcoded rems, so a long
+/* Every step's row is a small grid, not a table row, at every viewport width — three columns: a
+   leading `id`, the result/action/at/detail/reason stack, and a trailing `view`. `id` and `view`
+   both span (and center across) the full row height; between them, result/action/at share a
+   compact first line, each a label beside its own value, then detail (unlabeled, its own line),
+   then reason when the step has one (its label above, since it can run to more than one line).
+   Grid track widths are content-sized (`auto`/`1fr`), not hardcoded rems, so a long
    `after`-table `#` cell ("success·12") or a long `detail` never overflows or clips the way a
    fixed-width table column once did — the layout simply grows to fit. The template emits no
    `thead` at all: with the header text moved onto each cell as its own label (below), a separate
@@ -291,11 +291,12 @@ details.pre[open]>summary::before{transform:rotate(90deg)}
 /* detail: row 2, spanning the result/action/at columns (not `id`, not `view`) — unlabeled, and
    in normal block flow (see the ::before exclusion above). */
 .sttbl>tbody>tr:not(.nxdetail):not(.alertrow):not(.actrow):not(.genrow)>td:nth-child(4){grid-column:2/5;grid-row:2}
-/* view: its own trailing column, beside detail only (row 2) — not spanning row 1 or row 3 — its
-   label to the left, the group centered so a thumbnail narrower than the column doesn't hug the
-   left edge. */
+/* view: its own trailing column — spanning (and centered across, like `id`'s leading column)
+   all three rows, not just row 2 — three columns overall: id, the result/action/at + detail +
+   reason stack, and view. Its own label sits to the left of it, the pair centered so a
+   thumbnail narrower than the column doesn't hug the left edge. */
 .sttbl>tbody>tr:not(.nxdetail):not(.alertrow):not(.actrow):not(.genrow)>td:nth-child(6){
-  grid-column:5;grid-row:2;display:flex;align-items:center;justify-content:center;gap:.35rem}
+  grid-column:5;grid-row:1/4;align-self:center;display:flex;align-items:center;justify-content:center;gap:.35rem}
 .sttbl>tbody>tr:not(.nxdetail):not(.alertrow):not(.actrow):not(.genrow)>td:nth-child(6)::before{content:"view"}
 /* reason: row 3, same span as detail — omitted (see `:empty` above) whenever the step has none.
    Label above, not beside: unlike result/action/at/view, its value is free text that can run to
