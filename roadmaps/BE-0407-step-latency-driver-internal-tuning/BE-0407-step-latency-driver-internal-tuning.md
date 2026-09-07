@@ -381,10 +381,12 @@ half alone; *Progress* below records the measurement behind dropping its `elemen
   /tap` mean 690ms → 446ms across 3 taps, and only 6 of 9 `drain_interruptions` calls reached the
   wire (the rest answered from a tap's own fold). Real, measured progress against the baseline,
   short of this item's own 0.3–0.6s per-tap target now that units 8 and 15 are deferred. Android,
-  after Group 3 (2026-09-07, API 34 arm64 emulator, `controls.yaml`, three runs each side, step
-  wall-clock from the run manifest rather than the tracer — the step is what this item's target is
-  stated in, and the emulator's own noise swamps a per-call cut): a `tap` step went from 3.26–5.44s
-  to 2.00–2.36s, and a `scroll` step from 3.93–6.01s to 4.22–5.92s, unchanged within that noise.
+  after Group 3 (2026-09-07, API 34 arm64 emulator, `controls.yaml`, three runs each side on a
+  freshly booted device with the runs serialized, step wall-clock from the run manifest rather than
+  the tracer — the step is what this item's target is stated in, and the emulator's own noise swamps
+  a per-call cut): a `tap` step went from 3.46–5.67s to 2.32–4.57s, roughly a third off its median,
+  and a `scroll` step from 5.99–6.02s to 5.97–8.24s, unchanged within that noise. The whole scenario
+  went from 25.3–28.1s to 19.2–26.7s.
   Roughly a third off a tap, short of the 0.6–1.2s this item targets for Android — the rest of that
   gap is the device-side executor's ([BE-0410](../BE-0410-step-latency-android-device-executor/BE-0410-step-latency-android-device-executor.md)).
 - [x] Backfill reciprocal `Related` links between this item and the device-side protocol, iOS
@@ -447,7 +449,7 @@ Log:
   parsing the hierarchy XML twice on the host, and moved the narrowed body's serialization onto the
   `rawTree` capture's own accessor so a run that never takes it never pays. Verified on an API 34
   arm64 emulator across the eighteen scenarios the Android e2e lane runs, all passing; a `tap` step
-  fell from 3.26–5.44s to 2.00–2.36s across three runs each side, with `scroll` unchanged within
+  fell from 3.46–5.67s to 2.32–4.57s across three runs each side, with `scroll` unchanged within
   the emulator's noise. Units 17, 20 and 24 were each implemented and reverted after measurement
   found them slower than what they replace — see the Progress notes on all three.
 
