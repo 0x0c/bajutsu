@@ -18,7 +18,7 @@
 
 {%- macro detail(d) -%}
 {%- if d.kind == 'parts' -%}{{ parts(d.parts) }}
-{%- elif d.kind == 'asserts' -%}<table class="atbl"><tbody>{% for kind, target, comp in d.rows %}<tr><td><span class="act act-assert">{{ kind }}</span></td><td class="adesc">{{ parts(target) }}</td><td class="adesc">{{ parts(comp) }}</td></tr>{% endfor %}</tbody></table>
+{%- elif d.kind == 'asserts' -%}<table class="atbl"><tbody>{% for kind, target, comp in d.rows %}<tr><td><span class="act act-kind">{{ kind }}</span></td><td class="adesc">{{ parts(target) }}</td><td class="adesc">{{ parts(comp) }}</td></tr>{% endfor %}</tbody></table>
 {%- elif d.kind == 'nxsummary' -%}<span class="xmark">▸</span> {{ parts(d.summary) }}
 {%- endif -%}
 {%- if d.name %} <span class="stepname">{{ d.name }}</span>{% endif %}{% for c in d.caps %} <span class="cap">{{ c }}</span>{% endfor %}{% if d.from_ %}<div class="stepfrom" title="the natural-language phrase this was recorded from">← {{ d.from_ }}</div>{% endif %}
@@ -52,7 +52,7 @@
 {%- endmacro -%}
 
 {%- macro exrow(row) -%}
-<tr class='{{ row.rowcls }}'><td><span class="exst{% if row.stcls %} {{ row.stcls }}{% endif %}">{{ row.status }}</span></td><td><span class="act act-assert">{{ row.kind }}</span></td><td class="adesc">{{ parts(row.target) }}</td><td class="adesc">{{ parts(row.comp) }}</td><td>{% if row.reason %}<span class="exreason">{{ row.reason }}</span>{% endif %}</td></tr>{% if row.visual %}{{ visual_strip(row.visual) }}{% endif %}
+<tr class='{{ row.rowcls }}'><td><span class="exst{% if row.stcls %} {{ row.stcls }}{% endif %}">{{ row.status }}</span></td><td><span class="act act-kind">{{ row.kind }}</span></td><td class="adesc">{{ parts(row.target) }}</td><td class="adesc">{{ parts(row.comp) }}</td><td>{% if row.reason %}<span class="exreason">{{ row.reason }}</span>{% endif %}</td></tr>{% if row.visual %}{{ visual_strip(row.visual) }}{% endif %}
 {%- endmacro -%}
 
 {%- macro precond(rows) -%}

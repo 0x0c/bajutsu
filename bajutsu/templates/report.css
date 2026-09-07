@@ -40,7 +40,11 @@ summary::-webkit-details-marker{display:none}
    to a sliver instead, wrapping one word per line beside them. */
 .smeta{flex:1 1 12rem;min-width:0;display:flex;flex-direction:column;gap:.1rem}
 .sdesc{font-weight:400;font-size:.82rem;color:var(--mut)}
-.dot{width:.6rem;height:.6rem;border-radius:50%;background:var(--ok);flex:none} .dot.ng{background:var(--ng)}
+/* `flex-start` on `summary` (above) aligns siblings to the row's top, not the title's own text —
+   nudge the dot down to the first line's vertical center instead of its top edge. Fixed to the
+   title's line-height (not the wrapped block's), so it stays put whether the title wraps or not. */
+.dot{width:.6rem;height:.6rem;margin-top:.32rem;border-radius:50%;background:var(--ok);flex:none}
+.dot.ng{background:var(--ng)}
 .body{padding:0 1rem 1rem;display:grid;grid-template-columns:300px 1fr;gap:1.1rem;align-items:start}
 @media(max-width:760px){.body{grid-template-columns:1fr}}
 /* Let the 1fr detail column shrink to its track (grid items default to min-width:auto,
@@ -58,6 +62,11 @@ summary::-webkit-details-marker{display:none}
 .vplay:hover{background:#4a4d52}
 .vseekwrap{position:relative;flex:1;min-width:0;display:flex;align-items:center}
 .vseek{flex:1;min-width:0;height:.3rem;cursor:pointer;accent-color:#0a6cff}
+/* Hide the native thumb — `.vknob` below is the visible one, drawn on top of the tick/segment
+   layer the native thumb would otherwise be hidden behind. The input stays fully interactive
+   (dragging/clicking still work); only its own circle is invisible now, not just covered. */
+.vseek::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;width:0;height:0;opacity:0}
+.vseek::-moz-range-thumb{width:0;height:0;opacity:0;border:0}
 /* before/after lifecycle bands under the scrubber: the stretch of the recording each phase
    covers, so a reader can tell setup/teardown apart from the scenario's own steps at a glance.
    Drawn behind .vmarks (painted after it below) and inset the same 7px so both line up with the
@@ -196,8 +205,8 @@ img.shot{height:52px;border:1px solid var(--line);border-radius:4px;vertical-ali
  margin-right:.4rem;color:#6b6b6e;text-align:right;text-indent:0}
 .log .ln.hide{display:none}
 .muted{color:var(--mut);font-size:.8rem}
-.deflbl{display:block;margin-bottom:.35rem;font-size:.72rem;font-weight:700;text-transform:uppercase;
- letter-spacing:.05em;color:var(--mut)}
+.deflbl{display:block;margin-top:.9rem;margin-bottom:.35rem;font-size:.72rem;font-weight:700;
+ text-transform:uppercase;letter-spacing:.05em;color:var(--mut)}
 .envsec{margin-bottom:.8rem}
 .envsec .pretbl{border:1px solid var(--line);border-radius:8px;overflow:hidden}
 details.pre{margin-bottom:.6rem;border:1px solid var(--line);border-radius:8px;overflow:hidden}
@@ -213,6 +222,10 @@ details.pre[open]>summary::before{transform:rotate(90deg)}
  text-align:center}
 .act-tap{background:#2c5fb3} .act-type{background:#7a3aa8} .act-move{background:#0a7d6b}
 .act-wait{background:#8a6d1a} .act-assert{background:#0a7d33} .act-alert{background:#a8521f}
+/* The assertion *kind* (value/exists/count/…) rides the same `.act` pill as an action badge, but
+   outlined rather than filled — it names what an assertion checks, not something the driver did,
+   and the outline keeps that distinct at a glance. */
+.act-kind{background:transparent;border:1px solid var(--ok);color:var(--ok)}
 .adesc{font:.84rem/1.45 ui-monospace,Menlo,Consolas,monospace;color:var(--ink);word-break:break-word}
 /* Inline value tokens — subtle, lowercase, NOT solid badges, so ids (variables)
    and string/number literals (constants) are identifiable at a glance. */
@@ -244,12 +257,16 @@ details.pre[open]>summary::before{transform:rotate(90deg)}
    both span (and center across) the full row height; between them, result/action/at share a
    compact first line, each a label beside its own value, then detail (unlabeled, its own line),
    then reason when the step has one (its label above, since it can run to more than one line).
-   Grid track widths are content-sized (`auto`, not `minmax(0,auto)`), so a track never shrinks
-   below its cell's own min-content the way a fixed-width table column once did (which is what
-   let the `after`-table's `#` cell overlap the PASS/FAIL badge before this rewrite) — a row too
-   wide for its container overflows into `.rich-scroll`'s own `overflow:auto` instead, which
-   degrades to a horizontal scrollbar rather than reproducing that overlap on a narrow viewport.
-   `detail`'s own track is the one exception, `minmax(3rem,1fr)`: it is meant to flex, and the
+   The result/action/view tracks are content-sized (`auto`, not `minmax(0,auto)`), so they never
+   shrink below their cell's own min-content the way a fixed-width table column once did (which
+   is what let the `after`-table's `#` cell overlap the PASS/FAIL badge before this rewrite) — a
+   row too wide for its container overflows into `.rich-scroll`'s own `overflow:auto` instead,
+   which degrades to a horizontal scrollbar rather than reproducing that overlap. Two tracks do
+   carry a fixed minimum that sits *below* their cell's own min-content. `id`'s `minmax(1.4rem,auto)`
+   is narrower than an `after` row's `always·—`, and only the `overflow-wrap:anywhere` on its own
+   rule below keeps that from overlapping the badge beside it — at the cost of wrapping the word
+   rather than scrolling, so don't drop it as redundant.
+   `detail`'s is `minmax(3rem,1fr)`: it is meant to flex, and the
    `overflow-wrap` on `.adesc` below keeps its own content from forcing that minimum back up —
    but the same track also carries `at` in row 1, whose two jump buttons cannot usefully render
    in a 0-wide column (its shortest realistic content, "0.0s", is still ~2rem), so the floor is
@@ -473,6 +490,7 @@ tr.visrow>td{background:#fafafb}
  .tvtbl tr.tvrow:hover td{background:#2a2f3a}
  tr.srow.playing{background:#3a3520}
  tr.nrow{background:#1d2230}
+ .stepjump:hover,.stepjump-end:hover{color:#5b9cff}
  .nxbody,tr.nxdetail>td{background:#1b1c1f}
  img.shot,.tv-shot img{background:#2a2b2f}
  .vt.active{background:#4a4d52}

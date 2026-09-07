@@ -101,7 +101,7 @@ def test_html_expectations_block() -> None:
     assert "<th>result</th><th>kind</th><th>target</th><th>comparison</th><th>reason</th>" in out
     assert 'class="exst ok">PASS' in out
     assert 'class="exst ng">FAIL' in out
-    assert 'act-assert">exists' in out  # the assertion kind pill
+    assert 'act-kind">exists' in out  # the assertion kind pill (outlined, distinct from an action)
     assert 'class="exreason"' in out  # the failing expect shows its reason
 
 
@@ -134,8 +134,8 @@ def test_expectations_request_kind_rendered() -> None:
         network=lambda: [NetworkExchange(method="GET", path="/x", status=200)],
     )
     out = html_report("run9", [result], definitions=[definition])
-    assert 'act-assert">request' in out  # the kind pill, not "?"
-    assert 'act-assert">?' not in out
+    assert 'act-kind">request' in out  # the kind pill, not "?"
+    assert 'act-kind">?' not in out
     assert '<span class="tk kw">GET</span>' in out
     assert 'status == <span class="tk num">200</span>' in out
 
