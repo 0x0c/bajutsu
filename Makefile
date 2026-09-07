@@ -129,12 +129,13 @@ lint:
 # keep their prose docstrings until their turn. D102/D105/D107 are excluded by design: D102 would
 # force docstrings onto the compact `Driver`/`Collector` Protocol `: ...` stubs, and D105/D107
 # (magic methods / __init__) are noise. The google convention is set in pyproject's pydocstyle.
-# The existence guard is not decoration: ruff exits 0 on a path that is not there, so a
-# DOCSTRING_PATHS entry left pointing at a file BE-0411 split into a package would silently stop
-# checking that surface instead of failing.
+# The guard is not decoration: ruff exits 0 both on a path that is not there and on a directory
+# holding no Python file, so a DOCSTRING_PATHS entry left pointing at a file BE-0411 split into a
+# package would silently stop checking that surface instead of failing.
 lint-docstrings:
 	@for p in $(DOCSTRING_PATHS); do \
-		[ -e "$$p" ] || { echo "DOCSTRING_PATHS names a path that no longer exists: $$p"; exit 1; }; \
+		[ -f "$$p" ] || [ -n "$$(find "$$p" -name '*.py' -print -quit 2>/dev/null)" ] || \
+			{ echo "DOCSTRING_PATHS entry checks no Python file: $$p"; exit 1; }; \
 	done
 	uv run ruff check --select D --ignore D102,D105,D107 $(DOCSTRING_PATHS)
 

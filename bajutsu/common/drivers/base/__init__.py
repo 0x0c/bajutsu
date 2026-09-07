@@ -8,7 +8,6 @@ Frozen first because everything else depends on it:
   nondeterminism structurally.
 """
 
-from ._functions import _cached_index as _cached_index
 from ._functions import _collapse_identical_duplicates as _collapse_identical_duplicates
 from ._functions import _compile as _compile
 from ._functions import _id_index as _id_index

@@ -14,7 +14,6 @@ file under a `DOCSTRING_PATHS` entry needs. This script decides only the unambig
 from __future__ import annotations
 
 import argparse
-import contextlib
 import keyword
 import re
 import subprocess
@@ -57,6 +56,14 @@ def snake_case(name: str) -> str:
     return f"{stem}_" if keyword.iskeyword(stem) else stem
 
 
+def _subscript_head(node: cst.Subscript) -> str | None:
+    """The rightmost name of a subscript's target — `Literal` for both `Literal[…]` forms."""
+    value: cst.BaseExpression = node.value
+    if isinstance(value, cst.Attribute):
+        value = value.attr
+    return value.value if isinstance(value, cst.Name) else None
+
+
 class _References(cst.CSTVisitor):
     """Collect the names a subtree reads, separating annotation-only reads from runtime ones.
 
@@ -73,6 +80,15 @@ class _References(cst.CSTVisitor):
         self.locally_imported: set[str] = set()
         self.uses_file: bool = False
         self._annotation_depth = 0
+
+    def visible(self) -> set[str]:
+        """The names this file still needs a module-level import for.
+
+        A name a method imports for itself is already bound where it is used, unless an annotation
+        elsewhere reads it too. Counting those as sibling references undoes a rule-5 in-method
+        import that a human had already applied, and puts the cycle straight back.
+        """
+        return self.all - (self.locally_imported - self.annotated)
 
     def _record(self, name: str) -> None:
         self.all.add(name)
@@ -134,13 +150,21 @@ class _References(cst.CSTVisitor):
         # straight into a subscript, as `Callable[[Driver], "AlertEvent | None"]` does. Read those
         # in annotation context, so the name is imported rather than left undefined.
         node.value.visit(self)
+        # `Literal["Beta"]`'s string is a value, not a forward reference. Parsing it as one imports
+        # a sibling the file never uses, and two such strings can close a cycle out of nothing.
+        literal = _subscript_head(node) == "Literal"
         self._annotation_depth += 1
         for element in node.slice:
-            if isinstance(element.slice, cst.Index) and isinstance(
-                element.slice.value, cst.SimpleString
-            ):
+            quoted = (
+                not literal
+                and isinstance(element.slice, cst.Index)
+                and isinstance(element.slice.value, cst.SimpleString)
+            )
+            if quoted:
+                assert isinstance(element.slice, cst.Index)
+                assert isinstance(element.slice.value, cst.SimpleString)
                 self._visit_quoted(element.slice.value)
-            else:
+            elif not literal:
                 element.visit(self)
         self._annotation_depth -= 1
         return False
@@ -221,10 +245,11 @@ class _References(cst.CSTVisitor):
         names = node.names
         if isinstance(names, cst.ImportStar):
             return
+        # No `suppress` here: an inner import is the only path that reaches `_alias_binding` for
+        # a name outside the module header, so swallowing the refusal would silently change which
+        # module-level imports survive rather than refusing the file.
         for alias in names:
-            # An alias shape `_alias_binding` refuses is refused by the split itself a moment later.
-            with contextlib.suppress(SplitError):
-                self.locally_imported.add(_alias_binding(alias))
+            self.locally_imported.add(_alias_binding(alias))
 
     def visit_Global(self, node: cst.Global) -> bool:
         for item in node.names:
@@ -291,8 +316,15 @@ def _is_main_guard(node: cst.BaseStatement) -> bool:
 
 
 def _is_type_checking_block(node: cst.BaseStatement) -> bool:
-    return isinstance(node, cst.If) and "TYPE_CHECKING" in cst.Module(body=[]).code_for_node(
-        node.test
+    """Whether this is a plain `if TYPE_CHECKING:` guard — the test matched by shape, not by text.
+
+    A substring match also accepts `if not TYPE_CHECKING:`, whose runtime shim would then be hoisted
+    into a type-checking-only block and never run.
+    """
+    return (
+        isinstance(node, cst.If)
+        and isinstance(node.test, cst.Name)
+        and (node.test.value == "TYPE_CHECKING")
     )
 
 
@@ -403,6 +435,8 @@ def _parse(source: str) -> _Parsed:
             continue
         if _is_type_checking_block(statement):
             assert isinstance(statement, cst.If)
+            if statement.orelse is not None:
+                raise SplitError("a TYPE_CHECKING block with an `else` needs a runtime shim kept")
             for inner in statement.body.body:
                 if not isinstance(inner, cst.SimpleStatementLine):
                     raise SplitError("a TYPE_CHECKING block holds more than plain imports")
@@ -438,6 +472,16 @@ def _parse(source: str) -> _Parsed:
 
 
 def _check_splittable(parsed: _Parsed, name: str, *, allow_file_paths: bool) -> None:
+    if parsed.dunder_all is not None:
+        bound = {declaration.name for declaration in parsed.declarations}
+        bound |= {n for statement in parsed.module_level for n in statement.binds}
+        listed = sorted(set(parsed.dunder_all) - bound)
+        if listed:
+            # `__init__.py` re-exports what the module *defined*; an `__all__` naming something it
+            # only imported would list a name nothing brings in, which ruff reads as `F822`.
+            raise SplitError(
+                f"`__all__` names {', '.join(listed)}, which {name} imports rather than defines"
+            )
     classes = [d for d in parsed.declarations if d.is_class]
     if len(classes) < 2:
         raise SplitError(f"{name} defines {len(classes)} top-level class(es); nothing to split")
@@ -456,6 +500,8 @@ def _check_splittable(parsed: _Parsed, name: str, *, allow_file_paths: bool) -> 
         return
     scanned = [statement.reads for statement in parsed.module_level]
     scanned += [_references(declaration.node) for declaration in parsed.declarations]
+    if parsed.main_guard is not None:
+        scanned.append(_references(parsed.main_guard))
     for reads in scanned:
         if reads.uses_file:
             raise SplitError(
@@ -464,7 +510,7 @@ def _check_splittable(parsed: _Parsed, name: str, *, allow_file_paths: bool) -> 
             )
 
 
-def _assign_owners(parsed: _Parsed) -> tuple[dict[int, str], list[str]]:
+def _assign_owners(parsed: _Parsed) -> tuple[dict[int, str], list[str], set[str]]:
     """Place each module-level statement (rule 4) and say which placements a human must confirm."""
     # Keyed by target file, not by declaration: rule 2 sends every top-level function to one
     # `_functions.py`, so their reads have to merge or only the last one would count as an owner.
@@ -476,7 +522,13 @@ def _assign_owners(parsed: _Parsed) -> tuple[dict[int, str], list[str]]:
         merged.runtime |= reads.runtime
         merged.rebound |= reads.rebound
     rebound: set[str] = set()
-    for reads in declaration_reads.values():
+    for stem, reads in declaration_reads.items():
+        if stem != FUNCTIONS_MODULE and reads.rebound:
+            names = ", ".join(sorted(reads.rebound))
+            raise SplitError(
+                f"{stem}.py rebinds {names} with `global`, which cannot reach a name rule 2 sends "
+                f"to {FUNCTIONS_MODULE}.py; move the rebinding to a top-level function first"
+            )
         rebound |= reads.rebound
     placement: dict[int, str] = {}
     notes: list[str] = []
@@ -508,7 +560,7 @@ def _assign_owners(parsed: _Parsed) -> tuple[dict[int, str], list[str]]:
                 f"  {names}: read by {', '.join(owners)} — placed in {SHARED_MODULE}.py, "
                 "confirm that is right"
             )
-    return placement, notes
+    return placement, notes, rebound
 
 
 def _binding_stems(parsed: _Parsed, placement: dict[int, str]) -> dict[str, str]:
@@ -546,6 +598,10 @@ def _runtime_cycles(graph: dict[str, set[str]]) -> list[tuple[str, ...]]:
     cycles: list[tuple[str, ...]] = []
     seen: set[tuple[str, ...]] = set()
 
+    # `explored` bounds the walk to one visit per node across all start nodes. Without it a densely
+    # coupled module re-walks every path from every start, and the tool hangs instead of reporting.
+    explored: set[str] = set()
+
     def walk(stem: str, path: list[str]) -> None:
         for neighbour in sorted(graph.get(stem, ())):
             if neighbour in path:
@@ -554,17 +610,21 @@ def _runtime_cycles(graph: dict[str, set[str]]) -> list[tuple[str, ...]]:
                 if key not in seen:
                     seen.add(key)
                     cycles.append(tuple(cycle))
-            elif len(path) < len(graph):
+            elif neighbour not in explored:
+                explored.add(neighbour)
                 walk(neighbour, [*path, neighbour])
 
     for stem in sorted(graph):
-        walk(stem, [stem])
+        if stem not in explored:
+            explored.add(stem)
+            walk(stem, [stem])
     return cycles
 
 
 def _siblings(stem: str, reads: _References, stems: dict[str, str]) -> dict[str, str]:
-    """The other split files this one reads a name from, keyed by that name."""
-    return {name: where for name, where in stems.items() if where != stem and name in reads.all}
+    """The other split files this one still needs a module-level import from, keyed by that name."""
+    visible = reads.visible()
+    return {name: where for name, where in stems.items() if where != stem and name in visible}
 
 
 def _choose_deferred(
@@ -605,11 +665,13 @@ def _choose_deferred(
                 deferred.setdefault(stem, set()).update(names)
                 break
         else:
-            notes.append(
-                f"  circular import {' -> '.join([*cycle, cycle[0]])}.py — break it with rule 5's "
-                "in-method import before the package will load"
+            # Every remaining cycle, not just this one: a batch operator fixing them one re-run at
+            # a time pays a round trip per cycle for no reason.
+            listed = "; ".join(" -> ".join([*each, each[0]]) for each in cycles)
+            raise SplitError(
+                f"circular import {listed}.py, with no annotation-only edge to defer — break it "
+                "with rule 5's in-method import first"
             )
-            return deferred, notes
 
 
 def _render_file(
@@ -625,15 +687,16 @@ def _render_file(
     runtime_siblings = {n: w for n, w in siblings.items() if n not in deferred}
     deferred_siblings = {n: w for n, w in siblings.items() if n in deferred}
 
-    # A name a method imports for itself needs no module-level import, unless an annotation
-    # elsewhere in the file still reads it.
-    used = reads.all - (reads.locally_imported - reads.annotated)
+    used = reads.visible()
 
     type_checking: list[_Statement] = []
     for statement in parsed.type_checking:
         kept = _filter_import(_import_of(statement), used)
         if kept is not None:
-            type_checking.append(statement.with_changes(body=[kept], leading_lines=[]))
+            # Blank leading lines go, comments stay. Dropping both would lose the very thing this
+            # item chose `libcst` over `ast` for — the note explaining why an import is deferred.
+            comments = [line for line in statement.leading_lines if line.comment is not None]
+            type_checking.append(statement.with_changes(body=[kept], leading_lines=comments))
     type_checking.extend(
         cst.parse_statement(f"from .{deferred_siblings[name]} import {name}")
         for name in sorted(deferred_siblings)
@@ -673,13 +736,20 @@ def _render_file(
 
 
 def _render_init(
-    parsed: _Parsed, stems: dict[str, str], trailing: list[cst.SimpleStatementLine]
+    parsed: _Parsed,
+    stems: dict[str, str],
+    trailing: list[cst.SimpleStatementLine],
+    rebound: set[str],
 ) -> str:
     exported: list[tuple[str, str]] = []
     seen: set[str] = set()
     for statement in parsed.module_level:
         for name in statement.binds:
-            if name not in seen:
+            # A `global`-rebound name must not be re-exported: `from .x import NAME` copies the
+            # value once, so the package attribute then freezes at whatever it held on import while
+            # the real binding moves on. A test asserting on the package's copy silently stops
+            # testing anything (BE-0411).
+            if name not in seen and name not in rebound:
                 exported.append((name, stems[name]))
                 seen.add(name)
     for declaration in parsed.declarations:
@@ -710,6 +780,19 @@ def _render_init(
         body.append(cst.parse_statement(f"from .{where} import {names}"))
     listed = ", ".join(f'"{name}"' for name in dunder_all)
     body.append(cst.parse_statement(f"__all__ = [{listed}]"))
+    if trailing:
+        # A trailing statement reads the module's own imports as readily as its re-exports, so carry
+        # the ones it uses. They go above the re-exports, where ruff's E402 wants every import.
+        reads = _References()
+        for trailer in trailing:
+            reads.all |= _references(trailer).all
+        header: list[_Statement] = []
+        for line in parsed.imports:
+            kept = _filter_import(_import_of(line), reads.all)
+            if kept is not None:
+                header.append(line.with_changes(body=[kept], leading_lines=[]))
+        start = 1 if parsed.docstring is not None else 0
+        body[start:start] = header
     body.extend(trailing)
     return _render(body)
 
@@ -718,8 +801,14 @@ def _render_main(parsed: _Parsed, stems: dict[str, str]) -> str:
     """The package's `__main__.py`: the original entry-point guard, over package-level imports."""
     assert parsed.main_guard is not None
     reads = _references(parsed.main_guard)
-    imported = sorted(name for name in reads.all if name in stems)
     body: list[_Statement] = []
+    # The guard reads the module's own imports as readily as its declarations — `sys.exit(main())`
+    # needs both — so carry the header imports it uses, not only the package names.
+    for statement in parsed.imports:
+        kept = _filter_import(_import_of(statement), reads.all)
+        if kept is not None:
+            body.append(statement.with_changes(body=[kept], leading_lines=[]))
+    imported = sorted(name for name in reads.all if name in stems)
     if imported:
         body.append(cst.parse_statement(f"from . import {', '.join(imported)}"))
     body.append(parsed.main_guard.with_changes(leading_lines=[]))
@@ -751,7 +840,7 @@ def plan_split(source: str, *, name: str = "<module>", allow_file_paths: bool = 
     """
     parsed = _parse(source)
     _check_splittable(parsed, name, allow_file_paths=allow_file_paths)
-    placement, notes = _assign_owners(parsed)
+    placement, notes, rebound = _assign_owners(parsed)
     stems = _binding_stems(parsed, placement)
 
     owned: dict[str, list[cst.SimpleStatementLine]] = {}
@@ -765,7 +854,19 @@ def plan_split(source: str, *, name: str = "<module>", allow_file_paths: bool = 
         stem: _file_reads(owned.get(stem, []), grouped.get(stem, []))
         for stem in sorted((set(owned) | set(grouped)) - {INIT_MODULE})
     }
+    for stem, reads in reads_by_stem.items():
+        borrowed = sorted(name for name in reads.all & rebound if stems.get(name, stem) != stem)
+        if borrowed:
+            raise SplitError(
+                f"{stem}.py reads {', '.join(borrowed)}, which another file rebinds with `global`; "
+                "importing the name copies its value once and the copy never updates"
+            )
     deferred, cycle_notes = _choose_deferred(reads_by_stem, stems)
+    if deferred and parsed.future is None:
+        raise SplitError(
+            "breaking a cycle needs a deferred annotation, which evaluates eagerly without "
+            "`from __future__ import annotations`; add it to the module first"
+        )
     files = {
         f"{stem}.py": _render_file(
             parsed,
@@ -777,18 +878,27 @@ def plan_split(source: str, *, name: str = "<module>", allow_file_paths: bool = 
         )
         for stem in reads_by_stem
     }
-    files["__init__.py"] = _render_init(parsed, stems, owned.get(INIT_MODULE, []))
+    files["__init__.py"] = _render_init(parsed, stems, owned.get(INIT_MODULE, []), rebound)
     if parsed.main_guard is not None:
         files["__main__.py"] = _render_main(parsed, stems)
     return SplitPlan(files=files, notes=tuple(notes + cycle_notes))
 
 
 def apply_split(path: Path, plan: SplitPlan) -> Path:
-    """Replace `path` with the package `plan` describes, and return the new directory."""
+    """Replace `path` with the package `plan` describes, and return the new directory.
+
+    Every generated file is compiled before the original is deleted. The original is the only copy
+    of what the split rewrote, so a file that does not even parse must not cost it.
+    """
     package = path.with_suffix("")
     package.mkdir()
     for filename, source in plan.files.items():
-        (package / filename).write_text(source)
+        target = package / filename
+        target.write_text(source, encoding="utf-8")
+        try:
+            compile(source, str(target), "exec")
+        except SyntaxError as error:
+            raise SplitError(f"generated {target} does not parse: {error}") from error
     path.unlink()
     return package
 
@@ -798,10 +908,14 @@ def _tidy(paths: list[Path]) -> None:
     targets = [str(path) for path in paths]
     # `I` sorts the imports and `RUF022` the generated `__all__`. Both are left to ruff rather than
     # reproduced here, so the script cannot disagree with the gate about what sorted means.
-    subprocess.run(
-        ["uv", "run", "ruff", "check", "--select", "I,RUF022", "--fix", "-q", *targets], check=False
-    )
-    subprocess.run(["uv", "run", "ruff", "format", "-q", *targets], check=False)
+    for command in (
+        ["uv", "run", "ruff", "check", "--select", "I,RUF022", "--fix", "-q", *targets],
+        ["uv", "run", "ruff", "format", "-q", *targets],
+    ):
+        # `ruff format` fails only on source it cannot parse, which is the loudest signal available
+        # that the split emitted something wrong. Reporting success over it would bury that.
+        if subprocess.run(command, check=False).returncode != 0:
+            raise SplitError(f"ruff rejected the generated files: {' '.join(command[3:5])}")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -819,24 +933,36 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     written: list[Path] = []
-    failed = False
-    for path in args.paths:
-        try:
-            plan = plan_split(
-                path.read_text(), name=str(path), allow_file_paths=args.allow_file_paths
-            )
-        except SplitError as error:
-            print(f"SKIP {path}: {error}", file=sys.stderr)
-            failed = True
-            continue
-        print(f"{path} -> {len(plan.files)} files")
-        for note in plan.notes:
-            print(note)
-        if not args.dry_run:
-            written.append(apply_split(path, plan))
-    if written:
-        _tidy([path for package in written for path in sorted(package.glob("*.py"))])
-    return 1 if failed else 0
+    refused: list[Path] = []
+    try:
+        for path in args.paths:
+            try:
+                plan = plan_split(
+                    path.read_text(encoding="utf-8"),
+                    name=str(path),
+                    allow_file_paths=args.allow_file_paths,
+                )
+                if not args.dry_run:
+                    written.append(apply_split(path, plan))
+            except (SplitError, OSError, cst.ParserSyntaxError) as error:
+                # Reported per file rather than raised, so one module needing a human does not
+                # strand the rest of the batch — but never as success, and never silently.
+                print(f"REFUSED {path}: {error}", file=sys.stderr)
+                refused.append(path)
+                continue
+            print(f"{path} -> {len(plan.files)} files")
+            for note in plan.notes:
+                print(note)
+    finally:
+        # Always in a `finally`: an abandoned batch still leaves formatted packages behind, so the
+        # gate fails on their content rather than on their whitespace.
+        if written:
+            _tidy([path for package in written for path in sorted(package.glob("*.py"))])
+    if refused:
+        print(f"{len(refused)} of {len(args.paths)} module(s) refused:", file=sys.stderr)
+        for path in refused:
+            print(f"  {path}", file=sys.stderr)
+    return 1 if refused else 0
 
 
 if __name__ == "__main__":

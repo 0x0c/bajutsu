@@ -766,7 +766,8 @@ def test_spawn_cold_discards_a_never_ready_runner(
     )
     # Shrink the cold-startup ceiling so a never-ready wait fails in one poll rather than 120s.
     monkeypatch.setattr(
-        "bajutsu.common.platform_lifecycle.environments.xcuitest._RUNNER_STARTUP_TIMEOUT", 0.02
+        "bajutsu.common.platform_lifecycle.environments.xcuitest._functions._RUNNER_STARTUP_TIMEOUT",
+        0.02,
     )
     monkeypatch.delenv("BAJUTSU_XCUITEST_RUNNER_LOG", raising=False)
     signalled = _capture_group_signals(monkeypatch)

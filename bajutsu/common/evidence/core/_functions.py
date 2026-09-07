@@ -16,6 +16,8 @@ from .evidence_sink import EvidenceSink
 from .step_view import StepView
 
 if TYPE_CHECKING:
+    # Imported for typing only — importing at runtime would cycle (orchestrator imports this module).
+    # The writer reads these by attribute, so it needs no runtime import.
     from bajutsu.common.orchestrator.waits import WaitTrace
     from bajutsu.common.platform_lifecycle import ReadinessResult
 

@@ -45,7 +45,8 @@ def _xcuitest_eff(tmp_path: Path, **ios_kwargs: object) -> Effective:
 def _mock_runner_spawn(monkeypatch: pytest.MonkeyPatch) -> None:
     """Stub the `xcodebuild` runner spawn and its driver so a launch exercises only the simctl prep."""
     monkeypatch.setattr(
-        "bajutsu.common.platform_lifecycle.environments.xcuitest._allocate_port", lambda: 54321
+        "bajutsu.common.platform_lifecycle.environments.xcuitest.xcuitest_environment._allocate_port",
+        lambda: 54321,
     )
 
     class _FakePopen:

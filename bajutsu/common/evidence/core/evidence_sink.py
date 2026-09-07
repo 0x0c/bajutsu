@@ -10,6 +10,8 @@ from bajutsu.common.evidence import intervals
 from .artifact import Artifact
 
 if TYPE_CHECKING:
+    # Imported for typing only — importing at runtime would cycle (orchestrator imports this module).
+    # The writer reads these by attribute, so it needs no runtime import.
     from bajutsu.common.orchestrator.waits import WaitTrace
 
 

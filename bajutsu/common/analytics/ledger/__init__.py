@@ -11,8 +11,6 @@ never breaks an AI path. Following the operational-logging rules (BE-0055 / BE-0
 stores counts, prices, and labels only — never prompt or response content.
 """
 
-from ._functions import _ACTIVE_LEDGER as _ACTIVE_LEDGER
-from ._functions import _ACTIVE_PRICING as _ACTIVE_PRICING
 from ._functions import _ATTRIBUTION as _ATTRIBUTION
 from ._functions import _DEFAULT_PRICING as _DEFAULT_PRICING
 from ._functions import (

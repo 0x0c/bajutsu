@@ -14,7 +14,6 @@ The id convention is `data-testid` (developer-set, non-localized) → `Selector.
 this module — or the default CLI path — never pulls in the heavy dependency.
 """
 
-from ._functions import _PW_ERRORS as _PW_ERRORS
 from ._functions import _device_context_kwargs as _device_context_kwargs
 from ._functions import _playwright_error_types as _playwright_error_types
 from ._functions import _rotate_point as _rotate_point

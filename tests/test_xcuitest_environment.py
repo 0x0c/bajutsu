@@ -1447,7 +1447,7 @@ def test_runner_output_is_captured_by_default_and_is_ephemeral(
     _, _, run = _fake_toolchain(monkeypatch)
     monkeypatch.delenv("BAJUTSU_XCUITEST_RUNNER_LOG", raising=False)
     monkeypatch.setattr(
-        "bajutsu.common.platform_lifecycle.environments.xcuitest._DEFAULT_RUNNER_LOG_DIR",
+        "bajutsu.common.platform_lifecycle.environments.xcuitest.xcuitest_environment._DEFAULT_RUNNER_LOG_DIR",
         tmp_path / "default-logs",
     )
     env = XcuitestEnvironment("xcuitest", "UDID", env_run=run)
@@ -1486,7 +1486,7 @@ def test_a_kept_default_capture_is_logged_at_the_moment_it_is_kept(
     _, _, run = _fake_toolchain(monkeypatch)
     monkeypatch.delenv("BAJUTSU_XCUITEST_RUNNER_LOG", raising=False)
     monkeypatch.setattr(
-        "bajutsu.common.platform_lifecycle.environments.xcuitest._DEFAULT_RUNNER_LOG_DIR",
+        "bajutsu.common.platform_lifecycle.environments.xcuitest.xcuitest_environment._DEFAULT_RUNNER_LOG_DIR",
         tmp_path / "default-logs",
     )
     env = XcuitestEnvironment("xcuitest", "UDID", env_run=run)

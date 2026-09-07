@@ -217,8 +217,10 @@ max-statements = 80
 "scripts/**" = ["T20", "S607"]
 # libcst dispatches to `visit_<NodeType>`, so the visitor's method names are the library's to
 # choose, not ours (N802). Ignored at the file level because every method on the visitor is the
-# same case, and eight inline noqa lines would outweigh the code they decorate.
-"scripts/split_modules.py" = ["N802", "T20", "S607"]
+# same case, and sixteen inline noqa lines would outweigh the code they decorate. `T20` and `S607`
+# need no repeating: ruff unions the per-file ignores of every pattern a file matches, and
+# `scripts/**` above already grants both.
+"scripts/split_modules.py" = ["N802"]
 # Investigation notebooks and one-off measurement harnesses (not shipped, not type-checked).
 # `misc/` is the generic home for a roadmap item's supporting material (`roadmaps/BE-NNNN-*/misc/**`);
 # the glob matches through the BE directory so it survives the roadmap-id workflow's BE-XXXX -> BE-NNNN rename.
