@@ -255,7 +255,7 @@ details.pre[open]>summary::before{transform:rotate(90deg)}
 .sttbl>tbody>tr:not(.nxdetail):not(.alertrow):not(.actrow):not(.genrow):not(.visrow){
   display:grid;grid-template-columns:minmax(1.4rem,auto) minmax(0,auto) minmax(0,auto) 1fr minmax(0,auto);
   grid-template-rows:auto auto auto;column-gap:.7rem;row-gap:.2rem;align-items:center;
-  border-bottom:1px solid var(--line);padding:.4rem 0}
+  border-bottom:1px solid var(--line);padding:.4rem .6rem}
 .sttbl>tbody>tr.nxdetail,.sttbl>tbody>tr.alertrow,.sttbl>tbody>tr.actrow,.sttbl>tbody>tr.genrow,.sttbl>tbody>tr.visrow{
   display:block;border-bottom:1px solid var(--line);padding:.4rem 0}
 /* `hidden` on the collapsed exchange row (`tr.nxdetail`) is backed only by the UA stylesheet's

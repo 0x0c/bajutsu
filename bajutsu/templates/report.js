@@ -377,29 +377,67 @@
     function toggle(){ if(v.paused) v.play(); else v.pause(); }
     btn.addEventListener('click', toggle);
     v.addEventListener('click', toggle);   // clicking the frame itself plays/pauses
-    if(marks) marks.addEventListener('click', function(e){
-      // A point tick has one instant to seek to. A range bar has two — its exact start and end
-      // — plus everything between, so a fixed-width hit zone at each edge (not a fraction of the
-      // bar's own width, which would shrink to nothing on a short step) snaps a click there to
-      // the exact boundary; a click elsewhere in the bar interpolates to the time under it,
-      // rather than always snapping to the start regardless of where the bar itself was clicked.
-      var m = e.target.closest('.vmark'); if(!m) return;
-      var t = parseFloat(m.getAttribute('data-t')); if(isNaN(t)) return;
-      var endAttr = m.getAttribute('data-t-end');
-      var tEnd = endAttr !== null ? parseFloat(endAttr) : NaN;
-      if(!isNaN(tEnd) && tEnd > t){
-        var rect = m.getBoundingClientRect(), x = e.clientX - rect.left;
-        var EDGE = Math.min(6, rect.width / 2);   // a sub-12px bar splits at its midpoint instead
-        if(x <= EDGE){ /* exact start */ }
-        else if(x >= rect.width - EDGE){ t = tEnd; }
-        else{
-          var span = Math.max(1, rect.width - 2 * EDGE);
-          var frac = Math.max(0, Math.min(1, (x - EDGE) / span));
-          t = t + frac * (tEnd - t);
-        }
+    if(marks){
+      // A range bar can span a meaningful chunk of the track, and it captures the pointer (it
+      // needs to, to be clickable) — so without this, starting a drag from on top of one would
+      // do nothing instead of scrubbing, unlike everywhere else on the bar. `pointerdown` here
+      // takes over the drag ourselves: it tracks the pointer across the *whole* seekbar (the same
+      // 7px inset `.vmarks`/`.vsegs`/`.vknobwrap` all share) until release, exactly like dragging
+      // the native thumb would. A plain click (no movement) leaves `moved` false and falls
+      // through to the precise per-mark seek below instead.
+      var moved = false;
+      function timeFromClientX(clientX){
+        var rect = seek.parentElement.getBoundingClientRect();
+        var inset = 7, usable = Math.max(1, rect.width - inset * 2);
+        var frac = Math.max(0, Math.min(1, (clientX - rect.left - inset) / usable));
+        return frac * v.duration;
       }
-      v.currentTime = t;
-    });
+      function applyTime(t){
+        v.currentTime = t;
+        if(!seek.matches(':active')) seek.value = t;
+        moveKnob();
+      }
+      marks.addEventListener('pointerdown', function(e){
+        var m = e.target.closest('.vmark'); if(!m || !isFinite(v.duration) || v.duration <= 0) return;
+        moved = false;
+        var startX = e.clientX;
+        applyTime(timeFromClientX(e.clientX));
+        function onMove(ev){
+          if(Math.abs(ev.clientX - startX) > 2) moved = true;
+          applyTime(timeFromClientX(ev.clientX));
+        }
+        function onUp(){
+          document.removeEventListener('pointermove', onMove);
+          document.removeEventListener('pointerup', onUp);
+        }
+        document.addEventListener('pointermove', onMove);
+        document.addEventListener('pointerup', onUp, {once: true});
+      });
+      marks.addEventListener('click', function(e){
+        if(moved){ moved = false; return; }   // this click just ended a drag; already seeked
+        // A point tick has one instant to seek to. A range bar has two — its exact start and end
+        // — plus everything between, so a fixed-width hit zone at each edge (not a fraction of
+        // the bar's own width, which would shrink to nothing on a short step) snaps a click there
+        // to the exact boundary; a click elsewhere in the bar interpolates to the time under it,
+        // rather than always snapping to the start regardless of where the bar itself was clicked.
+        var m = e.target.closest('.vmark'); if(!m) return;
+        var t = parseFloat(m.getAttribute('data-t')); if(isNaN(t)) return;
+        var endAttr = m.getAttribute('data-t-end');
+        var tEnd = endAttr !== null ? parseFloat(endAttr) : NaN;
+        if(!isNaN(tEnd) && tEnd > t){
+          var rect = m.getBoundingClientRect(), x = e.clientX - rect.left;
+          var EDGE = Math.min(6, rect.width / 2);   // a sub-12px bar splits at its midpoint instead
+          if(x <= EDGE){ /* exact start */ }
+          else if(x >= rect.width - EDGE){ t = tEnd; }
+          else{
+            var span = Math.max(1, rect.width - 2 * EDGE);
+            var frac = Math.max(0, Math.min(1, (x - EDGE) / span));
+            t = t + frac * (tEnd - t);
+          }
+        }
+        applyTime(t);
+      });
+    }
     v.addEventListener('play', paint);
     v.addEventListener('pause', paint);
     v.addEventListener('loadedmetadata', meta);
