@@ -112,9 +112,9 @@ Paying a per-job copy of the tree would isolate the `runs/` writes as well. An a
 large to copy per job for that alone. Trees do nest per org, for the reason the control plane's
 caches do. The tree is mutable, so one tenant's run evidence must not land in another's directory.
 
-The fetch runs on the run's own background thread, under the same heartbeat. It carries the job's
-largest transfer. A slower fetch than the lease timeout would otherwise trip a reclaim the worker
-never noticed. The worker would then run the job beside whichever worker won the re-lease.
+The fetch runs on the run's own background thread, under the same heartbeat. It is the job's largest
+transfer. A fetch slower than the lease timeout would otherwise trip a reclaim this worker would
+never notice, and it would then run the job beside whichever worker won the re-lease.
 
 The worker hashes each part once it lands, against the sha256 the job named. A short body is not an
 error to `http.client`, so nothing else notices a truncated download. A truncated raw binary reaches
