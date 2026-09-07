@@ -334,15 +334,16 @@
         (phase === 'before' ? before : phase === 'after' ? after : main).push(t);
       });
       var html = '';
-      function band(cls, label, from, to){
+      // Decorative only (pointer-events:none, see report.css) — no title, since a band is never
+      // a hit-test target for the browser to hang a tooltip on.
+      function band(cls, from, to){
         if(to == null || from == null || to <= from) return;
         var l = Math.max(0, Math.min(100, from / v.duration * 100));
         var w = Math.max(0, Math.min(100 - l, (to - from) / v.duration * 100));
-        html += '<span class="vseg ' + cls + '" style="left:' + l.toFixed(3) + '%;width:' + w.toFixed(3)
-          + '%" title="' + label + ' · ' + fmtT(from) + '–' + fmtT(to) + '"></span>';
+        html += '<span class="vseg ' + cls + '" style="left:' + l.toFixed(3) + '%;width:' + w.toFixed(3) + '%"></span>';
       }
-      if(before.length) band('vseg-before', 'before', 0, main.length ? main[0] : before[before.length - 1]);
-      if(after.length) band('vseg-after', 'after', after[0], v.duration);
+      if(before.length) band('vseg-before', 0, main.length ? main[0] : before[before.length - 1]);
+      if(after.length) band('vseg-after', after[0], v.duration);
       segs.innerHTML = html;
     }
     function ticks(){
@@ -399,6 +400,11 @@
       }
       marks.addEventListener('pointerdown', function(e){
         var m = e.target.closest('.vmark'); if(!m || !isFinite(v.duration) || v.duration <= 0) return;
+        // A mark sits on top of (and so intercepts clicks meant for) the native input beneath —
+        // needed for it to be clickable/draggable at all — which also means that input never
+        // gets focus this way, and arrow-key stepping after interacting with a mark would
+        // otherwise be unreachable. Focus it ourselves to keep that native affordance working.
+        seek.focus();
         moved = false;
         var startX = e.clientX;
         applyTime(timeFromClientX(e.clientX));

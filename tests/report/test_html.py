@@ -192,9 +192,12 @@ def test_merged_steps_show_rich_definition() -> None:
     out = html_report("run9", [_passing()], definitions=[definition])
     assert 'data-tab="scenario"' not in out  # merged into the Steps tab
     assert 'data-tab="steps"' in out
-    # Steps are a table parallel to the expectations table: result / action / detail.
+    # Steps are a table parallel to the expectations table: result / action / detail — position
+    # carries the column now (no header row; see report.css's grid layout for `.sttbl`).
     assert "class='sttbl'" in out
-    assert "<th>#</th><th>result</th><th>action</th><th>detail</th>" in out
+    assert (
+        '<span class="exst ok">PASS</span>' in out and '<span class="act act-tap">tap</span>' in out
+    )
     # Selectors and string literals are tokenized (distinct from the action badges).
     assert '<span class="tk id">#counter.increment</span>' in out
     assert (
