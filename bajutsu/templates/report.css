@@ -265,7 +265,10 @@ details.pre[open]>summary::before{transform:rotate(90deg)}
 .sttbl>tbody>tr[hidden]{display:none}
 .sttbl>tbody>tr:not(.nxdetail):not(.alertrow):not(.actrow):not(.genrow)>td{
   display:block;width:auto;white-space:normal;border-bottom:0;padding:0}
-.sttbl>tbody>tr:not(.nxdetail):not(.alertrow):not(.actrow):not(.genrow)>td:empty{display:none}
+/* `table.sttbl`, not `.sttbl`: this has to outrank the per-cell `display:flex` rules below,
+   which match at the same specificity and would otherwise win on source order — leaving a
+   label-only cell (a request row's empty `result`, a not-run step's empty `at`) visible. */
+table.sttbl>tbody>tr:not(.nxdetail):not(.alertrow):not(.actrow):not(.genrow)>td:empty{display:none}
 /* The label sits to the left of the value, not above it, so `display:flex` puts the `::before`
    label (generated first) and the cell's own child(ren) — one badge, or the `at` cell's two jump
    buttons — on one line. `detail` is the one cell excluded below: its content is several sibling
