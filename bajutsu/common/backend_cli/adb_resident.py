@@ -23,7 +23,7 @@ import time
 import urllib.parse
 import xml.etree.ElementTree as ET
 from collections.abc import Callable, Iterator
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
@@ -296,6 +296,7 @@ def act(
     *,
     timeout: float = 10.0,
     keepalive: Keepalive | None = None,
+    want_tree: bool = True,
 ) -> ActOutcome:
     """Ask the resident server to perform one gesture on an element the host already resolved.
 
@@ -311,7 +312,8 @@ def act(
         (`_ACT_PUBLISH_HEADER`). A server that never sends that header reports no confirmation, which
         is what leaves the driver's read-lag barrier armed exactly as it was. A confirmed gesture also
         carries the tree the device dumped after that publish (`read`), which is the host's next read
-        already answered (BE-0407 unit 19).
+        already answered (BE-0407 unit 19) — unless `want_tree` is False, which tells the device not
+        to take that dump at all.
 
     Raises:
         AdbResidentError: the channel could not be reached, or answered anything else — including the
@@ -319,6 +321,7 @@ def act(
             actuators, so a device that cannot serve this is never worse off than before.
     """
     fields = {
+        "tree": "1" if want_tree else "0",
         "kind": request.kind,
         "index": str(request.index),
         "count": str(request.count),
@@ -607,8 +610,16 @@ class ResidentServer:
             )
         )
         self._clock = clock or (lambda port: fetch_clock(port, keepalive=self._keepalive))
+        # `tree=0` when this target asked for `nativeZ`: the reply cannot carry that reading, so a
+        # tree seeded from it would report every element's position as absent — indistinguishable
+        # from an app that opted no view in, the one confusion BE-0355 works hardest to avoid. Said
+        # on the *request* rather than dropped from the reply, so the device does not build and ship
+        # a settled dump the host will discard, which would make unit 19 a per-gesture regression on
+        # exactly the targets unit 18 exists for.
         self._act = act_probe or (
-            lambda port, request: act(port, request, keepalive=self._keepalive)
+            lambda port, request: act(
+                port, request, keepalive=self._keepalive, want_tree=not native_z
+            )
         )
         self._server_apk = server_apk
         self._test_apk = test_apk
@@ -677,14 +688,7 @@ class ResidentServer:
             # an older server answers 404 for this path alone — and the driver's own degrade puts the
             # gesture back on the coordinate actuators. Killing a working read channel over a missing
             # actuation endpoint would trade a small regression for a large one.
-            outcome = self._act(port, request)
-            if self._native_z and outcome.read is not None:
-                # `/act`'s reply carries no `nativeZ` header, so a tree seeded from it would report
-                # every element's position as absent — indistinguishable from an app that opted no
-                # view in, which is the one confusion BE-0355 works hardest to avoid. A target that
-                # asked for the reading gives up unit 19's saved round trip and reads for itself.
-                return replace(outcome, read=None)
-            return outcome
+            return self._act(port, request)
 
         return ResidentChannel(fetch, clock, act_on_device)
 

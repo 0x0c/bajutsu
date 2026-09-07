@@ -824,8 +824,9 @@ class AdbDriver(CoordinateTreeDriver):
     def _read_source(self) -> ET.Element | None:
         """The hierarchy tree to parse: the resident channel when available, else `uiautomator dump`.
 
-        Both sources speak UI Automator's own XML, so the caller (`parse_hierarchy`) is unchanged
-        (BE-0245). A resident-channel failure degrades to the dump subprocess with a loud warning —
+        Both sources speak UI Automator's own XML, so the parse behind them is unchanged
+        (`elements_with_identities`, BE-0245). A resident-channel failure degrades to the dump
+        subprocess with a loud warning —
         never silently, so a slower fallback read stays visible — leaving the backend no worse off
         than the dump-every-read path it replaces. The failure latches: the channel is disabled after
         the first fault so the rest of the lease reads via dump without re-logging or re-paying the

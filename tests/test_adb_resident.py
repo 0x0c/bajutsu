@@ -870,36 +870,50 @@ def test_start_returned_fetch_carries_no_raw_body_when_narrowing_is_a_no_op(
     assert channel.fetch(None).narrowed is False
 
 
-def _channel_with_act(tmp_path: Path, *, native_z: bool) -> adb_resident.ResidentChannel:
-    server_apk, test_apk = _apks(tmp_path)
-    carried = HierarchyRead(_APP_ONLY, 98765.0, root=adb_resident.narrowed_root(_APP_ONLY)[0])
-    return adb_resident.ResidentServer(
-        "U",
-        run=lambda args: "41000\n" if "forward" in args and "--remove" not in args else "",
-        spawn=lambda argv: _FakeProc(),
-        fetch=lambda port, _since: HierarchyRead(_APP_ONLY),
-        act_probe=lambda port, request: ActOutcome(
-            acted=True, published_mark=98765.0, read=carried
-        ),
-        server_apk=server_apk,
-        test_apk=test_apk,
-        native_z=native_z,
-    ).start()
-
-
-def test_a_native_z_target_reads_for_itself_rather_than_taking_a_gestures_tree(
+def test_a_native_z_target_tells_the_device_not_to_build_a_tree_it_cannot_use(
     tmp_path: Path,
 ) -> None:
-    # BE-0407 unit 19's saved round trip is given up on a target that asked for `nativeZ` (unit 18).
-    # `/act`'s reply carries no `nativeZ` header, so a tree seeded from it would report every
-    # element's position as absent — indistinguishable from an app that opted no view in, which is
-    # the one confusion BE-0355 works hardest to avoid.
-    assert _channel_with_act(tmp_path, native_z=True).act(_act_request()).read is None
+    # BE-0407 unit 19's saved round trip is given up on a target that asked for `nativeZ` (unit 18):
+    # `/act`'s reply cannot carry that reading, so a tree seeded from it would report every element's
+    # position as absent — indistinguishable from an app that opted no view in. Said on the request,
+    # not by discarding the reply, or the device would spend a settled dump per gesture on a body the
+    # host throws away — a regression on exactly the targets unit 18 exists for.
+    port, server = _serve_once()
+    try:
+        adb_resident.act(port, _act_request(), want_tree=False)
+        assert "tree=0" in (_SourceHandler.last_act_path or "")
+        adb_resident.act(port, _act_request())
+        assert "tree=1" in (_SourceHandler.last_act_path or "")
+    finally:
+        server.shutdown()
 
 
-def test_a_target_that_did_not_ask_for_native_z_keeps_the_gestures_tree(tmp_path: Path) -> None:
-    # The counterpart: with no `nativeZ` reading to lose, the tree stands in for the next read.
-    assert _channel_with_act(tmp_path, native_z=False).act(_act_request()).read is not None
+def test_the_targets_native_z_choice_binds_to_the_leases_act_calls(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The lease binds the answer once, so a target that opted in never has to be asked again per
+    # gesture — and a target that did not keeps unit 19's saved round trip.
+    server_apk, test_apk = _apks(tmp_path)
+    asked: list[bool] = []
+    monkeypatch.setattr(
+        adb_resident,
+        "act",
+        lambda port, request, **kw: (
+            asked.append(bool(kw["want_tree"]))  # type: ignore[func-returns-value]
+            or ActOutcome(acted=True, published_mark=None)
+        ),
+    )
+    for native_z in (True, False):
+        adb_resident.ResidentServer(
+            "U",
+            run=lambda args: "41000\n" if "forward" in args and "--remove" not in args else "",
+            spawn=lambda argv: _FakeProc(),
+            fetch=lambda port, _since: HierarchyRead(_APP_ONLY),
+            server_apk=server_apk,
+            test_apk=test_apk,
+            native_z=native_z,
+        ).start().act(_act_request())
+    assert asked == [False, True]  # opted in asks for no tree; the plain target still wants one
 
 
 def test_fetch_fault_stops_the_server_before_it_propagates(tmp_path: Path) -> None:

@@ -189,7 +189,7 @@ class ResidentServerTest {
             while (left > 0) {
                 val read = reader.read(buffer, 0, minOf(left, buffer.size))
                 if (read < 0) break
-                left -= read
+                left -= String(buffer, 0, read).toByteArray(StandardCharsets.UTF_8).size
             }
         }
         return target
@@ -229,7 +229,7 @@ class ResidentServerTest {
      * rather than an index into the whole dump, so the two do not have to agree on the *position* a
      * node sits at in their respective trees — but they do still have to agree on which *windows* the
      * tree includes, because `count` is a count: `matchingBounds` below drops SystemUI's own windows
-     * the same way the host's `narrow_to_active_window` does, so a node whose bare identity happens to
+     * the same way the host's `narrowed_root` does, so a node whose bare identity happens to
      * collide with an equally bare SystemUI container is not counted here when the host never counted
      * it either.
      *
@@ -292,7 +292,7 @@ class ResidentServerTest {
         if (!landed) {
             return respond(out, INJECT_FAILED_STATUS, TEXT, "$kind rejected by the platform\n".bytes())
         }
-        respondLanded(out, device, readMark, injectedAt)
+        respondLanded(out, device, readMark, injectedAt, paramOf(target, "tree") != "0")
     }
 
     /**
@@ -307,15 +307,21 @@ class ResidentServerTest {
      *
      * The saving is a whole round trip: the host's own `_settle` opens with a read it can now skip,
      * measured by the investigation at 400-600ms on this backend.
+     *
+     * A host that says `tree=0` gets the bare `ok` instead, and the dump is never taken. That is the
+     * `nativeZ` target's case: the reply cannot carry that reading, so a tree it seeded would report
+     * every position as absent, and building one anyway would spend a settled dump per gesture on a
+     * body the host discards.
      */
     private fun respondLanded(
         out: OutputStream,
         device: UiDevice,
         readMark: ReadMark,
         injectedAt: Long,
+        wantTree: Boolean,
     ) {
         val published = publishHeader(readMark, injectedAt)
-        if (published.isEmpty()) return respond(out, "200 OK", TEXT, "ok\n".bytes())
+        if (published.isEmpty() || !wantTree) return respond(out, "200 OK", TEXT, "ok\n".bytes())
         // Snapshot before the settle, for the reason [respondSource] states at length: the mark must
         // never outrun the body it is stamped on, or a stale tree would certify as caught up.
         val mark = readMark.current()
@@ -417,7 +423,7 @@ class ResidentServerTest {
      * Bounds come from this dump, not from the host's, so the gesture lands where the element is now.
      * `dumpWindowHierarchy` emits one top-level `<node>` per window; a SystemUI window (and everything
      * under it) is skipped, the same filter the host applies before it counts matches
-     * (`narrow_to_active_window`) — without it, an unlabeled Compose node whose identity happens to
+     * (`narrowed_root`) — without it, an unlabeled Compose node whose identity happens to
      * collide with an equally bare SystemUI container (empty `resource-id`/`content-desc`/`text`, a
      * generic `class`) would count nodes here that the host's narrowed copy never saw, so `count`
      * never agrees and every such gesture answers stale on every attempt.
@@ -801,7 +807,7 @@ class ResidentServerTest {
 
         // SystemUI owns the status/navigation-bar windows that dumpWindowHierarchy's full tree carries
         // and the platform `uiautomator dump` (active window only) omits. The host drops these before
-        // it counts matches (`bajutsu/common/backend_cli/adb_resident.py` narrow_to_active_window, keyed off this same
+        // it counts matches (`bajutsu/common/backend_cli/adb_resident.py` narrowed_root, keyed off this same
         // package name) — matchingBounds below must drop them too, or a count taken over the full dump
         // disagrees with one taken over the host's narrowed copy.
         val SYSTEM_DECOR_PACKAGES = setOf("com.android.systemui")
