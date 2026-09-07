@@ -392,9 +392,13 @@
       // through to the precise per-mark seek below instead.
       var moved = false;
       function timeFromClientX(clientX){
-        var rect = seek.parentElement.getBoundingClientRect();
-        var inset = 7, usable = Math.max(1, rect.width - inset * 2);
-        var frac = Math.max(0, Math.min(1, (clientX - rect.left - inset) / usable));
+        // `marks`' own box *is* the inset track (report.css gives .vmarks/.vsegs/.vknobwrap the
+        // same left:7px;right:7px) — read that geometry instead of re-deriving it from the 7px
+        // literal + .vseekwrap, which only happens to match today because the input is its sole
+        // laid-out child.
+        var rect = marks.getBoundingClientRect();
+        var usable = Math.max(1, rect.width);
+        var frac = Math.max(0, Math.min(1, (clientX - rect.left) / usable));
         return frac * v.duration;
       }
       function applyTime(t){
@@ -403,7 +407,9 @@
         moveKnob();
       }
       marks.addEventListener('pointerdown', function(e){
-        var m = e.target.closest('.vmark'); if(!m || !isFinite(v.duration) || v.duration <= 0) return;
+        var m = e.target.closest('.vmark');
+        if(!m || e.button !== 0 || !isFinite(v.duration) || v.duration <= 0) return;
+        e.preventDefault();   // no text selection while dragging — focus is restored explicitly below
         // A mark sits on top of (and so intercepts clicks meant for) the native input beneath —
         // needed for it to be clickable/draggable at all — which also means that input never
         // gets focus this way, and arrow-key stepping after interacting with a mark would

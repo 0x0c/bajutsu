@@ -244,9 +244,16 @@ details.pre[open]>summary::before{transform:rotate(90deg)}
    both span (and center across) the full row height; between them, result/action/at share a
    compact first line, each a label beside its own value, then detail (unlabeled, its own line),
    then reason when the step has one (its label above, since it can run to more than one line).
-   Grid track widths are content-sized (`auto`/`1fr`), not hardcoded rems, so a long
-   `after`-table `#` cell ("success·12") or a long `detail` never overflows or clips the way a
-   fixed-width table column once did — the layout simply grows to fit. The template emits no
+   Grid track widths are content-sized (`auto`, not `minmax(0,auto)`), so a track never shrinks
+   below its cell's own min-content the way a fixed-width table column once did (which is what
+   let the `after`-table's `#` cell overlap the PASS/FAIL badge before this rewrite) — a row too
+   wide for its container overflows into `.rich-scroll`'s own `overflow:auto` instead, which
+   degrades to a horizontal scrollbar rather than reproducing that overlap on a narrow viewport.
+   `detail`'s own track is the one exception, `minmax(3rem,1fr)`: it is meant to flex, and the
+   `overflow-wrap` on `.adesc` below keeps its own content from forcing that minimum back up —
+   but the same track also carries `at` in row 1, whose two jump buttons cannot usefully render
+   in a 0-wide column (its shortest realistic content, "0.0s", is still ~2rem), so the floor is
+   3rem rather than 0. The template emits no
    `thead` at all: with the header text moved onto each cell as its own label (below), a separate
    header row would be a second, uncompared source of truth for the column list. Padding is
    zeroed on every cell (the generic `th,td` rule below would otherwise stack its own `.32rem` on
@@ -254,7 +261,7 @@ details.pre[open]>summary::before{transform:rotate(90deg)}
    instead — the single place that now controls it. */
 .sttbl,.sttbl>tbody{display:block}
 .sttbl>tbody>tr:not(.nxdetail):not(.alertrow):not(.actrow):not(.genrow){
-  display:grid;grid-template-columns:minmax(1.4rem,auto) minmax(0,auto) minmax(0,auto) 1fr minmax(0,auto);
+  display:grid;grid-template-columns:minmax(1.4rem,auto) auto auto minmax(3rem,1fr) auto;
   grid-template-rows:auto auto auto;column-gap:.7rem;row-gap:.2rem;align-items:center;
   border-bottom:1px solid var(--line);padding:.4rem .6rem}
 /* Only `display` here: unlike the grid rows above, these rows' own `td` keeps its padding and
@@ -283,7 +290,7 @@ table.sttbl>tbody>tr:not(.nxdetail):not(.alertrow):not(.actrow):not(.genrow)>td:
   text-transform:uppercase;letter-spacing:.04em}
 /* id: column 1, spanning (and centered across) all three rows. No label — position is one. */
 .sttbl>tbody>tr:not(.nxdetail):not(.alertrow):not(.actrow):not(.genrow)>td:nth-child(1){
-  grid-column:1;grid-row:1/4;align-self:center;color:var(--mut);font-weight:600}
+  grid-column:1;grid-row:1/4;align-self:center;color:var(--mut);font-weight:600;overflow-wrap:anywhere}
 /* result / action / at: row 1, one column each, all on the same line — label then value. */
 .sttbl>tbody>tr:not(.nxdetail):not(.alertrow):not(.actrow):not(.genrow)>td:nth-child(2){
   grid-column:2;grid-row:1;display:flex;align-items:center;gap:.35rem;flex-wrap:wrap}

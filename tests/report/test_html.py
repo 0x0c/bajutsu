@@ -199,9 +199,9 @@ def test_merged_steps_show_rich_definition() -> None:
     # while mislabeling both in the rendered grid.
     assert "class='sttbl'" in out
     assert (
-        '<td><span class="exst ok">PASS</span></td>'
-        '<td><span class="act act-tap">tap</span></td>'
-        "<td class='adesc'>" in out
+        '<td role="cell"><span class="exst ok">PASS</span></td>'
+        '<td role="cell"><span class="act act-tap">tap</span></td>'
+        "<td role=\"cell\" class='adesc'>" in out
     )
     # Selectors and string literals are tokenized (distinct from the action badges).
     assert '<span class="tk id">#counter.increment</span>' in out
