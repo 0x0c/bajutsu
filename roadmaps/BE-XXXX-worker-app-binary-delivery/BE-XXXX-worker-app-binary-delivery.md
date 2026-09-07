@@ -109,8 +109,26 @@ own. The runner's `reinstall` precondition already defaults to a clean install f
 the run started in.
 
 Paying a per-job copy of the tree would isolate the `runs/` writes as well. An app binary is too
-large to copy per job for that alone. Trees do nest per org, for the same reason the control plane's
-caches do: the tree is mutable, so one tenant's run evidence must not land in another's directory.
+large to copy per job for that alone. Trees do nest per org, for the reason the control plane's
+caches do. The tree is mutable, so one tenant's run evidence must not land in another's directory.
+
+The fetch runs on the run's own background thread, under the same heartbeat. It carries the job's
+largest transfer. A slower fetch than the lease timeout would otherwise trip a reclaim the worker
+never noticed. The worker would then run the job beside whichever worker won the re-lease.
+
+The worker hashes each part once it lands, against the sha256 the job named. A short body is not an
+error to `http.client`, so nothing else notices a truncated download. A truncated raw binary reaches
+no reader at all. Its corrupt tree then stays cached for every later job off that bundle.
+
+Phase, never exception type, tells the two kinds of trouble apart. A broken *download* — a reset
+connection, a `503`, a digest mismatch — posts nothing and leaves the lease to lapse. The queue's
+own reclaim-and-retry then gives the job another attempt. One network blip must not surface as a red
+run (directive 2).
+
+Everything after the download is deterministic over verified bytes. A break there is permanent, and
+the worker reports it. A `404`/`410` counts as permanent too, since the object is not there and no
+retry will conjure it. Keying off the type would misfile both directions: `HTTPError` and the
+`FileExistsError` a bad tree raises are both `OSError`.
 
 Two consequences follow that an operator should know about. Nothing evicts a tree, so a deployment
 that uploads a bundle per build accumulates one tree per build on the worker's disk — the same
@@ -139,6 +157,9 @@ The gate covers each seam without a network or a Simulator:
 - Two bundles whose binaries share a path but differ in bytes resolve to two workspaces.
 - A job with no bundle identity keeps the plain workspace, so a Git-sourced run keeps working.
 - A job that carries a bundle identity the lease could not sign fails, rather than running blind.
+- A reclaim arriving mid-fetch is seen, so the heartbeat provably covers the download.
+- A truncated part and a mismatched leg digest are caught, and leave no tree behind to reuse.
+- A `503` on the fetch is retried; a `404`, and a failure raised after the bytes land, are reported.
 - `_get_file` writes a body larger than one read to disk, so a bundle never buffers whole in memory.
 - An upload binding dispatches with `materialize_baselines` off, leaving the bundle's own in place.
 

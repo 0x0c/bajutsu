@@ -9,10 +9,12 @@ runs the job from its root. Pure packaging over a fake HTTP fetch: no network, n
 
 from __future__ import annotations
 
+import hashlib
 import io
 import zipfile
 from pathlib import Path
 from typing import Any
+from urllib.error import HTTPError
 
 import pytest
 
@@ -23,7 +25,15 @@ _CONFIG = (
     "targets:\n"
     "  demo: { bundleId: com.example.demo, scenarios: ./scenarios, appPath: ./build/Demo.app }\n"
 )
+# A stand-in bundle id for the cases that never complete a download — a refusal before the fetch,
+# a signing gap, a cached tree — plus a composed bind, whose id is a composition key rather than any
+# one file's digest. A test that *does* download a single-zip bundle uses `_zip_spec`, since the
+# fetch now proves each part against the digest the job named.
 _BUNDLE_ID = "a" * 64
+
+
+def _digest(blob: bytes) -> str:
+    return hashlib.sha256(blob).hexdigest()
 
 
 def _zip(entries: dict[str, bytes]) -> bytes:
@@ -51,6 +61,31 @@ def _bundle_zip(prefix: str = "") -> bytes:
     return _zip(_zip_entries(prefix))
 
 
+def _zip_spec(blob: bytes) -> dict[str, Any]:
+    """A single-zip bind's spec for *blob* — whose `id` is the zip's own sha256 (`Upload.sha256`)."""
+    return {"bundle": {"id": _digest(blob), "artifacts": None, "scenarios_filename": None}}
+
+
+def _triple_spec(
+    *,
+    config: bytes,
+    scenarios: bytes | None = None,
+    binary: bytes | None = None,
+    name: str | None = None,
+) -> dict[str, Any]:
+    """A composed triple's spec, naming each supplied leg by its own sha256.
+
+    The bundle `id` is the composition key rather than any file's digest, so it stays a fixed
+    placeholder here — only the per-leg shas are checked against the fetched bytes.
+    """
+    artifacts = {"config": _digest(config)}
+    if scenarios is not None:
+        artifacts["scenarios"] = _digest(scenarios)
+    if binary is not None:
+        artifacts["binary"] = _digest(binary)
+    return {"bundle": {"id": "a" * 64, "artifacts": artifacts, "scenarios_filename": name}}
+
+
 def _serve_urls(monkeypatch: pytest.MonkeyPatch, bodies: dict[str, bytes]) -> list[str]:
     """Stand in for the presigned GET fetch, returning *bodies* keyed by URL. Records the calls."""
     fetched: list[str] = []
@@ -71,10 +106,12 @@ def test_a_job_with_no_bundle_keeps_the_plain_workspace(tmp_path: Path) -> None:
 def test_a_single_zip_bundle_becomes_the_workspace(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    _serve_urls(monkeypatch, {"https://signed/bundle": _bundle_zip()})
-    spec = {"bundle": {"id": _BUNDLE_ID, "artifacts": None, "scenarios_filename": None}}
+    blob = _bundle_zip()
+    _serve_urls(monkeypatch, {"https://signed/bundle": blob})
 
-    work = worker_cli._bundle_workspace(tmp_path, spec, {"bundle": "https://signed/bundle"})
+    work = worker_cli._bundle_workspace(
+        tmp_path, _zip_spec(blob), {"bundle": "https://signed/bundle"}
+    )
 
     # The config's own directory is the workspace, so its relative appPath resolves from here.
     assert (work / "bajutsu.config.yaml").is_file()
@@ -84,10 +121,12 @@ def test_a_single_zip_bundle_becomes_the_workspace(
 def test_a_bundle_zip_wrapped_in_one_folder_resolves_to_that_folder(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    _serve_urls(monkeypatch, {"https://signed/bundle": _bundle_zip("myapp/")})
-    spec = {"bundle": {"id": _BUNDLE_ID, "artifacts": None, "scenarios_filename": None}}
+    blob = _bundle_zip("myapp/")
+    _serve_urls(monkeypatch, {"https://signed/bundle": blob})
 
-    work = worker_cli._bundle_workspace(tmp_path, spec, {"bundle": "https://signed/bundle"})
+    work = worker_cli._bundle_workspace(
+        tmp_path, _zip_spec(blob), {"bundle": "https://signed/bundle"}
+    )
 
     assert work.name == "myapp"
     assert (work / "build" / "Demo.app" / "Demo").is_file()
@@ -97,8 +136,9 @@ def test_a_second_job_off_the_same_bundle_fetches_nothing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     # The tree is keyed by the bundle id, so re-running the same bundle costs no download at all.
-    fetched = _serve_urls(monkeypatch, {"https://signed/bundle": _bundle_zip()})
-    spec = {"bundle": {"id": _BUNDLE_ID, "artifacts": None, "scenarios_filename": None}}
+    blob = _bundle_zip()
+    fetched = _serve_urls(monkeypatch, {"https://signed/bundle": blob})
+    spec = _zip_spec(blob)
 
     first = worker_cli._bundle_workspace(tmp_path, spec, {"bundle": "https://signed/bundle"})
     second = worker_cli._bundle_workspace(tmp_path, spec, {"bundle": "https://signed/bundle"})
@@ -118,12 +158,11 @@ def test_two_bundles_whose_binaries_share_a_name_get_separate_workspaces(
     old, new = _bundle_zip(), _zip({**_zip_entries(), "build/Demo.app/Demo": b"\x7fELF-v2"})
     _serve_urls(monkeypatch, {"https://signed/old": old, "https://signed/new": new})
 
-    def workspace(bundle_id: str, url: str) -> Path:
-        spec = {"bundle": {"id": bundle_id, "artifacts": None, "scenarios_filename": None}}
-        return worker_cli._bundle_workspace(tmp_path, spec, {"bundle": url})
+    def workspace(blob: bytes, url: str) -> Path:
+        return worker_cli._bundle_workspace(tmp_path, _zip_spec(blob), {"bundle": url})
 
-    first = workspace("a" * 64, "https://signed/old")
-    second = workspace("b" * 64, "https://signed/new")
+    first = workspace(old, "https://signed/old")
+    second = workspace(new, "https://signed/new")
 
     assert first != second
     assert (first / "build" / "Demo.app" / "Demo").read_bytes() == b"\x7fELF"
@@ -135,21 +174,17 @@ def test_a_composed_triple_is_reassembled_from_its_legs(
 ) -> None:
     # BE-0268 stores the three artifacts separately, so the worker composes rather than unzipping a
     # whole-tree copy — which is what keeps one binary from being stored once per composition.
+    scenarios = _zip({"scenarios/smoke.yaml": b"- name: a\n  steps: []\n"})
+    binary = _zip({"Demo": b"\x7fELF"})
     fetched = _serve_urls(
         monkeypatch,
         {
             "https://signed/config": _CONFIG.encode(),
-            "https://signed/scenarios": _zip({"scenarios/smoke.yaml": b"- name: a\n  steps: []\n"}),
-            "https://signed/binary": _zip({"Demo": b"\x7fELF"}),
+            "https://signed/scenarios": scenarios,
+            "https://signed/binary": binary,
         },
     )
-    spec = {
-        "bundle": {
-            "id": _BUNDLE_ID,
-            "artifacts": {"config": "b" * 64, "scenarios": "c" * 64, "binary": "d" * 64},
-            "scenarios_filename": None,
-        }
-    }
+    spec = _triple_spec(config=_CONFIG.encode(), scenarios=scenarios, binary=binary)
 
     work = worker_cli._bundle_workspace(
         tmp_path,
@@ -205,7 +240,7 @@ def test_a_half_fetched_bundle_leaves_no_reusable_tree(
 
     monkeypatch.setattr(worker_cli, "_get_file", fake_get)
     spec = {"bundle": {"id": _BUNDLE_ID, "artifacts": None, "scenarios_filename": None}}
-    with pytest.raises(OSError, match="connection reset"):
+    with pytest.raises(worker_cli._TransientFetch, match="connection reset"):
         worker_cli._bundle_workspace(tmp_path, spec, {"bundle": "https://signed/bundle"})
     assert not (tmp_path / worker_cli._BUNDLE_CACHE_DIR / "default" / _BUNDLE_ID).exists()
 
@@ -258,10 +293,10 @@ def test_a_bundle_zip_with_no_config_is_refused(
 ) -> None:
     # `materialize_bundle`'s validation rejects this first, so the message names the missing config
     # either way — what matters is that no workspace is handed back for a run to start from.
-    _serve_urls(monkeypatch, {"https://signed/bundle": _zip({"readme.txt": b"nothing here"})})
-    spec = {"bundle": {"id": _BUNDLE_ID, "artifacts": None, "scenarios_filename": None}}
+    blob = _zip({"readme.txt": b"nothing here"})
+    _serve_urls(monkeypatch, {"https://signed/bundle": blob})
     with pytest.raises(ValueError, match=r"bajutsu\.config\.yaml"):
-        worker_cli._bundle_workspace(tmp_path, spec, {"bundle": "https://signed/bundle"})
+        worker_cli._bundle_workspace(tmp_path, _zip_spec(blob), {"bundle": "https://signed/bundle"})
 
 
 def test_a_single_zip_bundle_signed_without_its_zip_is_refused(
@@ -276,14 +311,9 @@ def test_a_single_zip_bundle_signed_without_its_zip_is_refused(
 def test_a_composed_bundle_signed_without_its_config_leg_is_refused(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    _serve_urls(monkeypatch, {"https://signed/binary": _zip({"Demo": b"\x7fELF"})})
-    spec = {
-        "bundle": {
-            "id": _BUNDLE_ID,
-            "artifacts": {"config": "b" * 64, "binary": "d" * 64},
-            "scenarios_filename": None,
-        }
-    }
+    binary = _zip({"Demo": b"\x7fELF"})
+    _serve_urls(monkeypatch, {"https://signed/binary": binary})
+    spec = _triple_spec(config=_CONFIG.encode(), binary=binary)
     with pytest.raises(RuntimeError, match="no config artifact"):
         worker_cli._bundle_workspace(tmp_path, spec, {"binary": "https://signed/binary"})
 
@@ -305,21 +335,19 @@ def test_a_single_yaml_scenarios_leg_lands_under_the_name_the_bind_composed_with
     name the bind used — not with a display default. `Upload.worker_ref` carries `scenarios_name`
     for exactly this reason: composing against a picker-facing default would build a different tree
     under the same composition id."""
+    scenarios = b"- name: login\n  steps: []\n"
+    binary = _zip({"Demo": b"\x7fELF"})
     _serve_urls(
         monkeypatch,
         {
             "https://signed/config": _CONFIG.encode(),
-            "https://signed/scenarios": b"- name: login\n  steps: []\n",
-            "https://signed/binary": _zip({"Demo": b"\x7fELF"}),
+            "https://signed/scenarios": scenarios,
+            "https://signed/binary": binary,
         },
     )
-    spec = {
-        "bundle": {
-            "id": _BUNDLE_ID,
-            "artifacts": {"config": "b" * 64, "scenarios": "c" * 64, "binary": "d" * 64},
-            "scenarios_filename": "login.yml",
-        }
-    }
+    spec = _triple_spec(
+        config=_CONFIG.encode(), scenarios=scenarios, binary=binary, name="login.yml"
+    )
 
     work = worker_cli._bundle_workspace(
         tmp_path,
@@ -340,21 +368,17 @@ def test_a_reactivated_composition_composes_with_no_scenarios_name(
 ) -> None:
     # The reactivation path carries no name, so the bind composed under the default. The worker has
     # to reach the same default — a synthesized display name here would write `scenarios.yaml`.
+    scenarios = b"- name: a\n  steps: []\n"
+    binary = _zip({"Demo": b"\x7fELF"})
     _serve_urls(
         monkeypatch,
         {
             "https://signed/config": _CONFIG.encode(),
-            "https://signed/scenarios": b"- name: a\n  steps: []\n",
-            "https://signed/binary": _zip({"Demo": b"\x7fELF"}),
+            "https://signed/scenarios": scenarios,
+            "https://signed/binary": binary,
         },
     )
-    spec = {
-        "bundle": {
-            "id": _BUNDLE_ID,
-            "artifacts": {"config": "b" * 64, "scenarios": "c" * 64, "binary": "d" * 64},
-            "scenarios_filename": None,
-        }
-    }
+    spec = _triple_spec(config=_CONFIG.encode(), scenarios=scenarios, binary=binary)
 
     work = worker_cli._bundle_workspace(
         tmp_path,
@@ -374,13 +398,11 @@ def test_the_bundle_cache_is_scoped_per_org(
 ) -> None:
     # The tree is mutable — each run writes its `runs/` inside it — so two tenants holding the same
     # bundle must not share one directory, mirroring the control plane's own org-scoped caches.
-    _serve_urls(monkeypatch, {"https://signed/bundle": _bundle_zip()})
+    blob = _bundle_zip()
+    _serve_urls(monkeypatch, {"https://signed/bundle": blob})
 
     def workspace(org: str) -> Path:
-        spec = {
-            "org": org,
-            "bundle": {"id": _BUNDLE_ID, "artifacts": None, "scenarios_filename": None},
-        }
+        spec = {"org": org, **_zip_spec(blob)}
         return worker_cli._bundle_workspace(tmp_path, spec, {"bundle": "https://signed/bundle"})
 
     assert workspace("acme") != workspace("globex")
@@ -392,3 +414,89 @@ def test_an_org_that_is_not_a_safe_path_segment_falls_back(tmp_path: Path) -> No
     assert worker_cli._safe_org("..") == "default"
     assert worker_cli._safe_org(None) == "default"
     assert worker_cli._safe_org("acme") == "acme"
+
+
+def test_a_truncated_download_is_caught_and_left_to_retry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A short body is not an error to `http.client`, so only the digest check can see it.
+
+    Left unchecked, a truncated `.app`/`.ipa` leg is worse than a failed run: nothing downstream
+    reads its bytes, so the corrupt tree gets committed to the cache and every later job off that
+    bundle reuses it. Raising `_TransientFetch` instead keeps the cache clean and lets the job be
+    re-leased rather than reported as a permanent failure.
+    """
+    whole = _bundle_zip()
+    _serve_urls(monkeypatch, {"https://signed/bundle": whole[: len(whole) // 2]})
+    spec = {
+        "bundle": {"id": _digest(whole), "artifacts": None, "scenarios_filename": None},
+    }
+
+    with pytest.raises(worker_cli._TransientFetch, match="did not match its digest"):
+        worker_cli._bundle_workspace(tmp_path, spec, {"bundle": "https://signed/bundle"})
+
+    # Nothing cached, so the next attempt re-downloads instead of reusing a half-written tree.
+    assert not (tmp_path / worker_cli._BUNDLE_CACHE_DIR / "default" / _digest(whole)).exists()
+
+
+def test_a_composed_legs_digest_is_verified_too(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A composed bind's own id is a derived composition key, so each *leg* carries the digest that
+    # can be checked — the binary leg above all, since a raw `.ipa`/`.apk` is never parsed.
+    binary = _zip({"Demo": b"\x7fELF"})
+    _serve_urls(
+        monkeypatch,
+        {
+            "https://signed/config": _CONFIG.encode(),
+            "https://signed/binary": b"truncated",
+        },
+    )
+    spec = {
+        "bundle": {
+            "id": _BUNDLE_ID,
+            "artifacts": {"config": _digest(_CONFIG.encode()), "binary": _digest(binary)},
+            "scenarios_filename": None,
+        }
+    }
+
+    with pytest.raises(worker_cli._TransientFetch, match="did not match its digest"):
+        worker_cli._bundle_workspace(
+            tmp_path,
+            spec,
+            {"config": "https://signed/config", "binary": "https://signed/binary"},
+        )
+
+
+def test_a_gone_object_is_permanent_not_transient(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A 404 means the object is not there and never will be, so it must not be retried.
+
+    `HTTPError` subclasses `URLError` subclasses `OSError`, so a type-keyed transient catch would
+    swallow every HTTP status — turning an immediate, named failure into three lease timeouts and a
+    `lease expired after 3 attempts` verdict several minutes later.
+    """
+
+    def gone(url: str, dest: Path, *, timeout: float | None = None) -> None:
+        raise HTTPError(url, 404, "Not Found", {}, None)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(worker_cli, "_get_file", gone)
+    spec = {"bundle": {"id": _BUNDLE_ID, "artifacts": None, "scenarios_filename": None}}
+
+    with pytest.raises(HTTPError):
+        worker_cli._bundle_workspace(tmp_path, spec, {"bundle": "https://signed/bundle"})
+
+
+def test_a_server_error_on_the_fetch_is_transient(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A 503 from the object store is the retryable kind, unlike the 404 above.
+    def unavailable(url: str, dest: Path, *, timeout: float | None = None) -> None:
+        raise HTTPError(url, 503, "Service Unavailable", {}, None)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(worker_cli, "_get_file", unavailable)
+    spec = {"bundle": {"id": _BUNDLE_ID, "artifacts": None, "scenarios_filename": None}}
+
+    with pytest.raises(worker_cli._TransientFetch, match="HTTP 503"):
+        worker_cli._bundle_workspace(tmp_path, spec, {"bundle": "https://signed/bundle"})

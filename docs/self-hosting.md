@@ -544,7 +544,7 @@ A run off an **uploaded bundle** travels the same way. The control plane binds a
 composed `(config, scenarios, binary)` triple. It keeps that tree on its own disk, out of any
 worker's reach. The lease carries one signed read URL per stored object the bundle holds.
 
-The worker rebuilds the tree under `.bundles/<id>/` in its working directory. It runs the job from
+The worker rebuilds the tree under `.bundles/<org>/<id>/` in its working directory. It runs the job from
 the tree's root. The config's relative `appPath`, `scenarios`, and `baselines` then resolve as
 written. The bundle's content digest keys that tree, so a second run off it downloads nothing. The
 digest also keeps two builds apart. Two bundles whose binaries share a path but differ in bytes

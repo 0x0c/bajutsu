@@ -10,6 +10,7 @@ the control plane signs, so the worker needs only an HTTP client.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -64,6 +65,27 @@ _BUNDLE_CACHE_DIR = ".bundles"
 # one object per artifact kind (a composed triple, BE-0268). A name outside this set is a broken or
 # hostile lease response, never a path segment to fetch into.
 _BUNDLE_PART_NAMES = frozenset({"bundle", *ARTIFACT_KINDS})
+
+# Read the fetched bytes back in blocks to hash them, so verifying a part never loads an app binary
+# into memory (the same reason `_get_file` streams to disk in the first place).
+_HASH_CHUNK = 1024 * 1024
+
+# HTTP statuses on a presigned GET that mean the object is not there and never will be, so no retry
+# can help. 403 is deliberately absent: S3 answers an expired signature with 403 too, so that one is
+# genuinely ambiguous and is better retried than reported.
+_GONE_STATUSES = frozenset({404, 410})
+
+
+class _TransientFetch(Exception):
+    """A bundle part could not be *downloaded*, for a reason another attempt may well get past.
+
+    Raised only around the transfer itself (`_get_file` plus the digest check that proves it
+    arrived whole), never around building the tree from bytes already on disk. That boundary is the
+    classification: a download is at the mercy of the network, while extracting, placing, and
+    validating are deterministic over verified bytes, so a failure there is permanent and belongs in
+    a reported result. Keying off the exception *type* instead would misfile both directions — an
+    `HTTPError` is an `OSError`, and so is the `FileExistsError` a bad tree raises.
+    """
 
 
 def _post_json(
@@ -205,15 +227,6 @@ def worker(
         spec = body["spec"]
         typer.echo(f"  leased job {job_id}")
 
-        # A job dispatched off an uploaded bundle runs from that bundle's own tree, not the worker's
-        # bare working directory, so every relative path its config names resolves. Resolved before
-        # the run and reused after it, so the console log and the evidence upload read the same
-        # workspace the run wrote into.
-        job_work, failure = _workspace_or_failure(work, spec, body.get("bundle_urls"))
-        if failure is not None:
-            _post_result(url, job_id, wid, failure, auth_token)
-            continue
-
         # The worker's object I/O is brokered by presigned URLs (BE-0160): the lease already carries
         # signed GET URLs for this run's baselines, and this io asks the control plane for signed PUT
         # URLs when uploading the run tree / authored scenario — so the worker holds no credentials.
@@ -225,10 +238,11 @@ def worker(
             baseline_urls=body.get("baseline_urls"),
         )
         bus = InMemoryLogBus()
-        result, abandoned = _run_with_heartbeat(
+        result, abandoned, job_work = _run_with_heartbeat(
             spec,
             job_id=job_id,
-            work=job_work,
+            work=work,
+            bundle_urls=body.get("bundle_urls"),
             bus=bus,
             url=url,
             wid=wid,
@@ -240,6 +254,16 @@ def worker(
             # The control plane reclaimed and likely re-leased this job to another worker; posting a
             # result would race that worker, so drop it (the re-run is the source of truth).
             typer.echo(f"  lease lost for job {job_id}; abandoning")
+            continue
+        if result is None:
+            # The bundle fetch hit a transient failure (a reset connection, an expired signature) —
+            # logged already, inside `_run_with_heartbeat`. Posting a failure here would turn one
+            # network blip into a red run for a scenario that never executed; leaving the lease to
+            # lapse instead gives the queue's own reclaim-and-retry a chance to hand the job to
+            # another attempt (directive 2: keep worker-side flakiness out of the verdict).
+            typer.echo(
+                f"  bundle fetch failed transiently for job {job_id}; leaving it to be re-leased"
+            )
             continue
 
         run_id = result.get("runId")
@@ -271,29 +295,52 @@ def _run_with_heartbeat(
     *,
     job_id: str,
     work: Path,
+    bundle_urls: Any,
     bus: InMemoryLogBus,
     url: str,
     wid: str,
     auth_token: str | None,
     heartbeat_interval: float,
     io: WorkerIO | None = None,
-) -> tuple[dict[str, Any], bool]:
+) -> tuple[dict[str, Any] | None, bool, Path]:
     """Run the job on a background thread while heart-beating its lease from this one.
 
-    Object I/O (baseline download, run-tree/scenario upload) runs on that thread through *io*, so the
-    heartbeat keeps the lease alive while a large artifact uploads. Returns ``(result, abandoned)``;
-    *abandoned* is True when the control plane reclaimed the lease mid-run (HTTP 409), meaning another
-    worker now owns the job and this result should be dropped.
+    The bundle fetch (`_workspace_or_failure`) runs on this same thread, ahead of `execute_job_spec`,
+    so the heartbeat covers it too. It is the single largest transfer in the whole job — an app
+    binary, up to the 1 GiB on-the-wire upload cap — and it used to run *before* this function
+    was even called, with nothing renewing the lease while it downloaded; a fetch slower than the
+    lease timeout tripped a reclaim this worker never noticed, and ran the job anyway alongside
+    whichever worker won the re-lease. Object I/O (baseline download, run-tree/scenario upload) runs
+    here too through *io*, for the same reason.
+
+    Returns ``(result, abandoned, job_work)``. *abandoned* is True when the control plane reclaimed
+    the lease mid-run (HTTP 409): another worker now owns the job, and *result* should be dropped.
+    A `None` *result* means the bundle fetch failed transiently (already logged): nothing to post,
+    and the lease is left to lapse rather than reported as a failed job (directive 2 — a network
+    blip must not surface as a red run for a scenario that never executed). *job_work* is *work*
+    itself for a job that ships no bundle, or meaningless alongside a `None` result.
     """
-    holder: dict[str, Any] = {}
+    holder: dict[str, Any] = {"work": work}
 
     def _run() -> None:
+        try:
+            job_work, failure = _workspace_or_failure(work, spec, bundle_urls)
+        except _TransientFetch as e:
+            _logger.warning(
+                "bundle fetch failed for job %s; leaving the lease to lapse: %s", job_id, e
+            )
+            holder["transient"] = True
+            return
+        holder["work"] = job_work
+        if failure is not None:
+            holder["result"] = failure
+            return
         try:
             job = execute_job_spec(
                 spec,
                 popen=subprocess.Popen,
                 simctl=simctl.real_run,
-                cwd=work,
+                cwd=job_work,
                 bus=bus,
                 io=io,
             )
@@ -316,6 +363,10 @@ def _run_with_heartbeat(
                 f"{url}/api/worker/heartbeat",
                 {"worker_id": wid, "job_id": job_id},
                 token=auth_token,
+                # Bounded by one interval: without a timeout a stalled connection blocks this loop
+                # indefinitely and the lease lapses anyway — the failure this function exists to
+                # prevent, arriving through the renewal path itself.
+                timeout=heartbeat_interval,
             )
         except (URLError, OSError) as e:
             _logger.warning("heartbeat failed for job %s: %s", job_id, e)
@@ -325,7 +376,10 @@ def _run_with_heartbeat(
             runner.join()  # wait it out so this worker never runs two jobs at once
             break
 
-    return holder.get("result", {"ok": False, "error": "worker produced no result"}), abandoned
+    if holder.get("transient"):
+        return None, abandoned, holder["work"]
+    result = holder.get("result", {"ok": False, "error": "worker produced no result"})
+    return result, abandoned, holder["work"]
 
 
 def _write_console_log(work: Path, run_id: str, bus: InMemoryLogBus, job_id: str) -> None:
@@ -474,13 +528,22 @@ def _workspace_or_failure(
 ) -> tuple[Path, dict[str, Any] | None]:
     """The workspace to run this job from, or the failed result to post when none can be prepared.
 
-    A job whose bundle cannot be fetched is reported as failed rather than left to crash the poll
-    loop: the control plane would otherwise keep re-leasing a job this worker can never start, and
-    the user would wait on a run that never returns a verdict. The returned path is meaningless when
-    a failure comes back with it.
+    A job whose bundle cannot be fetched for a reason no worker can ever get past — an invalid
+    bundle id, a lease that signed no url, a bundle that fails validation — is reported as failed
+    rather than left to crash the poll loop: the control plane would otherwise keep re-leasing a job
+    this worker can never start, and the user would wait on a run that never returns a verdict. The
+    returned path is meaningless when a failure comes back with it.
+
+    Raises `_TransientFetch` instead when the *download* failed — a reset connection, a stalled
+    socket, a body that arrived truncated: another worker, or this one a minute later, would likely
+    succeed, so the caller lets the lease lapse rather than turning one network blip into a
+    permanent failed job. Everything after the download is deterministic over verified bytes, so it
+    keeps the permanent classification.
     """
     try:
         return _bundle_workspace(work, spec, bundle_urls), None
+    except _TransientFetch:
+        raise
     except Exception as e:
         _logger.exception("could not materialize the job's bundle")
         return work, {"ok": False, "error": f"bundle unavailable: {e}"}
@@ -530,6 +593,53 @@ def _bundle_workspace(work: Path, spec: dict[str, Any], bundle_urls: Any) -> Pat
     return config.parent
 
 
+def _expected_digest(bundle: dict[str, Any], name: str) -> str | None:
+    """The sha256 the fetched *name* part must hash to, or None when the job names none for it.
+
+    Both bind kinds hand over a real content digest: a single-zip bind's `id` *is* its zip's sha256,
+    and a composed triple names one per leg. A composed bind's own `id` is a derived composition key
+    with no single file behind it, so it is deliberately not used as a part digest here.
+    """
+    artifacts = bundle.get("artifacts")
+    if artifacts is None:
+        return bundle["id"] if name == "bundle" else None
+    return artifacts.get(name) if isinstance(artifacts, dict) else None
+
+
+def _fetch_part(url: str, dest: Path, expected_sha256: str | None) -> None:
+    """Download one bundle part and prove it arrived whole, or raise `_TransientFetch`.
+
+    The digest check is what makes a truncated download visible at all: a short body is *not* an
+    error to `http.client`, which drops `IncompleteRead` on a `Content-Length` mismatch rather than
+    raising, so `_get_file` returns happily with a partial file. Left unchecked, a truncated zip
+    surfaces as a permanent "invalid bundle" — the network blip landing in the verdict by the other
+    door — and a truncated raw binary (an `.ipa`, an `.apk`) is worse still: nothing downstream reads
+    its bytes, so the corrupt tree is committed to the cache and every later job off that bundle
+    reuses it without re-downloading.
+
+    A `404`/`410` is re-raised untouched, so the caller reports it: the object is not there and no
+    retry will conjure it.
+    """
+    try:
+        _get_file(url, dest, timeout=_UPLOAD_HTTP_TIMEOUT)
+    except HTTPError as e:
+        if e.code in _GONE_STATUSES:
+            raise
+        raise _TransientFetch(f"HTTP {e.code} fetching {dest.name}") from e
+    except (URLError, OSError) as e:
+        raise _TransientFetch(f"could not fetch {dest.name}: {e}") from e
+    if expected_sha256 is None:
+        return
+    digest = hashlib.sha256()
+    with dest.open("rb") as f:
+        while chunk := f.read(_HASH_CHUNK):
+            digest.update(chunk)
+    if digest.hexdigest() != expected_sha256:
+        raise _TransientFetch(
+            f"{dest.name} did not match its digest (truncated or corrupted in transit)"
+        )
+
+
 def _fetch_bundle(
     cache: Path, bundle_id: str, bundle: dict[str, Any], urls: dict[str, Any]
 ) -> Path:
@@ -553,7 +663,7 @@ def _fetch_bundle(
             if name not in _BUNDLE_PART_NAMES or not isinstance(url, str):
                 raise RuntimeError(f"unexpected bundle part {name!r} in the lease response")
             parts[name] = Path(raw) / name
-            _get_file(url, parts[name], timeout=_UPLOAD_HTTP_TIMEOUT)
+            _fetch_part(url, parts[name], _expected_digest(bundle, name))
         if bundle.get("artifacts") is None:
             if "bundle" not in parts:
                 raise RuntimeError(f"bundle {bundle_id} was signed with no zip to fetch")
