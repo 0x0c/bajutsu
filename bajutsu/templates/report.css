@@ -255,8 +255,13 @@ details.pre[open]>summary::before{transform:rotate(90deg)}
 /* An extra full-width row beneath the check it explains, shown only when the row has a reason —
    keeps the table at four columns instead of a fifth that is empty on nearly every row. */
 .extbl tr:has(+ .exreasonrow) td{border-bottom:0}
+/* Inline, not flex: a flex display on a colspan cell feeds the table's own column-width
+   algorithm a different intrinsic-width signal than its sibling rows, which visibly squeezed
+   the target column in the row above whenever a long reason sat beside a short label. The
+   label and `.exreason` span are both inline by nature, so a plain margin sits them side by
+   side without touching the cell's own display. */
 .exreasonrow td{padding-top:0}
-.exreasonrow td::before{content:"reason";display:block;margin-bottom:.12rem;color:var(--mut);
+.exreasonrow td::before{content:"reason";margin-right:.4rem;color:var(--mut);
  font:600 .64rem -apple-system,system-ui,sans-serif;text-transform:uppercase;letter-spacing:.04em}
 /* Every step's row is a small grid, not a table row, at every viewport width — three columns: a
    leading `id`, the result/action/at/detail/reason stack, and a trailing `view`. `id` and `view`
@@ -285,7 +290,7 @@ details.pre[open]>summary::before{transform:rotate(90deg)}
 .sttbl,.sttbl>tbody{display:block}
 .sttbl>tbody>tr:not(.nxdetail):not(.alertrow):not(.actrow):not(.genrow){
   display:grid;grid-template-columns:minmax(1.4rem,auto) auto auto minmax(3rem,1fr) auto;
-  grid-template-rows:auto auto auto;column-gap:.7rem;row-gap:.2rem;align-items:center;
+  grid-template-rows:auto auto auto;column-gap:.7rem;row-gap:0;align-items:center;
   border-bottom:1px solid var(--line);padding:.4rem .6rem}
 /* Only `display` here: unlike the grid rows above, these rows' own `td` keeps its padding and
    its `th,td` bottom border (the `>td` reset below excludes them) — a border on the row box
@@ -325,8 +330,13 @@ table.sttbl>tbody>tr:not(.nxdetail):not(.alertrow):not(.actrow):not(.genrow)>td:
   grid-column:4;grid-row:1;display:flex;align-items:center;gap:.35rem;flex-wrap:wrap}
 .sttbl>tbody>tr:not(.nxdetail):not(.alertrow):not(.actrow):not(.genrow)>td:nth-child(5)::before{content:"at"}
 /* detail: row 2, spanning the result/action/at columns (not `id`, not `view`) — unlabeled, and
-   in normal block flow (see the ::before exclusion above). */
-.sttbl>tbody>tr:not(.nxdetail):not(.alertrow):not(.actrow):not(.genrow)>td:nth-child(4){grid-column:2/5;grid-row:2}
+   in normal block flow (see the ::before exclusion above). The gap above it is its own
+   `margin-top`, not the row's `row-gap` (zeroed): a `margin` on a `display:none` cell — which
+   is what an empty detail is, per the `:empty` rule above — collapses to nothing, while a
+   `row-gap` would still open a blank track between `result`/`action`/`at` and nothing beneath
+   it, pushing the centered `id` number below the visible content's true center. */
+.sttbl>tbody>tr:not(.nxdetail):not(.alertrow):not(.actrow):not(.genrow)>td:nth-child(4){
+  grid-column:2/5;grid-row:2;margin-top:.2rem}
 /* view: its own trailing column — spanning (and centered across, like `id`'s leading column)
    all three rows, not just row 2 — three columns overall: id, the result/action/at + detail +
    reason stack, and view. Its own label sits to the left of it, the pair centered so a
@@ -337,7 +347,8 @@ table.sttbl>tbody>tr:not(.nxdetail):not(.alertrow):not(.actrow):not(.genrow)>td:
 /* reason: row 3, same span as detail — omitted (see `:empty` above) whenever the step has none.
    Label above, not beside: unlike result/action/at/view, its value is free text that can run to
    more than one line, where a leading label would read as part of the sentence. */
-.sttbl>tbody>tr:not(.nxdetail):not(.alertrow):not(.actrow):not(.genrow)>td:nth-child(7){grid-column:2/5;grid-row:3}
+.sttbl>tbody>tr:not(.nxdetail):not(.alertrow):not(.actrow):not(.genrow)>td:nth-child(7){
+  grid-column:2/5;grid-row:3;margin-top:.2rem}
 .sttbl>tbody>tr:not(.nxdetail):not(.alertrow):not(.actrow):not(.genrow)>td:nth-child(7)::before{
   content:"reason";display:block;margin-bottom:.12rem}
 /* Jump targets for a step's own start/end instant (its `before`/`after` moment, distinct from
