@@ -192,27 +192,30 @@ class _References(cst.CSTVisitor):
         return False
 
     def visit_Subscript(self, node: cst.Subscript) -> bool:
-        # A quoted forward reference is not always inside an `Annotation`: a type alias writes it
-        # straight into a subscript, as `Callable[[Driver], "AlertEvent | None"]` does. Read those
-        # in annotation context, so the name is imported rather than left undefined.
+        """Read a subscript's elements where the subscript itself is evaluated.
+
+        Only a quoted forward reference is annotation context. A type alias writes one straight
+        into a subscript, as `Callable[[Driver], "AlertEvent | None"]` does, so those are read the
+        way an annotation is. Treating the *whole* subscript as annotation context instead would
+        class `table[Beta.KEY]`'s `Beta` as annotation-only, which the cycle breaker is then free to
+        defer under `TYPE_CHECKING` — leaving the name undefined at the moment it is used.
+        """
         node.value.visit(self)
         # `Literal["Beta"]`'s string is a value, not a forward reference. Parsing it as one imports
         # a sibling the file never uses, and two such strings can close a cycle out of nothing.
         literal = _subscript_head(node) == "Literal"
-        self._annotation_depth += 1
         for element in node.slice:
-            quoted = (
-                not literal
-                and isinstance(element.slice, cst.Index)
-                and isinstance(element.slice.value, cst.SimpleString)
-            )
-            if quoted:
-                assert isinstance(element.slice, cst.Index)
-                assert isinstance(element.slice.value, cst.SimpleString)
-                self._visit_quoted(element.slice.value)
-            elif not literal:
+            index = element.slice
+            if isinstance(index, cst.Index) and isinstance(index.value, cst.SimpleString):
+                if literal:
+                    continue
+                self._annotation_depth += 1
+                self._visit_quoted(index.value)
+                self._annotation_depth -= 1
+            else:
+                # `Literal[Colour.RED]` still reads `Colour`, so a non-string element is never
+                # skipped, whatever the subscript's head.
                 element.visit(self)
-        self._annotation_depth -= 1
         return False
 
     def visit_Annotation(self, node: cst.Annotation) -> bool:
@@ -353,10 +356,24 @@ def _filter_import(
 
 
 def _is_main_guard(node: cst.BaseStatement) -> bool:
-    """Whether this is the `if __name__ == "__main__":` entry point a package needs to keep."""
-    return isinstance(node, cst.If) and '__name__ == "__main__"' in cst.Module(
-        body=[]
-    ).code_for_node(node.test)
+    """Whether this is the `if __name__ == "__main__":` entry point a package needs to keep.
+
+    Matched by shape, not by text. A substring test also accepts `if not (__name__ == "__main__"):`,
+    whose body runs on every import — moved into `__main__.py` its condition is never true again,
+    so the statement stops running with nothing raised.
+    """
+    if not isinstance(node, cst.If) or not isinstance(node.test, cst.Comparison):
+        return False
+    test = node.test
+    if not isinstance(test.left, cst.Name) or test.left.value != "__name__":
+        return False
+    if len(test.comparisons) != 1:
+        return False
+    target = test.comparisons[0]
+    return isinstance(target.operator, cst.Equal) and (
+        isinstance(target.comparator, cst.SimpleString)
+        and target.comparator.evaluated_value == "__main__"
+    )
 
 
 def _is_type_checking_block(node: cst.BaseStatement) -> bool:
@@ -441,9 +458,11 @@ def _assign_targets(statement: cst.SimpleStatementLine) -> tuple[str, ...]:
 def _literal_string_list(statement: cst.SimpleStatementLine) -> list[str] | None:
     """Read an `__all__ = [...]` of plain string literals, or None if it is computed."""
     small = statement.body[0]
-    if not isinstance(small, cst.Assign):
+    if not isinstance(small, (cst.Assign, cst.AnnAssign)):
         return None
     value = small.value
+    if value is None:
+        return None
     if not isinstance(value, (cst.List, cst.Tuple)):
         return None
     names: list[str] = []
@@ -572,8 +591,8 @@ def _assign_owners(parsed: _Parsed) -> tuple[dict[int, str], list[str], set[str]
         if stem != FUNCTIONS_MODULE and reads.rebound:
             names = ", ".join(sorted(reads.rebound))
             raise SplitError(
-                f"{stem}.py rebinds {names} with `global`, which cannot reach a name rule 2 sends "
-                f"to {FUNCTIONS_MODULE}.py; move the rebinding to a top-level function first"
+                f"{stem}.py rebinds {names} with `global`, which cannot reach a name the split "
+                "moves to another file; move the rebinding to a top-level function first"
             )
         rebound |= reads.rebound
     placement: dict[int, str] = {}

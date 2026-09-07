@@ -17,7 +17,14 @@ from pathlib import Path
 
 import pytest
 
-from scripts.split_modules import SplitError, SplitPlan, main, plan_split, snake_case
+from scripts.split_modules import (
+    SplitError,
+    SplitPlan,
+    apply_split,
+    main,
+    plan_split,
+    snake_case,
+)
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -1675,3 +1682,124 @@ def test_an_annotation_is_never_satisfied_by_a_local_import() -> None:
         """
     )
     assert "json" in _header_imports(plan.files["alpha.py"])
+
+
+def test_a_runtime_subscript_is_not_read_as_annotation_only() -> None:
+    # `table[Beta.KEY]` reads `Beta` where the expression runs. Classing it annotation-only lets
+    # the cycle breaker defer the import, and the name is then undefined at the moment it is used —
+    # past the compile check, past ruff, and past an `import` of the package.
+    with pytest.raises(SplitError, match="no annotation-only edge to defer"):
+        _plan(
+            """
+            from __future__ import annotations
+
+
+            class Alpha:
+                def pick(self, table: dict[int, str]) -> str:
+                    return table[Beta.KEY]
+
+
+            class Beta:
+                KEY = 1
+
+                def make(self) -> object:
+                    return Alpha()
+            """
+        )
+
+
+def test_a_literal_holding_an_enum_member_still_reads_its_name() -> None:
+    plan = _plan(
+        """
+        from __future__ import annotations
+
+        from typing import Literal
+
+
+        class Colour:
+            RED = "red"
+
+
+        class Alpha:
+            kind: Literal[Colour.RED]
+
+
+        class Beta:
+            pass
+        """
+    )
+    assert "from .colour import Colour" in plan.files["alpha.py"]
+
+
+def test_an_inverted_entry_point_guard_is_not_treated_as_one() -> None:
+    # Its body runs on every import. Moved into `__main__.py` the condition is never true again,
+    # so the statement stops running with nothing raised.
+    with pytest.raises(SplitError, match="unsupported module-level"):
+        _plan(
+            """
+            class Alpha:
+                pass
+
+
+            class Beta:
+                pass
+
+
+            if not (__name__ == "__main__"):
+                _REGISTERED = True
+            """
+        )
+
+
+def test_an_annotated_dunder_all_of_plain_literals_is_carried_across() -> None:
+    plan = _plan(
+        """
+        class Alpha:
+            pass
+
+
+        class Beta:
+            pass
+
+
+        __all__: list[str] = ["Alpha"]
+        """
+    )
+    assert '__all__ = ["Alpha"]' in plan.files["__init__.py"]
+    assert "from .beta import Beta as Beta" in plan.files["__init__.py"]
+
+
+def test_a_generated_file_that_will_not_compile_costs_no_original(tmp_path: Path) -> None:
+    # The original is the only copy of what the split rewrote, and the half-written package must
+    # not block the retry either.
+    path = _module(tmp_path, "sample", _END_TO_END["plain"])
+    plan = SplitPlan(files={"__init__.py": "", "alpha.py": "class Alpha(\n"}, notes=())
+    with pytest.raises(SplitError, match="does not parse"):
+        apply_split(path, plan)
+    assert path.exists()
+    assert not (tmp_path / "sample").exists()
+
+
+def test_a_lookalike_import_does_not_pass_for_type_checking() -> None:
+    # Decided from the alias, not from the rendered line: `IS_TYPE_CHECKING` contains the string.
+    plan = _plan(
+        """
+        from __future__ import annotations
+
+        from other.place import IS_TYPE_CHECKING
+
+
+        class Alpha:
+            flag = IS_TYPE_CHECKING
+
+            def take(self, value: Beta) -> None:
+                pass
+
+
+        class Beta:
+            def make(self) -> object:
+                return Alpha()
+        """
+    )
+    alpha = plan.files["alpha.py"]
+    assert "from typing import TYPE_CHECKING" in alpha
