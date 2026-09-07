@@ -1,102 +1,20 @@
-"""Test impact analysis — the scenario steps a source change is likely to affect (BE-0321).
-
-The reverse of the coverage map (BE-0050): where `coverage` walks the suite forward to the app
-surface it exercises, this inverts the same static scenario analysis into a map from each stable id,
-screen, and asserted endpoint to the `(scenario, step)` pairs that reference it. A change — read as a
-`git` diff — is turned into a *touched set* by plain string match (each referenced literal tested
-against the diff's added/removed lines), and joined back through the index to the affected steps.
-
-Deterministic and app-agnostic: the same diff and scenarios always yield the same affected set, the
-match needs no per-language parsing, and no model is consulted. Soundness is bounded in both
-directions and the bounds are surfaced, not hidden — a change that edits no referenced literal is
-*unattributable* (it maps to no reference), so the report flags itself incomplete and a full run is
-warranted; a short or common literal can widen the set past the truly-affected steps (over-selection,
-the safe direction for CI). Read-only and advisory, of a piece with `audit` / `coverage` / `stats`:
-it never runs a scenario, never touches a device, and never gates CI (BE-0257).
-"""
-
 from __future__ import annotations
-
-from dataclasses import dataclass
 
 from bajutsu.analysis.audit import scenario_matchable_ids, step_matchable_ids
 from bajutsu.analysis.coverage import referenced_requests, step_requests
 from bajutsu.common.scenario import STEP_ACTIONS, RequestMatch, Scenario, Step
 
+from .affected_step import AffectedStep
+from .changed_file import ChangedFile
+from .impact import Impact
+from .reference import Reference
+from .reverse_index import ReverseIndex
+from .step_ref import StepRef
+from .touched_ref import TouchedRef
+
 # The YAML key each action field serializes to, so a step's label reads as its author wrote it
 # (`assert_` → `assert`). Derived from the model, like `STEP_ACTIONS`, so a new action needs no edit.
 _ACTION_KEYS = {f: Step.model_fields[f].alias or f for f in STEP_ACTIONS}
-
-
-@dataclass(frozen=True, order=True)
-class StepRef:
-    """One scenario step (or scenario-level position) a reference points at.
-
-    `index` is the step's 1-origin position in the scenario's step list; `0` marks a scenario-level
-    reference that no single step owns — a `preconditions` screen or a scenario-level `expect`.
-    """
-
-    scenario: str
-    index: int
-    label: str  # `step.name`, else the action key (`tap`), else `setup` / `deeplink` / `expect`
-
-
-@dataclass(frozen=True, order=True)
-class Reference:
-    """A literal a change can touch: a stable id, a screen name/deeplink, or an asserted endpoint."""
-
-    kind: str  # "id" | "screen" | "endpoint"
-    value: str
-
-
-@dataclass(frozen=True)
-class ReverseIndex:
-    """Each referenced literal mapped to the steps that reference it (both sides sorted). Pure."""
-
-    entries: dict[Reference, list[StepRef]]
-
-
-@dataclass(frozen=True)
-class ChangedFile:
-    """One file a diff changed: its path and the bodies of its added/removed lines (prefix stripped).
-
-    `binary` marks a change whose content cannot be string-matched at all — a binary hunk, or an
-    untracked file that could not be read as text. Such a change carries no `lines`, yet unlike a pure
-    rename (which also has no `lines`) it *is* a real content change, so it is always unattributable:
-    the scan can never vouch for it, and `complete` must fall to False rather than silently pass it.
-    """
-
-    path: str
-    lines: list[str]
-    binary: bool = False
-
-
-@dataclass(frozen=True, order=True)
-class TouchedRef:
-    """A referenced literal the diff touched, with the changed files whose lines carry it."""
-
-    reference: Reference
-    files: list[str]
-
-
-@dataclass(frozen=True, order=True)
-class AffectedStep:
-    """A step the change is likely to affect, with the references that implicate it (the *why*)."""
-
-    step: StepRef
-    reasons: list[Reference]
-
-
-@dataclass(frozen=True)
-class Impact:
-    """The affected steps a change selects, plus the soundness signal a CI narrowing must respect."""
-
-    affected: list[AffectedStep]  # steps a touched reference points at, sorted
-    touched: list[TouchedRef]  # the referenced literals the diff touched, sorted
-    unattributable: list[str]  # changed files that touched no referenced literal (sorted, de-duped)
-    complete: (
-        bool  # no unattributable change — else a full run is warranted (conservative fallback)
-    )
 
 
 def _step_label(step: Step, index: int) -> str:

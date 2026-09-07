@@ -1,20 +1,10 @@
-"""Static e2e coverage map for a scenario suite — which declared id namespaces it touches.
-
-The read-only counterpart to doctor's per-screen convention score: doctor grades the ids an app
-*exposes* on one screen, this grades the ids a *suite* exercises. It walks every scenario without a
-device (reusing audit's selector walk), groups the stable ids it references by namespace, and
-measures them against the app's declared `idNamespaces` — reporting per-namespace coverage, the
-gap list (declared namespaces no scenario touches), and off-namespace ids (referenced ids whose
-namespace was never declared). No model is consulted, no scenario is run, and no verdict is
-touched: a coverage report is advisory, never a CI gate.
-"""
+"""Derive each coverage view from scenarios and run evidence, and render it as text or HTML."""
 
 from __future__ import annotations
 
 import functools
 import json
 from collections.abc import Iterable, Iterator
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
 
@@ -29,27 +19,18 @@ from bajutsu.common.scenario import Assertion, RequestMatch, Scenario, Step, Wai
 from bajutsu.common.scenario.interp import find_tokens
 from bajutsu.crawl import fingerprint
 
+from .coverage import Coverage
+from .endpoint_coverage import EndpointCoverage
+from .namespace_coverage import NamespaceCoverage
+from .observed_id_coverage import ObservedIdCoverage
+from .screen_coverage import ScreenCoverage
+from .screen_ref import ScreenRef
 
-@dataclass(frozen=True)
-class NamespaceCoverage:
-    """One declared namespace the suite touches, with the referenced ids that touch it."""
+# --- HTML report: the dimensions visualized on one self-contained page (BE-0050) ---
 
-    namespace: str
-    ids: list[str]  # the distinct referenced id-strings under this namespace (sorted)
-
-
-@dataclass(frozen=True)
-class Coverage:
-    """How a scenario suite's stable-id references cover an app's declared namespaces."""
-
-    namespaces: list[
-        NamespaceCoverage
-    ]  # declared namespaces the suite references, in declared order
-    gaps: list[str]  # declared namespaces no scenario references
-    off_namespace: list[str]  # referenced ids whose namespace was never declared
-    total: int  # declared namespaces
-    covered: int  # declared namespaces with at least one referenced id
-    coverage: float  # covered / total (1.0 when no namespaces are declared)
+# The shared Jinja templates live at the package root (`bajutsu/templates/`), one level up now
+# that this module is packaged under `analysis/` (BE-0257).
+_TEMPLATE_DIR = Path(__file__).resolve().parent.parent.parent / "templates"
 
 
 def _is_literal_id(rid: str) -> bool:
@@ -102,20 +83,6 @@ def render(c: Coverage) -> str:
     if c.off_namespace:
         lines.append(f"  off-namespace ids: {c.off_namespace}")
     return "\n".join(lines)
-
-
-# --- endpoint coverage: observed traffic (network.json) vs the endpoints the suite asserts on ---
-
-
-@dataclass(frozen=True)
-class EndpointCoverage:
-    """How a suite's network assertions cover the endpoints its runs actually hit."""
-
-    observed: list[str]  # distinct "METHOD path" seen across the run set (sorted)
-    asserted: list[str]  # observed endpoints some declared matcher matches
-    unasserted: list[str]  # observed endpoints no matcher matches — untested traffic
-    declared_unobserved: list[str]  # matcher labels that matched no observed exchange
-    coverage: float  # asserted / observed (1.0 when nothing was observed)
 
 
 def step_requests(step: Step) -> Iterator[RequestMatch]:
@@ -232,28 +199,6 @@ def render_endpoints(ec: EndpointCoverage) -> str:
     return "\n".join(lines)
 
 
-# --- observed-id coverage: ids rendered across a run set (elements.json) vs declared namespaces ---
-
-
-@dataclass(frozen=True)
-class ObservedIdCoverage:
-    """Which declared namespaces a run set actually rendered ids under.
-
-    The run-evidence counterpart to `Coverage` (static references): `coverage()` grades the ids the
-    scenarios *write* (statically reference); this grades the ids the runs *showed* (observed across
-    every `elements.json`), exposing namespaces the suite never exercised at runtime.
-    """
-
-    namespaces: list[
-        NamespaceCoverage
-    ]  # declared namespaces with at least one observed id, in declared order
-    unobserved: list[str]  # declared namespaces rendered in no run
-    off_namespace: list[str]  # observed ids whose namespace was never declared
-    total: int  # declared namespaces
-    covered: int  # declared namespaces with at least one observed id
-    coverage: float  # covered / total (1.0 when no namespaces are declared)
-
-
 def observed_id_coverage(observed_ids: list[str], id_namespaces: list[str]) -> ObservedIdCoverage:
     """Group observed ids by the app's declared namespaces.
 
@@ -293,28 +238,6 @@ def render_observed_ids(oc: ObservedIdCoverage) -> str:
     if oc.off_namespace:
         lines.append(f"  off-namespace ids: {oc.off_namespace}")
     return "\n".join(lines)
-
-
-# --- screens-visited: screens a crawl discovered vs the screens a run set actually reached ---
-
-
-@dataclass(frozen=True)
-class ScreenRef:
-    """A discovered screen: its crawl fingerprint and a human label (its first id, or short hash)."""
-
-    fingerprint: str
-    label: str
-
-
-@dataclass(frozen=True)
-class ScreenCoverage:
-    """How much of a crawl's discovered screen surface a run set actually reached."""
-
-    visited: list[ScreenRef]  # discovered screens a run rendered, in fingerprint order
-    unvisited: list[ScreenRef]  # discovered screens no run reached — the gap
-    total: int  # discovered screens
-    covered: int  # discovered screens visited
-    coverage: float  # covered / total (1.0 when nothing was discovered)
 
 
 def screen_coverage(discovered: list[ScreenRef], visited: frozenset[str]) -> ScreenCoverage:
@@ -438,13 +361,6 @@ def read_observed_ids(runs_dir: Path, run_ids: Iterable[str] | None = None) -> l
             if isinstance(e, dict) and isinstance(e.get("identifier"), str) and e["identifier"]
         )
     return ids
-
-
-# --- HTML report: the dimensions visualized on one self-contained page (BE-0050) ---
-
-# The shared Jinja templates live at the package root (`bajutsu/templates/`), one level up now
-# that this module is packaged under `analysis/` (BE-0257).
-_TEMPLATE_DIR = Path(__file__).resolve().parent.parent / "templates"
 
 
 @functools.lru_cache(maxsize=1)

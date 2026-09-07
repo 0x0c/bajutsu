@@ -416,3 +416,68 @@ def test_two_classes_mapping_to_one_filename_are_refused() -> None:
                 pass
             """
         )
+
+
+def test_file_relative_paths_split_once_their_depth_is_corrected() -> None:
+    source = textwrap.dedent(
+        """
+        from pathlib import Path
+
+        _TEMPLATES = Path(__file__).resolve().parent.parent.parent / "templates"
+
+
+        class Alpha:
+            pass
+
+
+        class Beta:
+            pass
+        """
+    ).lstrip("\n")
+    plan = plan_split(source, allow_file_paths=True)
+    assert "_TEMPLATES" in plan.files["_shared.py"]
+
+
+def test_a_field_sharing_a_siblings_name_is_not_read_as_a_reference() -> None:
+    # `Coverage` in bajutsu/analysis/coverage.py declares a `coverage: float` field alongside a
+    # module-level `coverage()` function. Reading that binding as a reference imports the function
+    # into the class's file and closes a cycle with `_functions.py`, which fails at import time.
+    plan = _plan(
+        """
+        from __future__ import annotations
+
+        from dataclasses import dataclass
+
+
+        @dataclass
+        class Alpha:
+            value: float
+
+
+        @dataclass
+        class Beta:
+            value: float
+
+
+        def value() -> float:
+            return Alpha(value=1.0).value
+        """
+    )
+    assert "from ._functions import value" not in plan.files["alpha.py"]
+    assert plan.notes == ()
+
+
+def test_a_runtime_cycle_between_split_files_is_reported() -> None:
+    plan = _plan(
+        """
+        class Alpha:
+            def make(self) -> object:
+                return Beta()
+
+
+        class Beta:
+            def make(self) -> object:
+                return Alpha()
+        """
+    )
+    assert any("circular import" in note for note in plan.notes)

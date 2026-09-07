@@ -1,19 +1,4 @@
-"""Aggregate run-stats dashboard (BE-0102) — the deterministic trend across many runs.
-
-A read-only aggregation over the artifacts the runner already writes (`manifest.json` per run): it
-turns a pile of runs into a picture — pass-rate over time, run/scenario durations, the scenarios and
-steps that fail most, per-scenario flakiness, and run volume. Every figure is an exact count or
-aggregation; there is no model and no verdict, and it is never part of the CI gate (a team may
-*track* a number from it as informational, exactly as the coverage map allows).
-
-It is the operational complement to the two analytical reports Bajutsu already ships — the coverage
-map (BE-0050) answers *"what surface do we test?"* and the determinism audit (BE-0049) answers *"is a
-given scenario reproducible?"*; this answers *"how is the whole suite doing over time?"* The
-scenario-level series are keyed by the BE-0049 `(scenarioHash, name)` identity, widened with the
-parsed device OS (BE-0358) — a verdict that flips at a constant fingerprint on one OS is true
-flakiness, while an edited scenario, or the same scenario on another OS version, starts a fresh
-series — and the flakiness classification is reused from the audit rather than re-derived.
-"""
+"""Aggregate run manifests into the suite trend, and render it as text or one HTML page."""
 
 from __future__ import annotations
 
@@ -21,8 +6,8 @@ import functools
 import re
 from collections import Counter
 from collections.abc import Iterable, Mapping
-from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from jinja2 import Environment, FileSystemLoader
 
@@ -30,105 +15,24 @@ from bajutsu.analysis.audit import longitudinal, unknown_os_note
 from bajutsu.common.devices import os as device_os
 from bajutsu.common.devices.os import DeviceOS
 
+from ._hotspot_tally import _HotspotTally
+from .day_point import DayPoint
+from .run_point import RunPoint
+from .scenario_stat import ScenarioStat
+from .stats import Stats
+from .target_metrics import TargetMetrics
+
+if TYPE_CHECKING:
+    from .hotspot import Hotspot
+
 # A run id opens with a UTC timestamp (`YYYYMMDD-HHMMSS`), so the day is a pure prefix parse; a run
 # id that doesn't match (a custom label) simply has no day and buckets under "" (unknown).
 _RUN_DAY = re.compile(r"^(\d{4})(\d{2})(\d{2})")
 
 
-@dataclass(frozen=True)
-class RunPoint:
-    """One run as a point on the trend line — pass-rate-over-time and volume both read this."""
-
-    run_id: str
-    day: str  # YYYY-MM-DD parsed from run_id, "" when the id carries no timestamp
-    ok: bool  # the run's top-level verdict
-    passed: int  # scenarios that passed in this run
-    total: int  # scenarios in this run
-    duration_s: float  # the run's wall-clock, summed from its scenarios' durations
-    backend: str  # the actuator that drove the run ("xcuitest" / "fake" / …)
-
-
-@dataclass(frozen=True)
-class DayPoint:
-    """A day's run pass-rate — the trend line at day granularity."""
-
-    day: str  # YYYY-MM-DD, or "" for runs whose id carries no timestamp
-    runs: int
-    passed_runs: int
-    pass_rate: float  # passed_runs / runs
-
-
-@dataclass(frozen=True)
-class ScenarioStat:
-    """One scenario's aggregate at a fixed fingerprint, on one OS — pass-rate, duration, flakiness.
-
-    Keyed by the BE-0049 `(scenarioHash, name)` identity plus the parsed device OS (BE-0358), so
-    neither a content edit nor an OS-version difference corrupts the old series. Pass-rate and
-    `classification` come from the audit's longitudinal view (reused, not re-derived); the durations
-    are aggregated here, against the same key.
-    """
-
-    scenario_hash: str
-    name: str
-    device_os: DeviceOS | None  # None when no run named one — see `audit.longitudinal`
-    runs: int
-    passed: int
-    failed: int
-    pass_rate: float
-    avg_duration_s: float
-    max_duration_s: float
-    classification: str  # flaky | deterministic | unproven (BE-0049)
-
-
-@dataclass(frozen=True)
-class Hotspot:
-    """A recurring failure ranked by frequency — a scenario, a step action, or an assertion kind."""
-
-    key: str  # the scenario name / "scenario > action" / assertion kind that failed
-    failures: int
-    reason: str  # the most frequent failure reason among those failures ("" when none was recorded)
-    run_ids: tuple[str, ...]  # sorted, deduped ids of the runs this failure occurred in (BE-0241)
-
-
-@dataclass(frozen=True)
-class Stats:
-    """The whole-suite trend: run totals, the time series, per-scenario aggregates, and hotspots."""
-
-    runs: int
-    passed_runs: int
-    failed_runs: int
-    pass_rate: float
-    total_duration_s: float  # summed run wall-clock across the whole set
-    by_run: list[RunPoint]  # chronological (oldest first) — pass-rate over time and volume
-    by_day: list[DayPoint]  # chronological (oldest first)
-    by_backend: dict[str, int]  # run count per actuator — the volume denominator
-    # Per (fingerprint, scenario, OS) — so one scenario can hold several rows, one per OS version
-    # it ran on (BE-0358). Flaky first, then most-observed.
-    scenarios: list[ScenarioStat]
-    failing_scenarios: list[Hotspot]  # scenarios that fail most, by frequency
-    failing_steps: list[Hotspot]  # step actions that fail most, by frequency
-    failing_assertions: list[Hotspot]  # assertion kinds that fail most, by frequency
-    scenarios_skipped: int  # runs with no scenarioHash — can't join a fingerprinted series
-
-
-@dataclass(frozen=True)
-class TargetMetrics:
-    """One target's headline numbers for the cross-target comparison (BE-0226, repointed by BE-0404).
-
-    A per-target roll-up of the same `Stats` `aggregate_runs` already computes, reduced to the
-    scalars a comparison ranks on plus a trend series for a sparkline. `flaky_rate` is a plain
-    count over the BE-0102/BE-0049 per-scenario classification (flaky-classified ÷ total),
-    adding no new flakiness heuristic. Both counts are over distinct scenarios, not over the per-OS
-    series (BE-0358), so a wider device matrix neither inflates nor deflates the rate.
-    """
-
-    name: str
-    runs: int
-    pass_rate: float  # Stats.pass_rate over the window
-    flaky_rate: float  # flaky-classified scenarios / total scenarios (0.0 when none)
-    duration_p50_s: float  # median per-run wall-clock over the window
-    duration_p95_s: float  # 95th-percentile per-run wall-clock
-    trend: list[DayPoint]  # daily pass-rate, oldest first — the comparison sparkline
+# The shared Jinja templates live at the package root (`bajutsu/templates/`), one level up now
+# that this module is packaged under `analysis/` (BE-0257).
+_TEMPLATE_DIR = Path(__file__).resolve().parent.parent.parent / "templates"
 
 
 def aggregate_runs(manifests: Iterable[Mapping[str, object]]) -> Stats:
@@ -366,39 +270,6 @@ def _failing_assertions(runs: list[Mapping[str, object]]) -> list[Hotspot]:
     return tally.hotspots()
 
 
-class _HotspotTally:
-    """Accumulate per-key failure reasons and contributing run ids in one pass (BE-0102/BE-0241).
-
-    The shared reduce the three aggregators share: each occurrence adds its reason to the key's
-    tally and records the run it came from, so a hotspot can both name its top reason and link back
-    to the runs behind it. Ranking is most failures first, then key for a stable order; the run ids
-    are sorted and deduped so the deep link the stats page emits is deterministic.
-    """
-
-    def __init__(self) -> None:
-        self._reasons: dict[str, Counter[str]] = {}
-        self._run_ids: dict[str, set[str]] = {}
-
-    def add(self, key: str, reason: str, run_id: str) -> None:
-        self._reasons.setdefault(key, Counter())[reason] += 1
-        ids = self._run_ids.setdefault(key, set())
-        if run_id:  # a manifest with no runId still counts toward the tally, but links to nothing
-            ids.add(run_id)
-
-    def hotspots(self) -> list[Hotspot]:
-        hotspots = [
-            Hotspot(
-                key=key,
-                failures=sum(tally.values()),
-                reason=_top_reason(tally),
-                run_ids=tuple(sorted(self._run_ids[key])),
-            )
-            for key, tally in self._reasons.items()
-        ]
-        hotspots.sort(key=lambda h: (-h.failures, h.key))
-        return hotspots
-
-
 def _top_reason(tally: Counter[str]) -> str:
     """The most frequent non-empty failure reason, or "" when none was recorded."""
     ranked = sorted(((n, r) for r, n in tally.items() if r), reverse=True)
@@ -466,11 +337,6 @@ def render(s: Stats) -> str:
     if s.scenarios_skipped:
         lines.append(f"skipped {s.scenarios_skipped} run(s) with no scenario fingerprint")
     return "\n".join(lines)
-
-
-# The shared Jinja templates live at the package root (`bajutsu/templates/`), one level up now
-# that this module is packaged under `analysis/` (BE-0257).
-_TEMPLATE_DIR = Path(__file__).resolve().parent.parent / "templates"
 
 
 @functools.lru_cache(maxsize=1)

@@ -130,6 +130,46 @@ class _References(cst.CSTVisitor):
             return
         expression.visit(self)
 
+    def visit_AnnAssign(self, node: cst.AnnAssign) -> bool:
+        # `x: int = 1` binds `x`; only the annotation and the value read outer names. Without this,
+        # a dataclass field that happens to share a sibling's name reads as a reference to it, and
+        # the bogus import it produces can close a cycle between two split-off files.
+        self._visit_target(node.target)
+        node.annotation.visit(self)
+        if node.value is not None:
+            node.value.visit(self)
+        return False
+
+    def visit_AssignTarget(self, node: cst.AssignTarget) -> bool:
+        self._visit_target(node.target)
+        return False
+
+    def visit_For(self, node: cst.For) -> bool:
+        self._visit_target(node.target)
+        node.iter.visit(self)
+        node.body.visit(self)
+        if node.orelse is not None:
+            node.orelse.visit(self)
+        return False
+
+    def visit_CompFor(self, node: cst.CompFor) -> bool:
+        self._visit_target(node.target)
+        node.iter.visit(self)
+        for condition in node.ifs:
+            condition.visit(self)
+        if node.inner_for_in is not None:
+            node.inner_for_in.visit(self)
+        return False
+
+    def visit_AsName(self, _node: cst.AsName) -> bool:
+        # `with … as x` / `except … as x` bind `x` rather than reading it.
+        return False
+
+    def _visit_target(self, target: cst.BaseExpression) -> None:
+        """Record only the reads a binding target performs — `obj.attr` reads `obj`, `x` reads none."""
+        if not isinstance(target, cst.Name):
+            target.visit(self)
+
     def visit_Global(self, node: cst.Global) -> bool:
         for item in node.names:
             self.rebound.add(item.name.value)
@@ -320,7 +360,7 @@ def _parse(source: str) -> _Parsed:
     return parsed
 
 
-def _check_splittable(parsed: _Parsed, name: str) -> None:
+def _check_splittable(parsed: _Parsed, name: str, *, allow_file_paths: bool) -> None:
     classes = [d for d in parsed.declarations if d.is_class]
     if len(classes) < 2:
         raise SplitError(f"{name} defines {len(classes)} top-level class(es); nothing to split")
@@ -337,6 +377,8 @@ def _check_splittable(parsed: _Parsed, name: str) -> None:
                     f"{declaration.stem}.py"
                 )
             stems[declaration.stem] = declaration.name
+    if allow_file_paths:
+        return
     scanned = [statement.reads for statement in parsed.module_level]
     scanned += [_references(declaration.node) for declaration in parsed.declarations]
     for reads in scanned:
@@ -409,6 +451,39 @@ def _render(statements: list[_Statement]) -> str:
     return cst.Module(body=statements).code
 
 
+def _file_reads(
+    owned: list[cst.SimpleStatementLine], declarations: list[_Declaration]
+) -> _References:
+    """The names one split file reads, merged across everything that lands in it."""
+    reads = _References()
+    for node in [*owned, *(declaration.node for declaration in declarations)]:
+        collected = _references(node)
+        reads.all |= collected.all
+        reads.runtime |= collected.runtime
+    return reads
+
+
+def _runtime_cycles(graph: dict[str, set[str]]) -> list[tuple[str, ...]]:
+    """Every cycle among the split files' runtime imports, which rule 5 has to break by hand."""
+    cycles: list[tuple[str, ...]] = []
+    seen: set[tuple[str, ...]] = set()
+
+    def walk(stem: str, path: list[str]) -> None:
+        for neighbour in sorted(graph.get(stem, ())):
+            if neighbour in path:
+                cycle = path[path.index(neighbour) :]
+                key = tuple(sorted(cycle))
+                if key not in seen:
+                    seen.add(key)
+                    cycles.append(tuple(cycle))
+            elif len(path) < len(graph):
+                walk(neighbour, [*path, neighbour])
+
+    for stem in sorted(graph):
+        walk(stem, [stem])
+    return cycles
+
+
 def _render_file(
     parsed: _Parsed,
     stem: str,
@@ -416,12 +491,7 @@ def _render_file(
     declarations: list[_Declaration],
     stems: dict[str, str],
 ) -> str:
-    reads = _References()
-    for node in [*owned, *(d.node for d in declarations)]:
-        collected = _references(node)
-        reads.all |= collected.all
-        reads.runtime |= collected.runtime
-
+    reads = _file_reads(owned, declarations)
     siblings = {name: where for name, where in stems.items() if where != stem and name in reads.all}
     runtime_siblings = {n: w for n, w in siblings.items() if n in reads.runtime}
     deferred_siblings = {n: w for n, w in siblings.items() if n not in reads.runtime}
@@ -513,12 +583,14 @@ class SplitPlan:
     notes: tuple[str, ...]
 
 
-def plan_split(source: str, *, name: str = "<module>") -> SplitPlan:
+def plan_split(source: str, *, name: str = "<module>", allow_file_paths: bool = False) -> SplitPlan:
     """Work out the package one multi-class module becomes, without touching the filesystem.
 
     Args:
         source: The module's text.
         name: The module's path, used only in refusal messages.
+        allow_file_paths: Split even though the module reads `__file__`, because its parent count
+            has already been corrected for the directory level the split adds.
 
     Returns:
         The new package's files, keyed by filename, plus the rule-4 placements to review.
@@ -527,7 +599,7 @@ def plan_split(source: str, *, name: str = "<module>") -> SplitPlan:
         SplitError: The file needs a judgment call this script will not make for you.
     """
     parsed = _parse(source)
-    _check_splittable(parsed, name)
+    _check_splittable(parsed, name, allow_file_paths=allow_file_paths)
     placement, notes = _assign_owners(parsed)
     stems = _binding_stems(parsed, placement)
 
@@ -538,12 +610,20 @@ def plan_split(source: str, *, name: str = "<module>") -> SplitPlan:
     for declaration in parsed.declarations:
         grouped.setdefault(declaration.stem, []).append(declaration)
 
+    graph: dict[str, set[str]] = {}
     files: dict[str, str] = {}
     for stem in sorted(set(owned) | set(grouped)):
+        reads = _file_reads(owned.get(stem, []), grouped.get(stem, []))
+        graph[stem] = {stems[read] for read in reads.runtime if stems.get(read, stem) != stem}
         files[f"{stem}.py"] = _render_file(
             parsed, stem, owned.get(stem, []), grouped.get(stem, []), stems
         )
     files["__init__.py"] = _render_init(parsed, stems)
+    notes += [
+        f"  circular import {' -> '.join([*cycle, cycle[0]])}.py — break it with rule 5's "
+        "in-method import before the package will load"
+        for cycle in _runtime_cycles(graph)
+    ]
     return SplitPlan(files=files, notes=tuple(notes))
 
 
@@ -560,8 +640,10 @@ def apply_split(path: Path, plan: SplitPlan) -> Path:
 def _tidy(paths: list[Path]) -> None:
     """Sort each new file's imports and format it, so the gate sees the same text a human would."""
     targets = [str(path) for path in paths]
+    # `I` sorts the imports and `RUF022` the generated `__all__`. Both are left to ruff rather than
+    # reproduced here, so the script cannot disagree with the gate about what sorted means.
     subprocess.run(
-        ["uv", "run", "ruff", "check", "--select", "I", "--fix", "-q", *targets], check=False
+        ["uv", "run", "ruff", "check", "--select", "I,RUF022", "--fix", "-q", *targets], check=False
     )
     subprocess.run(["uv", "run", "ruff", "format", "-q", *targets], check=False)
 
@@ -573,13 +655,20 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--dry-run", action="store_true", help="report the plan without writing anything"
     )
+    parser.add_argument(
+        "--allow-file-paths",
+        action="store_true",
+        help="split modules reading `__file__` whose parent count is already corrected",
+    )
     args = parser.parse_args(argv)
 
     written: list[Path] = []
     failed = False
     for path in args.paths:
         try:
-            plan = plan_split(path.read_text(), name=str(path))
+            plan = plan_split(
+                path.read_text(), name=str(path), allow_file_paths=args.allow_file_paths
+            )
         except SplitError as error:
             print(f"SKIP {path}: {error}", file=sys.stderr)
             failed = True

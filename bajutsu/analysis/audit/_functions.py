@@ -1,18 +1,10 @@
-"""Static determinism audit for a scenario — a device-free, AI-free stability score.
-
-The deterministic counterpart to flakiness tolerance (BE-0049): instead of absorbing instability,
-this *grades* it. It walks a scenario without a device and scores each selector on the stability
-ladder ([selectors.md](../docs/selectors.md)) — a unique `id` beats `label`/`traits`, which beat
-`index`/raw coordinates — flags `wait`s gated on an over-loose condition, and flags coordinate
-gestures a stable `id` could replace. It is purely observational: no model is consulted, the
-scenario is never run, and the verdict / CI gate is never touched.
-"""
+"""The audit itself: grade a scenario's selectors, diff a repeat run, and mine run history."""
 
 from __future__ import annotations
 
 from collections import Counter
 from collections.abc import Iterable, Iterator, Mapping
-from dataclasses import dataclass, field, replace
+from dataclasses import replace
 from typing import TYPE_CHECKING
 
 from bajutsu.common.devices import os as device_os
@@ -20,35 +12,18 @@ from bajutsu.common.devices.os import DeviceOS
 from bajutsu.common.drivers import base
 from bajutsu.common.scenario import Assertion, Gone, Scenario, Step
 
+from .audit_report import AuditReport
+from .finding import Finding
+from .longitudinal_report import LongitudinalReport
+from .repeat_report import RepeatReport
+from .scenario_history import ScenarioHistory
+
 if TYPE_CHECKING:
     from bajutsu.common.orchestrator import RunResult
 
 # `until` conditions that wait for no concrete element / event — best-effort settles, not a
 # condition the run can prove was met, so they are a determinism risk worth surfacing.
 _LOOSE_UNTIL = {"screenChanged", "settled"}
-
-
-@dataclass(frozen=True)
-class Finding:
-    """One determinism risk in a scenario, located and explained for a human to fix."""
-
-    where: str  # the step/assertion the risk is in (e.g. "tap", "expect: value")
-    kind: str  # fragile-selector | moderate-selector | coordinate-gesture | loose-wait
-    detail: str
-
-
-@dataclass(frozen=True)
-class AuditReport:
-    """The per-scenario determinism score, parallel to doctor's id-coverage score."""
-
-    scenario: str
-    selectors: int  # selectors graded
-    stable: int  # resolve by a unique id (id / idMatches)
-    moderate: int  # resolve by label / traits / value (auxiliary, no id)
-    fragile: int  # rely on index (the flaky last resort)
-    stability: float  # stable / selectors (1.0 when no selectors)
-    grade: str  # "Stable" | "Moderate" | "Fragile"
-    findings: list[Finding]
 
 
 def _tier(sel: base.Selector) -> str:
@@ -296,22 +271,6 @@ def render(report: AuditReport) -> str:
     return "\n".join(lines)
 
 
-# --- repeat-and-diff: prove determinism dynamically (BE-0049) ---
-#
-# Run a scenario K times under identical preconditions and report anything that varies as a
-# *finding to fix*. The audit never changes a verdict and never feeds the run/CI gate.
-
-
-@dataclass(frozen=True)
-class RepeatReport:
-    """The verdict of running one scenario K times and diffing the outcomes."""
-
-    scenario: str
-    runs: int  # K — how many times it was executed
-    deterministic: bool  # every run agreed (or K < 2, nothing to compare)
-    divergences: list[str] = field(default_factory=list)  # what varied, for a human to fix
-
-
 def _verdicts(oks: list[bool]) -> list[str]:
     return ["pass" if o else "fail" for o in oks]
 
@@ -392,35 +351,6 @@ def render_repeat(report: RepeatReport) -> str:
     lines = [f"scenario: {report.scenario}", f"{report.runs} runs: {classification}"]
     lines.extend(f"  {d}" for d in report.divergences)
     return "\n".join(lines)
-
-
-@dataclass(frozen=True)
-class ScenarioHistory:
-    """One scenario's verdict history at a fixed fingerprint *on one OS* — the longitudinal unit."""
-
-    scenario_hash: (
-        str  # the run's `provenance.scenarioHash` — the executed file's content fingerprint
-    )
-    name: str  # the scenario whose outcomes these are (the manifest's per-scenario `scenario`)
-    # The OS these runs ran on, parsed from the per-scenario `device_runtime` (BE-0358); None when
-    # no run named one. Part of the identity, so a verdict that differs *because the OS differs* is
-    # two histories rather than one flaky one.
-    device_os: DeviceOS | None
-    runs: int  # how many accumulated runs exercised this scenario at this fingerprint
-    passed: int  # runs in which it passed
-    failed: int  # runs in which it failed
-    pass_rate: float  # passed / runs
-    classification: str  # flaky | deterministic | unproven (see `classify_stability`)
-
-
-@dataclass(frozen=True)
-class LongitudinalReport:
-    """Flakiness mined from accumulated run history — each scenario's verdict over its own past."""
-
-    histories: list[
-        ScenarioHistory
-    ]  # one per (fingerprint, scenario, OS), flaky first then by run count
-    skipped: int  # runs with no `scenarioHash` provenance — can't be grouped by identity
 
 
 def longitudinal(manifests: Iterable[Mapping[str, object]]) -> LongitudinalReport:

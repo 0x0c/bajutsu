@@ -1,31 +1,7 @@
-"""Cross-run flakiness score over the serve DB run history (BE-0220, Half 1).
-
-Mines the run records a hosted or self-hosted `serve` accumulates and ranks scenarios by how much
-their verdict flips at a constant content fingerprint. It reuses `audit --history`'s exact
-classification (`bajutsu.analysis.audit.classify_stability`) so the DB-backed surface and the file-backed
-`audit --history` label a scenario identically.
-
-Determinism-first, like BE-0049: this only *reports* flakiness read from recorded verdicts. It
-computes no pass/fail, retries nothing, and gates nothing — nothing here is on the `run` / CI
-verdict path.
-
-The DB `Run` record carries one run-level verdict (`ok`) and one provenance stamp
-(`scenario_hash`) per run, so the grouping key here is the `scenario_hash` and the metric is the
-run-level verdict flip — the coarser DB counterpart to `audit --history`'s per-scenario grouping.
-For the common single-scenario run the two coincide.
-
-The key also carries the parsed device OS (BE-0358), the one component the two surfaces must share
-exactly: without it a fleet running one suite across a device matrix scores every genuine OS
-difference in it as flakiness. The granularities stay deliberately different — this side is per run,
-the file-backed side per scenario — but the OS component and its unknown-key rule are the same, so
-the two keep labelling a scenario identically.
-"""
-
 from __future__ import annotations
 
 import functools
 from collections.abc import Iterable, Mapping
-from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -37,42 +13,16 @@ from bajutsu.common.devices.os import DeviceOS
 from bajutsu.common.run_meta.id import parse_run_id_timestamp
 from bajutsu.serve.server.db import RunRecord
 
-# The newest-N run window both flakiness surfaces mine from the database — the serve panel
-# (`operations.reads._flakiness_report`) and the `bajutsu flakiness` CLI (`_db_flakiness`) — so the
-# two rank over the same bounded history. A window large enough to read a trend, not the whole log.
-DEFAULT_RUN_LIMIT = 200
+from .flakiness_report import FlakinessReport
+from .flaky_scenario import FlakyScenario
+
+_TEMPLATE_DIR = Path(__file__).resolve().parent.parent.parent / "templates"
 
 
 def _as_utc(dt: datetime) -> datetime:
     """Return dt as a UTC-aware datetime. SQLite (the gate backend) hands back naive datetimes for
     ``DateTime(timezone=True)`` columns; assume UTC when tzinfo is absent, mirroring db._as_utc."""
     return dt if dt.tzinfo is not None else dt.replace(tzinfo=UTC)
-
-
-@dataclass(frozen=True)
-class FlakyScenario:
-    """One scenario's cross-run stability at a fixed fingerprint, on one OS — the ranked unit."""
-
-    scenario_hash: str  # the runs' shared `provenance.scenarioHash`, half the grouping key
-    name: str  # a representative scenario name from the runs' summaries (for display / linking)
-    # The OS these runs ran on, parsed from the record's `device_runtime` (BE-0358) — the other half
-    # of the key. None when the run recorded none, or when its scenarios spanned OS versions.
-    device_os: DeviceOS | None
-    runs: int  # runs observed at this fingerprint inside the window
-    passed: int  # runs that passed
-    failed: int  # runs that failed
-    flip_rate: float  # 2 * min(passed, failed) / runs — 0 when consistent, 1 at a 50/50 split
-    classification: str  # flaky | deterministic | unproven (see `audit.classify_stability`)
-    representative_pass_run_id: str | None  # newest passing run, for linking to its evidence
-    representative_fail_run_id: str | None  # newest failing run, for linking to its evidence
-
-
-@dataclass(frozen=True)
-class FlakinessReport:
-    """The suite ranked by flakiness — flaky scenarios first, then by descending flip rate."""
-
-    scenarios: list[FlakyScenario]  # flaky first, then flip_rate desc, then run count desc
-    skipped: int  # runs dropped for lacking a fingerprint or a recorded verdict — ungroupable
 
 
 def _scenario_name(record: RunRecord) -> str:
@@ -271,9 +221,6 @@ def _render_scenario(s: FlakyScenario) -> str:
         if part
     )
     return f"{head}\n  {evidence}" if evidence else head
-
-
-_TEMPLATE_DIR = Path(__file__).resolve().parent.parent / "templates"
 
 
 @functools.lru_cache(maxsize=1)
