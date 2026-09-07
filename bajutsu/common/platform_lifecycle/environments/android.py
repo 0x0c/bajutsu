@@ -81,6 +81,10 @@ class AndroidEnvironment:
         # Override the resident-server construction in tests; None uses the real, env-gated default.
         self._resident_factory = resident_factory
         self._resident: ResidentServerLike | None = None
+        # Which resident-server APK pair this run has already installed, per serial (BE-0407 unit
+        # 22). Lives here, not on the per-lease `ResidentServer`, because that is the whole point:
+        # every lease after the first was putting back the same bytes it had just uninstalled.
+        self._installed_resident_apks: dict[str, tuple[str, str]] = {}
         # A device provider's readiness report (BE-0236); the inert default is a locally-attached
         # device, so `start` runs the full boot wait / install unless a cloud provider says otherwise.
         self._provision = provision or ProvisionProfile()
@@ -162,7 +166,7 @@ class AndroidEnvironment:
             ) from exc
         # The resident read channel drives whatever app is now on screen (BE-0245); a startup failure
         # degrades to `uiautomator dump` rather than failing the lease.
-        channel = self._begin_resident()
+        channel = self._begin_resident(native_z=android.native_z)
         fetch = channel.fetch if channel is not None else None
         clock = channel.clock if channel is not None else None
         act = channel.act if channel is not None else None
@@ -170,9 +174,9 @@ class AndroidEnvironment:
             self._actuator, self._serial, fetch_hierarchy=fetch, fetch_clock=clock, act=act
         )
 
-    def _begin_resident(self) -> ResidentChannel | None:
+    def _begin_resident(self, *, native_z: bool = False) -> ResidentChannel | None:
         """Start the resident server for this lease, or None to read via `uiautomator dump`."""
-        server = self._make_resident()
+        server = self._make_resident(native_z=native_z)
         if server is None:
             return None
         from bajutsu.common.drivers.adb import AdbResidentError
@@ -189,7 +193,7 @@ class AndroidEnvironment:
         self._resident = server
         return channel
 
-    def _make_resident(self) -> ResidentServerLike | None:
+    def _make_resident(self, *, native_z: bool = False) -> ResidentServerLike | None:
         if self._resident_factory is not None:
             return self._resident_factory()
         from bajutsu.common.backend_cli.adb_resident import ResidentServer, server_apks_built
@@ -222,7 +226,14 @@ class AndroidEnvironment:
             "resident UI Automator channel selected (%s)",
             f"{_RESIDENT_ENV} override" if forced_on else "server APKs built",
         )
-        return ResidentServer(self._serial, run=self._run)
+        # `_installed_resident_apks` outlives the lease this server is built for, so a run's later
+        # leases can skip putting the very same APK pair back on the device (BE-0407 unit 22).
+        return ResidentServer(
+            self._serial,
+            run=self._run,
+            installed=self._installed_resident_apks,
+            native_z=native_z,
+        )
 
     def device_catalog(self) -> dict[str, dict[str, str]]:
         return adb.device_catalog(self._run)

@@ -9,8 +9,10 @@ server lifecycle over an injected `run`. Real on-device verification is a later 
 
 from __future__ import annotations
 
+import http.client
 import http.server
 import socket
+import subprocess
 import threading
 import urllib.parse
 from pathlib import Path
@@ -24,6 +26,8 @@ from bajutsu.common.drivers.adb import (
     AdbActUncertain,
     AdbResidentError,
     HierarchyRead,
+    PanRequest,
+    elements_with_identities,
     parse_hierarchy,
 )
 
@@ -181,6 +185,239 @@ def test_fetch_source_reads_the_hierarchy_over_http() -> None:
         server.shutdown()
 
 
+class _ActTreeHandler(_SourceHandler):
+    """A `/act` that answers the caught-up tree a confirmed gesture carries (BE-0407 unit 19)."""
+
+    act_body: bytes = _MULTI_WINDOW.encode("utf-8")
+    act_mark: str | None = "98765"
+
+    def do_POST(self) -> None:
+        type(self).last_act_path = self.path
+        self.send_response(200)
+        self.send_header("Content-Type", "application/xml; charset=utf-8")
+        self.send_header("Content-Length", str(len(self.act_body)))
+        self.send_header(adb_resident._ACT_PUBLISH_HEADER, "98765")
+        if self.act_mark is not None:
+            self.send_header(adb_resident._READ_MARK_HEADER, self.act_mark)
+        self.end_headers()
+        self.wfile.write(self.act_body)
+
+
+def _serve_act_tree(
+    body: bytes = _MULTI_WINDOW.encode("utf-8"), mark: str | None = "98765"
+) -> tuple[int, http.server.HTTPServer]:
+    _ActTreeHandler.act_body = body
+    _ActTreeHandler.act_mark = mark
+    server = http.server.HTTPServer(("127.0.0.1", 0), _ActTreeHandler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    return server.server_port, server
+
+
+def _tap(port: int) -> ActOutcome:
+    return adb_resident.act(
+        port,
+        ActRequest(
+            kind="tap", identity=("a", "", "", "C"), index=0, count=1, since=None, duration_ms=None
+        ),
+    )
+
+
+def test_a_confirmed_gestures_reply_carries_the_narrowed_tree() -> None:
+    # BE-0407 unit 19: the tree the device dumped after it confirmed the publish, narrowed here the
+    # same way a `/source` read is, so the driver can adopt it in place of the read it would have taken.
+    port, server = _serve_act_tree()
+    try:
+        outcome = _tap(port)
+        assert outcome.read is not None
+        assert outcome.read.mark == 98765.0
+        assert outcome.read.text == _MULTI_WINDOW  # the device's own reply, untouched
+        assert outcome.read.narrowed is True
+        assert elements_with_identities(outcome.read.root)[0] == parse_hierarchy(_APP_ONLY)
+    finally:
+        server.shutdown()
+
+
+def test_a_reply_without_a_read_mark_carries_no_tree() -> None:
+    # The mark is what separates the two bodies this endpoint answers — a bare `ok` and a post-publish
+    # dump — and it is also what the driver checks before trusting the tree. An older server sends
+    # neither, so absence needs no version negotiation.
+    port, server = _serve_act_tree(body=b"ok\n", mark=None)
+    try:
+        assert _tap(port).read is None
+    finally:
+        server.shutdown()
+
+
+def test_a_tree_the_reply_could_not_carry_intact_is_dropped_not_raised() -> None:
+    # The gesture itself landed. Losing this optimisation costs the read it would have saved and
+    # nothing else, so an undecodable or unparseable body degrades to "read again" rather than failing
+    # an actuation that actually happened.
+    for body in (b"\xff\xfe not utf-8", b"<hierarchy>truncated"):
+        port, server = _serve_act_tree(body=body)
+        try:
+            outcome = _tap(port)
+            assert outcome.acted is True
+            assert outcome.read is None
+        finally:
+            server.shutdown()
+
+
+def test_an_unreadable_socket_counts_as_stale_rather_than_reused() -> None:
+    # `_is_stale` answers on any doubt, including a socket that cannot even be polled: reconnecting
+    # costs a handshake, while writing onto an unknown socket risks a half-sent gesture.
+    conn = http.client.HTTPConnection("127.0.0.1", 1)
+    conn.sock = socket.socket()
+    conn.sock.close()  # a closed socket raises from `select`, the branch under test
+    assert adb_resident._is_stale(conn) is True
+
+
+def test_a_device_that_cannot_be_asked_about_its_packages_reinstalls(tmp_path: Path) -> None:
+    # `_packages_installed` answers False on any fault, so an unanswerable device puts the APKs back
+    # rather than starting a server that may not be there (BE-0407 unit 22).
+    installed: dict[str, tuple[str, str]] = {}
+    _install_server(tmp_path, [], installed).start()
+    calls: list[list[str]] = []
+
+    def run(args: list[str]) -> str:
+        calls.append(args)
+        if "path" in args:
+            raise subprocess.CalledProcessError(1, args)
+        return "41000\n" if "forward" in args and "--remove" not in args else ""
+
+    server_apk, test_apk = _apks(tmp_path)
+    adb_resident.ResidentServer(
+        "U",
+        run=run,
+        spawn=lambda argv: _FakeProc(),
+        fetch=lambda port, _since: HierarchyRead(_APP_ONLY),
+        server_apk=server_apk,
+        test_apk=test_apk,
+        installed=installed,
+    ).start()
+    assert len(_installs(calls)) == 4
+
+
+def test_a_pan_crosses_as_whole_pixels_the_way_the_coordinate_path_rounds_them() -> None:
+    # BE-0407 unit 24. The device reads whole pixels, and a `scroll`'s endpoints arrive here as the
+    # floats a screen fraction produced — sent verbatim they parse to nothing, which an on-device run
+    # showed as every pan answering `400 no usable x1` and falling back to `input swipe`, passing
+    # silently. Rounded through `adb.pixel`, the same function `swipe_cmd` uses, so the two channels
+    # cannot aim at different pixels either.
+    port, server = _serve_once()
+    try:
+        adb_resident.act(
+            port,
+            PanRequest(frm=(100.4, 899.6), to=(100.0, 300.0), duration_ms=600, since=None),
+        )
+        query = urllib.parse.parse_qs(
+            urllib.parse.urlparse(_SourceHandler.last_act_path or "").query
+        )
+        assert query["kind"] == ["swipe"]
+        assert (query["x1"], query["y1"]) == (["100"], ["900"])
+        assert (query["x2"], query["y2"], query["durationMs"]) == (["100"], ["300"], ["600"])
+        assert "rid" not in query  # a pan names points, never an element identity
+    finally:
+        server.shutdown()
+
+
+def test_fetch_source_asks_for_native_z_only_when_the_target_opted_in() -> None:
+    # BE-0407 unit 18: the walk answering `nativeZ` covers every node on every read and returns nothing
+    # at all for an app that opted no view in, so the device does it only when asked — and the ask
+    # comes from the target's own config, never from the driver guessing.
+    port, server = _serve_once()
+    try:
+        adb_resident.fetch_source(port)
+        assert _SourceHandler.last_source_path == "/source"
+        adb_resident.fetch_source(port, native_z=True)
+        assert _SourceHandler.last_source_path == "/source?nativeZ=1"
+        adb_resident.fetch_source(port, since=98765.0, native_z=True)
+        assert _SourceHandler.last_source_path == "/source?since=98765.0&nativeZ=1"
+    finally:
+        server.shutdown()
+
+
+class _KeepaliveHandler(_SourceHandler):
+    """The stub speaking HTTP/1.1 with the connection kept open, as the resident server now does.
+
+    `BaseHTTPRequestHandler` defaults to HTTP/1.0 and hangs up after each reply, which is exactly what
+    `_is_stale` is built to notice — so a keep-alive test against the default stub would only ever
+    prove the reconnect path.
+    """
+
+    protocol_version = "HTTP/1.1"
+
+
+def _serve_keepalive() -> tuple[int, http.server.HTTPServer]:
+    _SourceHandler.status = 200
+    _SourceHandler.mark = None
+    _SourceHandler.act_publish = None
+    server = http.server.HTTPServer(("127.0.0.1", 0), _KeepaliveHandler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    return server.server_port, server
+
+
+def test_a_kept_connection_carries_the_next_call_instead_of_reconnecting() -> None:
+    # BE-0407 unit 21: every read, clock probe and gesture used to pay its own TCP handshake — 30-150ms
+    # against a channel a scenario touches several times per step. Pinned on the socket itself rather
+    # than on a timing: the same connection object serving the second call is what "no handshake" means.
+    port, server = _serve_keepalive()
+    keepalive = adb_resident.Keepalive()
+    try:
+        adb_resident.fetch_source(port, keepalive=keepalive)
+        first = keepalive.conn
+        assert first is not None
+        adb_resident.fetch_clock(port, keepalive=keepalive)
+        assert keepalive.conn is first  # the clock probe rode the read's connection
+    finally:
+        # Before `shutdown()`: the server thread is parked inside this connection's own request loop
+        # until the client hangs up, exactly as the device server is.
+        keepalive.discard()
+        server.shutdown()
+
+
+def test_a_peer_that_hung_up_is_reconnected_rather_than_written_to() -> None:
+    # The server's own idle ceiling can close a kept connection with nothing on this side to notice.
+    # A zero-timeout peek answers that *before* any byte of the next request is sent, so the ordinary
+    # idle close reconnects cleanly instead of surfacing as a half-sent request whose delivery is
+    # ambiguous — the distinction `act` cannot guess through, since a re-sent gesture is a second touch.
+    port, server = _serve_once()  # HTTP/1.0: hangs up after every reply, like an idle-closing peer
+    keepalive = adb_resident.Keepalive()
+    try:
+        adb_resident.fetch_source(port, keepalive=keepalive)
+        first = keepalive.conn
+        assert adb_resident.fetch_source(port, keepalive=keepalive).text == _MULTI_WINDOW
+        assert (
+            keepalive.conn is not first
+        )  # noticed and reconnected, not written onto a dead socket
+    finally:
+        keepalive.discard()
+        server.shutdown()
+
+
+def test_a_call_that_faults_never_leaves_its_connection_to_be_reused() -> None:
+    # A connection a failure touched is in an unknown state — a half-sent request, an unread reply —
+    # and reusing it would desynchronize the next call onto the previous one's bytes.
+    port, server = _serve_once(status=500)
+    keepalive = adb_resident.Keepalive()
+    try:
+        with pytest.raises(AdbResidentError):
+            adb_resident.fetch_source(port, keepalive=keepalive)
+        assert keepalive.conn is None
+    finally:
+        keepalive.discard()
+        server.shutdown()
+
+
+def test_a_one_shot_caller_still_gets_a_connection_of_its_own() -> None:
+    # Omitting the keepalive is the behavior every caller had before this unit, and is what a probe or
+    # a test that must not share a socket relies on.
+    port, server = _serve_once()
+    try:
+        assert adb_resident.fetch_source(port).text == _MULTI_WINDOW
+    finally:
+        server.shutdown()
+
+
 def test_fetch_source_carries_the_read_mark_header() -> None:
     # BE-0332 Unit 3: the X-Bajutsu-Read-Mark header — the device-clock time of the newest a11y event
     # the reader had seen — rides with the dump so the driver can require a read to postdate a gesture.
@@ -331,6 +568,98 @@ def _apks(tmp_path: Path) -> tuple[Path, Path]:
     return server_apk, test_apk
 
 
+def _install_server(
+    tmp_path: Path,
+    calls: list[list[str]],
+    installed: dict[str, tuple[str, str]] | None,
+    *,
+    present: bool = True,
+) -> adb_resident.ResidentServer:
+    """A `ResidentServer` whose every adb call is recorded, sharing one `installed` record."""
+    server_apk, test_apk = _apks(tmp_path)
+
+    def run(args: list[str]) -> str:
+        calls.append(args)
+        if "forward" in args and "--remove" not in args:
+            return "41000\n"
+        if "path" in args:
+            return "package:/data/app/server.apk\n" if present else "\n"
+        return ""
+
+    return adb_resident.ResidentServer(
+        "U",
+        run=run,
+        spawn=lambda argv: _FakeProc(),
+        fetch=lambda port, _since: HierarchyRead(_APP_ONLY),
+        server_apk=server_apk,
+        test_apk=test_apk,
+        installed=installed,
+    )
+
+
+def _installs(calls: list[list[str]]) -> list[list[str]]:
+    return [c for c in calls if "install" in c or "uninstall" in c]
+
+
+def test_a_second_lease_reuses_the_apk_pair_this_run_already_installed(tmp_path: Path) -> None:
+    # BE-0407 unit 22: an uninstall of both packages plus two `install -r` calls is the dominant cost
+    # of starting a lease, and every lease after the first put back the very same bytes. The digests
+    # pin the signing key too — identical bytes cannot be signed differently — which is exactly what
+    # the uninstall-first rule was guarding against.
+    installed: dict[str, tuple[str, str]] = {}
+    first: list[list[str]] = []
+    _install_server(tmp_path, first, installed).start()
+    assert len(_installs(first)) == 4  # two uninstalls, two installs
+    second: list[list[str]] = []
+    _install_server(tmp_path, second, installed).start()
+    assert _installs(second) == []
+
+
+def test_a_package_removed_out_of_band_is_installed_again(tmp_path: Path) -> None:
+    # The record says "this run installed that pair here"; it cannot say the device still carries it.
+    # `pm path` is checked rather than assumed, so a package gone from under the run reinstalls
+    # instead of leaving the lease to fail on a server that is not there.
+    installed: dict[str, tuple[str, str]] = {}
+    _install_server(tmp_path, [], installed).start()
+    calls: list[list[str]] = []
+    _install_server(tmp_path, calls, installed, present=False).start()
+    assert len(_installs(calls)) == 4
+
+
+def test_a_caller_that_keeps_no_record_reinstalls_every_lease(tmp_path: Path) -> None:
+    # The default (`installed=None`) is the behavior every caller had before this unit: no record, so
+    # nothing to reuse. A skip must be something a caller opts into by owning the record.
+    first: list[list[str]] = []
+    _install_server(tmp_path, first, None).start()
+    second: list[list[str]] = []
+    _install_server(tmp_path, second, None).start()
+    assert len(_installs(first)) == len(_installs(second)) == 4
+
+
+def test_a_failed_install_leaves_no_record_claiming_the_pair_is_there(tmp_path: Path) -> None:
+    # A record written before the installs finish would let the next lease skip an install that never
+    # landed. It is dropped up front and only rewritten once both installs return.
+    installed: dict[str, tuple[str, str]] = {"U": ("stale", "stale")}
+    server_apk, test_apk = _apks(tmp_path)
+
+    def run(args: list[str]) -> str:
+        if "install" in args and "uninstall" not in args:
+            raise subprocess.CalledProcessError(1, args)
+        return "package:/data/app/server.apk\n" if "path" in args else ""
+
+    srv = adb_resident.ResidentServer(
+        "U",
+        run=run,
+        spawn=lambda argv: _FakeProc(),
+        server_apk=server_apk,
+        test_apk=test_apk,
+        installed=installed,
+    )
+    with pytest.raises(AdbResidentError):
+        srv.start()
+    assert installed == {}
+
+
 def test_start_installs_forwards_and_returns_a_working_fetch(tmp_path: Path) -> None:
     calls: list[list[str]] = []
 
@@ -358,8 +687,9 @@ def test_start_installs_forwards_and_returns_a_working_fetch(tmp_path: Path) -> 
     assert calls[2] == adb.install_cmd("U", str(server_apk))
     assert calls[3] == adb.install_cmd("U", str(test_apk))
     assert calls[4] == adb.forward_cmd("U")
-    # The returned fetch reads over the channel and narrows to the active window (no SystemUI window).
-    assert parse_hierarchy(channel.fetch(None).text) == parse_hierarchy(_APP_ONLY)
+    # The returned fetch reads over the channel and hands back the narrowed tree — the active
+    # window alone, no SystemUI window — already parsed, so the driver never parses the body twice.
+    assert elements_with_identities(channel.fetch(None).root)[0] == parse_hierarchy(_APP_ONLY)
 
 
 def test_start_returned_fetch_carries_the_pre_narrow_body_when_narrowing_changed_it(
@@ -367,7 +697,8 @@ def test_start_returned_fetch_carries_the_pre_narrow_body_when_narrowing_changed
 ) -> None:
     # `RawSourceProvider`/`rawTree`: narrowing is the one real structural transform in the whole
     # raw-dump-to-Element pipeline, so a raw-tree diagnostic needs the body from *before* it, not just
-    # the narrowed `text` every other caller already gets.
+    # the tree every other caller consumes. `text` is that body, and `narrowed` is what says the two
+    # differ (BE-0407 unit 23 moved the narrowed half from a string to the parsed tree).
     server_apk, test_apk = _apks(tmp_path)
     srv = adb_resident.ResidentServer(
         "U",
@@ -379,15 +710,16 @@ def test_start_returned_fetch_carries_the_pre_narrow_body_when_narrowing_changed
     )
     channel = srv.start()
     read = channel.fetch(None)
-    assert read.raw == _MULTI_WINDOW  # the untouched, pre-narrow body
-    assert read.raw != read.text  # narrowing genuinely changed something
+    assert read.text == _MULTI_WINDOW  # the untouched, pre-narrow body
+    assert read.narrowed is True  # narrowing genuinely changed something
+    assert elements_with_identities(read.root)[0] == parse_hierarchy(_APP_ONLY)
 
 
 def test_start_returned_fetch_carries_no_raw_body_when_narrowing_is_a_no_op(
     tmp_path: Path,
 ) -> None:
-    # An active-window-only dump (no SystemUI window to strip) passes through narrow_to_active_window
-    # unchanged — carrying an identical `raw` alongside `text` here would just double-write it.
+    # An active-window-only dump has no SystemUI window to strip, so narrowing changed nothing —
+    # and a `rawTree` capture told so writes one body rather than two identical ones.
     server_apk, test_apk = _apks(tmp_path)
     srv = adb_resident.ResidentServer(
         "U",
@@ -398,7 +730,7 @@ def test_start_returned_fetch_carries_no_raw_body_when_narrowing_is_a_no_op(
         test_apk=test_apk,
     )
     channel = srv.start()
-    assert channel.fetch(None).raw is None
+    assert channel.fetch(None).narrowed is False
 
 
 def test_fetch_fault_stops_the_server_before_it_propagates(tmp_path: Path) -> None:

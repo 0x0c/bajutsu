@@ -124,6 +124,7 @@ def _platform_config(platform: str, a: TargetConfig) -> PlatformConfig:
             app_path=a.app_path,
             build=a.build,
             grant_permissions=a.grant_permissions,
+            native_z=a.native_z,
         )
     return IosConfig(
         bundle_id=a.bundle_id,

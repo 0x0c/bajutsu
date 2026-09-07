@@ -18,6 +18,7 @@ import java.io.OutputStream
 import java.net.InetAddress
 import java.net.ServerSocket
 import java.net.Socket
+import java.net.SocketTimeoutException
 import java.net.URLDecoder
 import java.nio.charset.StandardCharsets
 import java.util.concurrent.TimeUnit
@@ -88,26 +89,53 @@ class ResidentServerTest {
         }
     }
 
+    /**
+     * Serve requests on one connection until the peer stops sending, then let it close.
+     *
+     * A connection per request cost a fresh TCP handshake on every read, every clock probe and every
+     * gesture — tens of milliseconds each, compounding across a scenario's many reads (BE-0407 unit
+     * 21, the Android peer of unit 11's XCUITest keep-alive). The loop ends the way the iOS runner's
+     * does: on a peer that has gone idle, on a request line that does not parse, and on a reply that
+     * could not be written — ending the connection rather than desynchronizing it.
+     *
+     * Safe to serve serially because the host holds exactly one resident connection at a time: reads,
+     * the clock probe and gestures all issue from the driver's own thread, and the one call that does
+     * run on a worker — the overlapped screenshot (BE-0407 unit 2) — goes through `adb exec-out
+     * screencap`, not through here.
+     */
     private fun handle(client: Socket, device: UiDevice, readMark: ReadMark) {
         // A stalled client (slow or incomplete request) must not block the single-threaded accept
         // loop: without a read timeout, readLine() would wait forever and wedge the whole server.
+        // With the connection now reused, the same timeout doubles as the idle ceiling on it.
         client.soTimeout = SO_TIMEOUT_MS
+        // A reply is small and the host blocks on it, so Nagle's delay buys nothing and can cost a
+        // round trip's worth of latency on exactly the exchanges this unit is shortening.
+        client.tcpNoDelay = true
         val reader = client.getInputStream().bufferedReader(StandardCharsets.UTF_8)
-        val target = readRequestTarget(reader) ?: return
         val out = client.getOutputStream()
-        when (target.substringBefore('?')) {
-            "/source" -> respondSource(out, device, readMark, sinceOf(target))
-            "/act" -> respondAct(out, device, readMark, target)
-            "/clock" ->
-                respond(
-                    out,
-                    "200 OK",
-                    "text/plain; charset=utf-8",
-                    SystemClock.uptimeMillis().toString().toByteArray(StandardCharsets.UTF_8),
-                )
-            else -> respond(out, "404 Not Found", "text/plain", "unknown path\n".toByteArray())
+        while (true) {
+            // Null is the peer having gone quiet — an ordinary end to a reused connection, not the
+            // fault the accept loop logs, so it returns rather than throwing.
+            val target = try {
+                readRequestTarget(reader) ?: return
+            } catch (e: SocketTimeoutException) {
+                Log.d(TAG, "connection idle past ${SO_TIMEOUT_MS}ms; closing it", e)
+                return
+            }
+            when (target.substringBefore('?')) {
+                "/source" -> respondSource(out, device, readMark, target)
+                "/act" -> respondAct(out, device, readMark, target)
+                "/clock" ->
+                    respond(
+                        out,
+                        "200 OK",
+                        "text/plain; charset=utf-8",
+                        SystemClock.uptimeMillis().toString().toByteArray(StandardCharsets.UTF_8),
+                    )
+                else -> respond(out, "404 Not Found", "text/plain", "unknown path\n".toByteArray())
+            }
+            out.flush()
         }
-        out.flush()
     }
 
     /** The request target (path plus any query) after the method; null if empty/malformed. */
@@ -169,11 +197,19 @@ class ResidentServerTest {
      * [publishHeader], which is what lets the host skip the read-lag barrier for it (BE-0339 Unit 5).
      */
     private fun respondAct(out: OutputStream, device: UiDevice, readMark: ReadMark, target: String) {
+        val kind = paramOf(target, "kind") ?: return respond(out, BAD_REQUEST, TEXT, "no kind\n".bytes())
+        device.waitForIdle()
+        sinceOf(target)?.let {
+            readMark.awaitPostdate(it, POSTDATE_BUDGET_MS)
+            device.waitForIdle()
+        }
+        // A pan names two points rather than an element, so it takes none of the identity fields
+        // below and resolves nothing here (BE-0407 unit 24).
+        if (kind == "swipe") return respondPan(out, device, readMark, target)
         // Validated, never defaulted. A missing or malformed field here would otherwise pick an
         // element by assumption — `index` 0 of `count` 1 — which is exactly the guess this endpoint
         // exists to refuse. An identity field may legitimately be empty (a node with no text), so
         // presence is required and emptiness is not.
-        val kind = paramOf(target, "kind") ?: return respond(out, BAD_REQUEST, TEXT, "no kind\n".bytes())
         val index = paramOf(target, "index")?.toIntOrNull()
             ?: return respond(out, BAD_REQUEST, TEXT, "no usable index\n".bytes())
         val count = paramOf(target, "count")?.toIntOrNull()
@@ -182,12 +218,7 @@ class ResidentServerTest {
             paramOf(target, it.first)
                 ?: return respond(out, BAD_REQUEST, TEXT, "no ${it.first}\n".bytes())
         }
-        device.waitForIdle()
-        sinceOf(target)?.let {
-            readMark.awaitPostdate(it, POSTDATE_BUDGET_MS)
-            device.waitForIdle()
-        }
-        val matches = settledActBounds(device, want)
+        val matches = settledActBounds(device, readMark, want)
         if (matches.size != count || index !in matches.indices) {
             // Loudly stale, never a guess: the screen the host resolved on is not the screen here, so
             // acting on `matches[index]` would be acting on a different element. The host re-resolves.
@@ -218,7 +249,71 @@ class ResidentServerTest {
         if (!landed) {
             return respond(out, INJECT_FAILED_STATUS, TEXT, "$kind rejected by the platform\n".bytes())
         }
-        respond(out, "200 OK", TEXT, "ok\n".bytes(), publishHeader(readMark, injectedAt))
+        respondLanded(out, device, readMark, injectedAt)
+    }
+
+    /**
+     * Inject a pan between two host-computed points, in the warm session (BE-0407 unit 24).
+     *
+     * The one gesture whose endpoints the host genuinely owns: a `scroll` step's `from`/`to` are
+     * screen fractions, and a directional `swipe`'s anchor is resolved above the driver, so unlike
+     * [respondAct]'s element gestures there is no identity to re-find here and nothing to answer
+     * `stale` about. What it does share is the reply: the pan is followed to its own publish before
+     * the answer goes out, so the host skips the read-lag barrier for it exactly as it does for a tap
+     * — which is the whole cost this unit removes, since a pan's confirming read used to exhaust the
+     * postdate budget on its own after `input swipe` had already exhausted it once.
+     */
+    private fun respondPan(out: OutputStream, device: UiDevice, readMark: ReadMark, target: String) {
+        val points = PAN_POINTS.map {
+            paramOf(target, it)?.toIntOrNull()
+                ?: return respond(out, BAD_REQUEST, TEXT, "no usable $it\n".bytes())
+        }
+        val (x1, y1, x2, y2) = points
+        val ms = paramOf(target, "durationMs")?.toIntOrNull()
+            ?: return respond(out, BAD_REQUEST, TEXT, "no usable durationMs\n".bytes())
+        val injectedAt = SystemClock.uptimeMillis()
+        // Steps, not milliseconds: `UiDevice.swipe` paces a drag in ~[SWIPE_STEP_MS] increments, the
+        // same conversion [respondAct]'s press-and-hold makes. The host asks for a duration because
+        // that is what keeps a `scroll`'s speed — and so its travel — the same on every device
+        // (BE-0400), and a step count is how this API expresses it.
+        if (!device.swipe(x1, y1, x2, y2, (ms / SWIPE_STEP_MS).coerceAtLeast(1))) {
+            return respond(out, INJECT_FAILED_STATUS, TEXT, "swipe rejected by the platform\n".bytes())
+        }
+        respondLanded(out, device, readMark, injectedAt)
+    }
+
+    /**
+     * Answer a gesture that landed: its publish confirmation, and the caught-up tree when there is one.
+     *
+     * The tree rides along only where the publish was confirmed (BE-0407 unit 19). That is the whole
+     * safety argument: a confirmed publish means an accessibility event postdates the injection, so a
+     * dump taken now cannot describe the pre-gesture screen — the same claim [publishHeader] already
+     * licenses the host to skip its read-lag barrier on. Unconfirmed, the dump could be the old
+     * screen, and handing one over would turn a barrier the host still arms into a stale tree it
+     * trusts. So an unconfirmed gesture answers exactly as it did before this unit.
+     *
+     * The saving is a whole round trip: the host's own `_settle` opens with a read it can now skip,
+     * measured by the investigation at 400-600ms on this backend.
+     */
+    private fun respondLanded(
+        out: OutputStream,
+        device: UiDevice,
+        readMark: ReadMark,
+        injectedAt: Long,
+    ) {
+        val published = publishHeader(readMark, injectedAt)
+        if (published.isEmpty()) return respond(out, "200 OK", TEXT, "ok\n".bytes())
+        // Snapshot before the settle, for the reason [respondSource] states at length: the mark must
+        // never outrun the body it is stamped on, or a stale tree would certify as caught up.
+        val mark = readMark.current()
+        val body = settledDump(device, readMark)
+        respond(
+            out,
+            "200 OK",
+            "application/xml; charset=utf-8",
+            body,
+            published + (READ_MARK_HEADER to mark.toString()),
+        )
     }
 
     /**
@@ -351,7 +446,8 @@ class ResidentServerTest {
 
     private fun String.bytes(): ByteArray = toByteArray(StandardCharsets.UTF_8)
 
-    private fun respondSource(out: OutputStream, device: UiDevice, readMark: ReadMark, since: Double?) {
+    private fun respondSource(out: OutputStream, device: UiDevice, readMark: ReadMark, target: String) {
+        val since = sinceOf(target)
         // dumpWindowHierarchy traverses every window, so this XML also carries the SystemUI status
         // bar (clock, wifi, battery, notification icons — 29 nodes) that the platform `uiautomator
         // dump` omits by scoping to the active window. `parse_hierarchy` parses the format unchanged.
@@ -375,9 +471,17 @@ class ResidentServerTest {
         // `awaitPostdate` has already advanced `current()` past `since`, so this undercount never
         // drops the mark back below the actuation it must clear.
         val mark = readMark.current()
-        val body = settledDump(device)
+        val body = settledDump(device, readMark)
         val headers = mutableMapOf(READ_MARK_HEADER to mark.toString())
-        nativeZHeader(device)?.let { headers[NATIVE_Z_HEADER] = it }
+        // Only when the host asked (BE-0407 unit 18). The walk covers every node on every read —
+        // 20-100ms — and answers nothing at all for an app that opted no view into `nativeZ`, which
+        // is every app but the ones BE-0355 was built for. The host asks on behalf of a target that
+        // says so in its own config, so the cost lands on the runs that read the value and on no
+        // others; an older host that never sends the parameter simply stops paying for a reading it
+        // was already discarding.
+        if (paramOf(target, "nativeZ") == "1") {
+            nativeZHeader(device)?.let { headers[NATIVE_Z_HEADER] = it }
+        }
         respond(
             out,
             "200 OK",
@@ -479,10 +583,30 @@ class ResidentServerTest {
      * that never settles (an animation) costs at most [SETTLE_DUMPS] reads and returns the last one,
      * exactly as the host's `AdbDriver._CATCHUP_DWELL_S` accepts a tear that outlasts its dwell.
      */
-    private fun <T> settled(device: UiDevice, label: String, read: () -> T, sameAs: (T, T) -> Boolean): T {
+    private fun <T> settled(
+        device: UiDevice,
+        readMark: ReadMark,
+        label: String,
+        read: () -> T,
+        sameAs: (T, T) -> Boolean,
+    ): T {
+        // The mark is sampled *before* each read, never after, so an event that lands while a read is
+        // in flight advances it and forces the confirming read. Sampling after would let such an
+        // event be credited to the read that predates it.
+        var mark = readMark.current()
         var previous = read()
         repeat(SETTLE_DUMPS - 1) {
             device.waitForIdle()
+            // Nothing was republished while the last read was taken or since (BE-0407 unit 17). A
+            // node's bounds reach a dump by way of an accessibility event — the premise the whole
+            // mark barrier already rests on (BE-0332) — so a second dump here could only re-derive
+            // the tree just read. The confirming read exists to catch *tearing*, and there is
+            // nothing to tear when nothing published: this is a stronger answer than two agreeing
+            // dumps, not a weaker one, and it is what the second dump was paying 100-200ms to
+            // establish.
+            val now = readMark.current()
+            if (now == mark) return previous
+            mark = now
             val current = read()
             if (sameAs(current, previous)) return current
             previous = current
@@ -495,8 +619,8 @@ class ResidentServerTest {
      * [respondSource], which answers an arbitrary host-side selector and so cannot narrow the
      * comparison the way [settledActBounds] does for `/act`.
      */
-    private fun settledDump(device: UiDevice): ByteArray =
-        settled(device, "hierarchy", { dumpHierarchy(device) }, ByteArray::contentEquals)
+    private fun settledDump(device: UiDevice, readMark: ReadMark): ByteArray =
+        settled(device, readMark, "hierarchy", { dumpHierarchy(device) }, ByteArray::contentEquals)
 
     /**
      * Like [settledDump], but scoped to the identity `/act` has already resolved: settles once two
@@ -513,10 +637,10 @@ class ResidentServerTest {
      * check skips the [XmlPullParser] walk on a screen that has genuinely gone idle, rather than paying
      * it on every settle attempt.
      */
-    private fun settledActBounds(device: UiDevice, want: List<String>): List<Rect> {
+    private fun settledActBounds(device: UiDevice, readMark: ReadMark, want: List<String>): List<Rect> {
         var seenXml: ByteArray? = null
         var seenBounds = emptyList<Rect>()
-        return settled(device, "act bounds", {
+        return settled(device, readMark, "act bounds", {
             val xml = dumpHierarchy(device)
             if (seenXml?.contentEquals(xml) != true) {
                 seenBounds = matchingBounds(xml, want)
@@ -541,7 +665,10 @@ class ResidentServerTest {
             append("Content-Type: ").append(contentType).append("\r\n")
             append("Content-Length: ").append(body.size).append("\r\n")
             for ((name, value) in extraHeaders) append(name).append(": ").append(value).append("\r\n")
-            append("Connection: close\r\n")
+            // The connection stays open for the next request on it (BE-0407 unit 21); `Content-Length`
+            // above is what lets the client find where this reply ends, so the framing needs nothing
+            // more than the header it already sent.
+            append("Connection: keep-alive\r\n")
             append("\r\n")
         }
         out.write(header.toByteArray(StandardCharsets.UTF_8))
@@ -685,6 +812,11 @@ class ResidentServerTest {
         // `UiDevice.swipe` paces a drag in steps of about this long, so a press-and-hold's duration is
         // requested as a step count.
         const val SWIPE_STEP_MS = 10
+
+        // The four coordinates a pan names (BE-0407 unit 24), in the order `respondPan` reads them.
+        // Unlike an element gesture's identity fields, these are the host's own numbers: a `scroll`
+        // step's endpoints are screen fractions it resolved, so there is nothing to re-find here.
+        val PAN_POINTS = listOf("x1", "y1", "x2", "y2")
         const val DEFAULT_LONG_PRESS_MS = 700
 
         // The double tap's two intervals, both comfortably inside the platform's 300ms window and

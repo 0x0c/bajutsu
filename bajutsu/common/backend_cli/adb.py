@@ -56,8 +56,14 @@ def real_run(args: list[str]) -> str:
     return subprocess.run(args, capture_output=True, text=True, check=True).stdout
 
 
-def _num(v: float) -> str:
-    return str(round(v))  # `input tap`/`swipe` take integer coordinates
+def pixel(v: float) -> str:
+    """A coordinate as the integer pixel a device command takes.
+
+    Public because the resident channel sends the same numbers over HTTP (BE-0407 unit 24) and the two
+    must round identically — a pan injected device-side has to land where the coordinate path would
+    have put it, or the same step travels differently depending on which channel carried it.
+    """
+    return str(round(v))
 
 
 # A device serial / emulator id follows the shared `device_id` policy (never leading with `-`,
@@ -228,7 +234,7 @@ KEYCODE_C = 31  # the `C` key — with Ctrl held, "copy" the active selection (B
 
 
 def tap_cmd(serial: str, x: float, y: float) -> list[str]:
-    return _adb(serial, "shell", "input", "tap", _num(x), _num(y))
+    return _adb(serial, "shell", "input", "tap", pixel(x), pixel(y))
 
 
 def wm_size_cmd(serial: str) -> list[str]:
@@ -246,7 +252,7 @@ def double_tap_cmd(serial: str, x: float, y: float) -> list[str]:
     avoid. A rooted device closes that gap instead with `sendevent_double_tap_cmd` (BE-0208); this
     remains the fallback when root or the touchscreen node is unavailable.
     """
-    xs, ys = _num(x), _num(y)
+    xs, ys = pixel(x), pixel(y)
     return _adb(serial, "shell", "input", "tap", xs, ys, ";", "input", "tap", xs, ys)
 
 
@@ -518,7 +524,9 @@ def keycombination_cmd(serial: str, keycodes: list[int]) -> list[str]:
 
 def swipe_cmd(serial: str, x1: float, y1: float, x2: float, y2: float, ms: int = 300) -> list[str]:
     # A finite duration makes it a real drag; a zero-duration swipe is a fling, not a pan.
-    return _adb(serial, "shell", "input", "swipe", _num(x1), _num(y1), _num(x2), _num(y2), str(ms))
+    return _adb(
+        serial, "shell", "input", "swipe", pixel(x1), pixel(y1), pixel(x2), pixel(y2), str(ms)
+    )
 
 
 def shell_cmd(serial: str) -> list[str]:
@@ -588,6 +596,15 @@ def install_cmd(serial: str, apk_path: str) -> list[str]:
 
 def uninstall_cmd(serial: str, package: str) -> list[str]:
     return _adb(serial, "uninstall", package)
+
+
+def package_path_cmd(serial: str, package: str) -> list[str]:
+    """Ask where a package's APK sits on the device; empty output means it is not installed.
+
+    `pm path` rather than `pm list packages`, because it names one package directly instead of
+    filtering a list the device has to build.
+    """
+    return _adb(serial, "shell", "pm", "path", package)
 
 
 # --- resident UI Automator server (BE-0245) ---
