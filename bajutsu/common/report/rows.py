@@ -470,9 +470,6 @@ def _after_rows(
                 row = _step_run_row(i, step_def, out, run_dir, at, shown_from[i])
                 row["num"] = f"{on}·{out.index}"
                 stopped = not out.ok
-            # The rule word makes this `#` cell wider than a plain index ever gets (`success·12`),
-            # so it needs the `#` column's own width/wrap rule rather than the numeric default.
-            row["numcls"] = "nphase"
             rows.append(row)
     return rows
 

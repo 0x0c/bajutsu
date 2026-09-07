@@ -245,9 +245,8 @@ details.pre[open]>summary::before{transform:rotate(90deg)}
    content-sized (`auto`/`1fr`), not hardcoded rems, so a long `after`-table `#` cell
    ("success·12") or a long `detail` never overflows or clips the way a fixed-width table column
    once did — the layout simply grows to fit. `thead` is dropped: with meaning carried by
-   position, the header row's only job left is a label, and each cell already gets one from
-   `::before`, keyed off its column position (nth-child) rather than needing a first-row source
-   of truth to read it from. */
+   position, the header row's only job left is a label, and the one cell that still needs one
+   (`reason`) gets it from its own `::before` below. */
 .sttbl thead{display:none}
 .sttbl,.sttbl>tbody{display:block}
 .sttbl>tbody>tr:not(.nxdetail):not(.alertrow):not(.actrow):not(.genrow):not(.visrow){
@@ -256,8 +255,12 @@ details.pre[open]>summary::before{transform:rotate(90deg)}
   border-bottom:1px solid var(--line);padding:.5rem 0}
 .sttbl>tbody>tr.nxdetail,.sttbl>tbody>tr.alertrow,.sttbl>tbody>tr.actrow,.sttbl>tbody>tr.genrow,.sttbl>tbody>tr.visrow{
   display:block;border-bottom:1px solid var(--line);padding:.4rem 0}
+/* `hidden` on the collapsed exchange row (`tr.nxdetail`) is backed only by the UA stylesheet's
+   `[hidden]{display:none}`, which any author `display` — including the block rule just above —
+   overrides regardless of specificity. Restore it explicitly. */
+.sttbl>tbody>tr[hidden]{display:none}
 .sttbl>tbody>tr:not(.nxdetail):not(.alertrow):not(.actrow):not(.genrow):not(.visrow)>td{
-  display:block;width:auto;white-space:normal}
+  display:block;width:auto;white-space:normal;border-bottom:0}
 .sttbl>tbody>tr:not(.nxdetail):not(.alertrow):not(.actrow):not(.genrow):not(.visrow)>td:empty{display:none}
 /* `reason` is the only cell that still carries a text label: free-text failure output needs the
    context, where result/action/at/detail/view are already self-evident from a colored badge, a
@@ -296,12 +299,15 @@ details.pre[open]>summary::before{transform:rotate(90deg)}
 tr.skip td{color:var(--mut);opacity:.65}
 /* A system prompt the guard cleared so a blocked step could be retried (a sub-row under
    the step, and a note under the expectations table). */
-tr.alertrow>td{background:#fdf3ec;border-top:1px dashed var(--line);color:var(--mut);
+/* `display:block`: left as the default `table-cell`, a colspan cell whose `tr` is no longer a
+   table-row (the block rule above) gets an anonymous shrink-to-fit table box instead of spanning
+   the row, so its tint and border stop at the content's own width. */
+tr.alertrow>td{display:block;background:#fdf3ec;border-top:1px dashed var(--line);color:var(--mut);
  font:.78rem/1.5 -apple-system,system-ui,sans-serif;padding:.18rem .7rem}
 .alertnote{margin-top:.45rem;color:var(--mut);font-size:.8rem}
 /* What the driver actually did to the screen (a sub-row under the step, and a note under the
    expectations table when the guard actuated during the scenario-level re-check). */
-tr.actrow>td{background:var(--card);border-top:1px dashed var(--line);color:var(--mut);
+tr.actrow>td{display:block;background:var(--card);border-top:1px dashed var(--line);color:var(--mut);
  font:.76rem/1.6 ui-monospace,SFMono-Regular,Menlo,monospace;padding:.18rem .7rem}
 .actnote{margin-top:.45rem;color:var(--mut);font-size:.78rem}
 .actn{display:inline-block;margin-right:.9rem}
@@ -313,7 +319,7 @@ tr.actrow>td{background:var(--card);border-top:1px dashed var(--line);color:var(
 .actn-r,.actn-drop{color:var(--ng)}
 .actn-s{opacity:.85;font-style:italic}
 /* The value a `generate` step produced for ${vars.*} (a sub-row under the step). */
-tr.genrow>td{background:var(--card);border-top:1px dashed var(--line);color:var(--mut);
+tr.genrow>td{display:block;background:var(--card);border-top:1px dashed var(--line);color:var(--mut);
  font:.76rem/1.6 ui-monospace,SFMono-Regular,Menlo,monospace;padding:.18rem .7rem}
 .vtoggle{display:inline-flex;border:1px solid var(--line);border-radius:7px;overflow:hidden;margin-bottom:.6rem}
 .vt{background:var(--card);color:var(--mut);border:0;cursor:pointer;font:600 .78rem -apple-system,system-ui,sans-serif;
@@ -351,13 +357,15 @@ details.nx>summary::-webkit-details-marker{display:none}
    click target; its full settings table expands into a separate full-width row below
    (so it gets the whole width, not the cramped detail column). */
 .act-net{background:#4a5568}
-tr.nrow td{background:#f4f6fb;border-top:1px dashed var(--line)}
+/* On the `tr` itself, not `td` — see the `.srow` rows' own comment above; a network exchange row
+   shares the same grid-with-gaps `.sttbl` now. */
+tr.nrow{background:#f4f6fb;border-top:1px dashed var(--line)}
 td.nix{color:var(--mut);text-align:center}
 tr.xrow{cursor:pointer}
-tr.xrow:hover td{background:#eef4ff}
+tr.xrow:hover{background:#eef4ff}
 .xmark{display:inline-block;color:var(--mut);transition:transform .15s}
 tr.xrow.open .xmark{transform:rotate(90deg)}
-tr.nxdetail>td{background:#fafafb;padding:.15rem .7rem .5rem}
+tr.nxdetail>td{display:block;background:#fafafb;padding:.15rem .7rem .5rem}
 .nxtbl{border-collapse:collapse;width:100%;margin:0}
 .nxtbl td{border:0;padding:.05rem 0;vertical-align:top}
 .nxtbl td.nxk{color:var(--mut);font:600 .76rem -apple-system,system-ui,sans-serif;
@@ -425,9 +433,10 @@ tr.visrow>td{background:#fafafb}
  .tv-nav:hover:not(:disabled){border-color:#5b9cff;color:#5b9cff}
  tr.ng{background:#3a2422}
  tr.srow:hover{background:#2a2f3a}
- tr.xrow:hover td,.tvtbl tr.tvrow:hover td{background:#2a2f3a}
+ tr.xrow:hover{background:#2a2f3a}
+ .tvtbl tr.tvrow:hover td{background:#2a2f3a}
  tr.srow.playing{background:#3a3520}
- tr.nrow td{background:#1d2230}
+ tr.nrow{background:#1d2230}
  .nxbody,tr.nxdetail>td{background:#1b1c1f}
  img.shot,.tv-shot img{background:#2a2b2f}
  .vt.active{background:#4a4d52}

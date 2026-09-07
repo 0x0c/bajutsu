@@ -388,7 +388,8 @@
       var endAttr = m.getAttribute('data-t-end');
       var tEnd = endAttr !== null ? parseFloat(endAttr) : NaN;
       if(!isNaN(tEnd) && tEnd > t){
-        var EDGE = 6, rect = m.getBoundingClientRect(), x = e.clientX - rect.left;
+        var rect = m.getBoundingClientRect(), x = e.clientX - rect.left;
+        var EDGE = Math.min(6, rect.width / 2);   // a sub-12px bar splits at its midpoint instead
         if(x <= EDGE){ /* exact start */ }
         else if(x >= rect.width - EDGE){ t = tEnd; }
         else{

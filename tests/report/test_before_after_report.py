@@ -90,6 +90,10 @@ def test_html_shows_the_phases_as_their_own_blocks() -> None:
     # The rule's outcome word rides the `#` cell, so a reader can tell unconditional teardown from
     # teardown this run's verdict selected without a second table.
     assert "always·0" in html
+    # Each phase's rows carry the `data-phase` the seekbar's `bands()` keys off (report.js) to
+    # draw the before/after bands — distinct from the scenario's own steps, which carry none.
+    assert "data-phase='before'" in html
+    assert "data-phase='after'" in html
 
 
 def test_html_after_block_shows_only_the_dispatched_rules() -> None:

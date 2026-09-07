@@ -72,6 +72,42 @@ def test_html_step_rows_carry_video_offset() -> None:
     assert "timeupdate" in out and "playing" in out
 
 
+def test_html_step_row_carries_its_own_end_instant_when_it_differs_from_the_start() -> None:
+    # A step long enough that its end reads differently from its start (rounded to .1s) gets a
+    # second jump target — the `data-t-end` the row carries, and the "→" button report.js turns
+    # it into.
+    r = RunResult(
+        scenario="s1",
+        ok=True,
+        steps=[StepOutcome(index=0, action="wait", ok=True, duration_s=1.1, started_at=1.5)],
+        expect_results=[],
+        artifacts=[Artifact("00-s1/scenario.mp4", "video", "simctl")],
+    )
+    out = html_report("run1", [r])
+    assert "data-t='1.500'" in out and "data-t-end='2.600'" in out
+    assert ">→2.6s<" in out
+
+
+def test_html_step_row_omits_the_end_instant_when_rounding_matches_the_start() -> None:
+    # A near-instant action's end rounds to the same display text as its start — no second jump
+    # target, since it would seek to (in effect) the same instant the row's own start already does.
+    r = RunResult(
+        scenario="s1",
+        ok=True,
+        steps=[StepOutcome(index=0, action="tap", ok=True, duration_s=0.02, started_at=1.5)],
+        expect_results=[],
+        artifacts=[Artifact("00-s1/scenario.mp4", "video", "simctl")],
+    )
+    out = html_report("run1", [r])
+    assert "data-t='1.500'" in out
+    # Single-quoted: the row's own attribute, not the (double-quoted) JS source that builds the
+    # seekbar's range-bar markup for rows that *do* have one, which is present on every page.
+    assert "data-t-end='" not in out
+    # The class name alone is a substring of the inlined stylesheet's own rules (present on every
+    # page); the rendered button element is what actually depends on this step's own duration.
+    assert 'class="stepjump stepjump-end"' not in out
+
+
 def test_html_derives_the_video_offset_from_absolute_timestamps() -> None:
     # A step records the absolute instant it began; the seek offset is derived here, at render time,
     # by subtracting the scenario's video anchor (BE-0348) — so an improved anchor makes an already
