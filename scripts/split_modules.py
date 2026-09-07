@@ -91,6 +91,41 @@ def _own_imports(node: cst.FunctionDef) -> set[str]:
     return collected.names
 
 
+# The subscript heads whose arguments are types, so a quoted argument under one is a forward
+# reference. Anywhere else — `row["Beta"]` — the string is a value, and reading it as a name
+# fabricates a reference to a sibling the file never uses.
+_TYPING_HEADS = frozenset(
+    {
+        "Annotated",
+        "Awaitable",
+        "Callable",
+        "ClassVar",
+        "Coroutine",
+        "Dict",
+        "Final",
+        "FrozenSet",
+        "Generator",
+        "Iterable",
+        "Iterator",
+        "List",
+        "Mapping",
+        "Optional",
+        "Sequence",
+        "Set",
+        "Tuple",
+        "Type",
+        "TypeGuard",
+        "Union",
+        "dict",
+        "frozenset",
+        "list",
+        "set",
+        "tuple",
+        "type",
+    }
+)
+
+
 def _subscript_head(node: cst.Subscript) -> str | None:
     """The rightmost name of a subscript's target — `Literal` for both `Literal[…]` forms."""
     value: cst.BaseExpression = node.value
@@ -113,6 +148,7 @@ class _References(cst.CSTVisitor):
         self.rebound: set[str] = set()
         self.annotated: set[str] = set()
         self.uses_file: bool = False
+        self.uses_name: bool = False
         self._annotation_depth = 0
         # One frame per enclosing function, holding the names that function imports for itself.
         self._local_imports: list[set[str]] = []
@@ -143,6 +179,8 @@ class _References(cst.CSTVisitor):
     def visit_Name(self, node: cst.Name) -> bool:
         if node.value == "__file__":
             self.uses_file = True
+        elif node.value == "__name__":
+            self.uses_name = True
         self._record(node.value)
         return False
 
@@ -201,13 +239,16 @@ class _References(cst.CSTVisitor):
         defer under `TYPE_CHECKING` — leaving the name undefined at the moment it is used.
         """
         node.value.visit(self)
-        # `Literal["Beta"]`'s string is a value, not a forward reference. Parsing it as one imports
-        # a sibling the file never uses, and two such strings can close a cycle out of nothing.
-        literal = _subscript_head(node) == "Literal"
+        # `Literal["Beta"]`'s string is a value, not a forward reference. So is `row["Beta"]`'s.
+        # Parsing either as one imports a sibling the file never uses, and two such strings can
+        # close a cycle out of nothing.
+        head = _subscript_head(node)
+        # `Literal` is never a forward-reference position, however deep in an annotation it sits.
+        typed = head != "Literal" and (self._annotation_depth > 0 or head in _TYPING_HEADS)
         for element in node.slice:
             index = element.slice
             if isinstance(index, cst.Index) and isinstance(index.value, cst.SimpleString):
-                if literal:
+                if not typed:
                     continue
                 self._annotation_depth += 1
                 self._visit_quoted(index.value)
@@ -216,6 +257,16 @@ class _References(cst.CSTVisitor):
                 # `Literal[Colour.RED]` still reads `Colour`, so a non-string element is never
                 # skipped, whatever the subscript's head.
                 element.visit(self)
+        return False
+
+    def visit_TypeAlias(self, node: cst.TypeAlias) -> bool:
+        # A PEP 695 alias evaluates its value lazily, so the names in it are annotation reads. Read
+        # as runtime ones they would keep a cycle unbreakable that deferral could have broken.
+        if node.type_parameters is not None:
+            node.type_parameters.visit(self)
+        self._annotation_depth += 1
+        node.value.visit(self)
+        self._annotation_depth -= 1
         return False
 
     def visit_Annotation(self, node: cst.Annotation) -> bool:
@@ -657,6 +708,7 @@ def _file_reads(
         reads.all |= collected.all
         reads.runtime |= collected.runtime
         reads.annotated |= collected.annotated
+        reads.uses_name |= collected.uses_name
     return reads
 
 
@@ -941,7 +993,13 @@ def plan_split(source: str, *, name: str = "<module>", allow_file_paths: bool = 
     scanned = dict(reads_by_stem)
     scanned[INIT_MODULE] = _file_reads(owned.get(INIT_MODULE, []), [])
     for stem, reads in scanned.items():
-        borrowed = sorted(name for name in reads.all & rebound if stems.get(name, stem) != stem)
+        borrowed = sorted(
+            # `FUNCTIONS_MODULE` as the default: a name only a `global` binds has no entry in
+            # `stems`, and defaulting to `stem` would read as "this file owns it" for every file.
+            name
+            for name in reads.all & rebound
+            if stems.get(name, FUNCTIONS_MODULE) != stem
+        )
         if borrowed:
             raise SplitError(
                 f"{stem}.py reads {', '.join(borrowed)}, which another file rebinds with `global`; "
@@ -965,6 +1023,15 @@ def plan_split(source: str, *, name: str = "<module>", allow_file_paths: bool = 
         for stem in reads_by_stem
     }
     files["__init__.py"] = _render_init(parsed, stems, owned.get(INIT_MODULE, []), rebound)
+    renamed = sorted(stem for stem, reads in reads_by_stem.items() if reads.uses_name)
+    if renamed:
+        # Not a refusal: `logging.getLogger(__name__)` is in most of these modules, and the new name
+        # is a child of the old one, so a handler or level set on the package still reaches it. Only
+        # the name a record prints changes, which is worth saying once per file.
+        notes.append(
+            f"  __name__ moves one level deeper in {', '.join(renamed)}.py — a logger "
+            "named from it prints the new, longer name"
+        )
     if parsed.main_guard is not None:
         files["__main__.py"] = _render_main(parsed, stems)
     return SplitPlan(files=files, notes=tuple(notes + cycle_notes))

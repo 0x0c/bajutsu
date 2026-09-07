@@ -1326,8 +1326,8 @@ def test_a_dunder_all_naming_an_imported_name_is_refused() -> None:
 
 
 def test_a_global_rebinding_inside_a_class_method_is_refused() -> None:
-    # Rule 2 sends the binding to `_functions.py`, which a method's `global` cannot reach — the
-    # rebinding would write the class's own module instead, and the memo never propagates.
+    # A method's `global` cannot reach a name the split moves to another file: the rebinding
+    # writes the class's own module instead, and the memo never propagates.
     with pytest.raises(SplitError, match="rebinds _MEMO with `global`"):
         _plan(
             """
@@ -1895,3 +1895,92 @@ def test_a_name_only_a_global_binds_needs_no_refusal() -> None:
     )
     assert "RUNTIME" not in plan.files["__init__.py"]
     assert plan.notes == ()
+
+
+def test_a_pep_695_type_alias_reads_like_an_annotation() -> None:
+    # `type X = list[Beta]` is evaluated lazily, so its names are annotation reads. Classing them
+    # as runtime ones leaves a cycle unbreakable that deferral could have broken.
+    plan = _plan(
+        """
+        from __future__ import annotations
+
+
+        class Alpha:
+            type Pair = list[Beta]
+
+
+        class Beta:
+            def make(self) -> object:
+                return Alpha()
+        """
+    )
+    assert "if TYPE_CHECKING:" in plan.files["alpha.py"]
+    assert plan.notes == ()
+
+
+def test_a_dict_key_is_not_read_as_a_forward_reference() -> None:
+    # `row["Beta"]` is a lookup, not a type. Reading its string as a name drags in a sibling the
+    # file never uses, and two such keys manufacture a cycle out of nothing.
+    plan = _plan(
+        """
+        from __future__ import annotations
+
+
+        class Alpha:
+            def read(self, row: dict[str, str]) -> str:
+                return row["Beta"]
+
+
+        class Beta:
+            def read(self, row: dict[str, str]) -> str:
+                return row["Alpha"]
+        """
+    )
+    assert "from .beta import Beta" not in plan.files["alpha.py"]
+    assert "if TYPE_CHECKING:" not in plan.files["alpha.py"]
+    assert plan.notes == ()
+
+
+def test_a_sibling_reading_a_global_only_binding_is_refused() -> None:
+    # The name has no entry in `stems`, so the borrowed check has to default to where rule 2 puts
+    # the function that creates it — defaulting to the reading file reads as "this file owns it".
+    with pytest.raises(SplitError, match="rebinds with `global`"):
+        _plan(
+            """
+            class Alpha:
+                def read(self) -> int:
+                    return COUNTER
+
+
+            class Beta:
+                pass
+
+
+            def bump() -> None:
+                global COUNTER
+
+                COUNTER = 1
+            """
+        )
+
+
+def test_a_module_reading_dunder_name_says_so() -> None:
+    # Not a refusal: the new name is a child of the old one, so a handler or level set on the
+    # package still reaches the logger. Only the name a record prints changes.
+    plan = _plan(
+        """
+        import logging
+
+        _logger = logging.getLogger(__name__)
+
+
+        class Alpha:
+            def log(self) -> None:
+                _logger.info("x")
+
+
+        class Beta:
+            pass
+        """
+    )
+    assert any("__name__ moves one level deeper" in note for note in plan.notes)
