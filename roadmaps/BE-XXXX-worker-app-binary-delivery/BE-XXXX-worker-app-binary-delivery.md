@@ -54,7 +54,8 @@ deployment whose worker holds no copy of the app.
 
 The design reuses the mechanism BE-0160 already built for visual baselines. The control plane signs
 a URL (uniform resource locator). The worker fetches over plain HTTP, with no cloud credentials of
-its own. One presigned GET URL for the bundle zip joins `baseline_urls` in the lease response.
+its own. The lease response gains a new `bundle_urls` field, beside the `baseline_urls` that
+already travel the same way. It carries one presigned GET URL per stored object the bundle holds.
 
 ### Unit 1 — One description of a bound upload, for either bind kind
 

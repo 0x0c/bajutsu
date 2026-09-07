@@ -539,6 +539,9 @@ def test_run_with_heartbeat_reclaimed_on_409(
         url: str, body: dict[str, Any], *, token: str | None = None, timeout: float | None = None
     ) -> tuple[int, Any]:
         release.set()  # let the job finish so the follow-up join() returns
+        # Asserted, not merely accepted: deleting the kwarg would otherwise leave the suite green
+        # (`_run_with_heartbeat`'s heartbeat POST carries why it is bounded). `_run_hb` passes 0.02.
+        assert timeout == 0.02
         return 409, {}  # the control plane reclaimed the lease
 
     monkeypatch.setattr(worker_mod, "_post_json", hb_409)
