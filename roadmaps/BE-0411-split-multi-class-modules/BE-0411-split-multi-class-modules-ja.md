@@ -9,7 +9,7 @@
 | 提案者 | [@0x0c](https://github.com/0x0c) |
 | 状態 | **実装中** |
 | トラッキング Issue | [検索](https://github.com/bajutsu-e2e/bajutsu/issues?q=is%3Aissue+label%3Aroadmap-tracking+in%3Atitle+"BE-0411") |
-| 実装 PR | PR_ROW_PLACEHOLDER |
+| 実装 PR | [#1940](https://github.com/bajutsu-e2e/bajutsu/pull/1940) |
 | トピック | コードベース品質・技術的負債 |
 <!-- /BE-METADATA -->
 
@@ -301,7 +301,7 @@ schemaと`Driver`Protocolをポータブルな内側の層に保つcontractに�
 
 ログ：
 
-- PR_LOG_PLACEHOLDER — 全バッチを一度に実施しました。まず`scripts/split_modules.py`と
+- [#1940](https://github.com/bajutsu-e2e/bajutsu/pull/1940) — 全バッチを一度に実施しました。まず`scripts/split_modules.py`と
   そのテストスイートを入れ、続けて14バッチを順に適用しました。その結果、`bajutsu/`配下に
   トップレベルクラスを2つ以上持つモジュールはなくなりました。既存のテストスイートは全過程を通じて
   無改変のまま通っており、この再配置が振る舞いを一切運んでいないことを、その事実が示しています。

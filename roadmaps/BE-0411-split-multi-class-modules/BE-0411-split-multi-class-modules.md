@@ -9,7 +9,7 @@
 | Author | [@0x0c](https://github.com/0x0c) |
 | Status | **In progress** |
 | Tracking issue | [Search](https://github.com/bajutsu-e2e/bajutsu/issues?q=is%3Aissue+label%3Aroadmap-tracking+in%3Atitle+"BE-0411") |
-| Implementing PR | PR_ROW_PLACEHOLDER |
+| Implementing PR | [#1940](https://github.com/bajutsu-e2e/bajutsu/pull/1940) |
 | Topic | Codebase quality & technical debt |
 <!-- /BE-METADATA -->
 
@@ -301,7 +301,7 @@ file. Batch 7's commit also updates the `ignore_imports` entry in `pyproject.tom
 
 Log:
 
-- PR_LOG_PLACEHOLDER — every batch, in one pass.
+- [#1940](https://github.com/bajutsu-e2e/bajutsu/pull/1940) — every batch, in one pass.
   `scripts/split_modules.py` and its suite land first. The 14 batches then
   follow in order. No module under `bajutsu/` now defines more than one
   top-level class. The whole existing test suite passes unaltered
