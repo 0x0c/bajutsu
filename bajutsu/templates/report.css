@@ -240,19 +240,22 @@ details.pre[open]>summary::before{transform:rotate(90deg)}
 .exreason{color:var(--ng);font-size:.8rem;font-style:italic}
 /* Every step's row is a small grid, not a table row, at every viewport width: `id` sits in its
    own narrow leading column, vertically centered against the whole row; result/action/at share
-   a compact first line; detail spans the width below them; view sits beside detail on the
-   right; reason (when the step has one) gets its own line under detail. Grid track widths are
-   content-sized (`auto`/`1fr`), not hardcoded rems, so a long `after`-table `#` cell
-   ("success·12") or a long `detail` never overflows or clips the way a fixed-width table column
-   once did — the layout simply grows to fit. `thead` is dropped: with meaning carried by
-   position, the header row's only job left is a label, and the one cell that still needs one
-   (`reason`) gets it from its own `::before` below. */
+   a compact first line, each a label beside its own value; detail spans the width below them,
+   unlabeled; view sits beside detail on the right, its own label beside it too; reason (when the
+   step has one) gets its own line under detail, its label above since it can run to more than
+   one line. Grid track widths are content-sized (`auto`/`1fr`), not hardcoded rems, so a long
+   `after`-table `#` cell ("success·12") or a long `detail` never overflows or clips the way a
+   fixed-width table column once did — the layout simply grows to fit. `thead` is dropped: with
+   the header text moved onto each cell as its own label, a first row to source it from is no
+   longer needed. Padding is zeroed on every cell (the generic `th,td` rule below would otherwise
+   stack its own `.32rem` on top of this row's own spacing) and left to `row-gap`/`column-gap`
+   and the row's own padding instead — the single place that now controls it. */
 .sttbl thead{display:none}
 .sttbl,.sttbl>tbody{display:block}
 .sttbl>tbody>tr:not(.nxdetail):not(.alertrow):not(.actrow):not(.genrow):not(.visrow){
-  display:grid;grid-template-columns:minmax(1.4rem,auto) auto auto 1fr auto;
-  grid-template-rows:auto auto auto;column-gap:.6rem;row-gap:.3rem;align-items:start;
-  border-bottom:1px solid var(--line);padding:.5rem 0}
+  display:grid;grid-template-columns:minmax(1.4rem,auto) minmax(0,auto) minmax(0,auto) 1fr minmax(0,auto);
+  grid-template-rows:auto auto auto;column-gap:.7rem;row-gap:.2rem;align-items:center;
+  border-bottom:1px solid var(--line);padding:.4rem 0}
 .sttbl>tbody>tr.nxdetail,.sttbl>tbody>tr.alertrow,.sttbl>tbody>tr.actrow,.sttbl>tbody>tr.genrow,.sttbl>tbody>tr.visrow{
   display:block;border-bottom:1px solid var(--line);padding:.4rem 0}
 /* `hidden` on the collapsed exchange row (`tr.nxdetail`) is backed only by the UA stylesheet's
@@ -260,37 +263,51 @@ details.pre[open]>summary::before{transform:rotate(90deg)}
    overrides regardless of specificity. Restore it explicitly. */
 .sttbl>tbody>tr[hidden]{display:none}
 .sttbl>tbody>tr:not(.nxdetail):not(.alertrow):not(.actrow):not(.genrow):not(.visrow)>td{
-  display:block;width:auto;white-space:normal;border-bottom:0}
+  display:block;width:auto;white-space:normal;border-bottom:0;padding:0}
 .sttbl>tbody>tr:not(.nxdetail):not(.alertrow):not(.actrow):not(.genrow):not(.visrow)>td:empty{display:none}
-/* `reason` is the only cell that still carries a text label: free-text failure output needs the
-   context, where result/action/at/detail/view are already self-evident from a colored badge, a
-   plain time, or their fixed position. */
-.sttbl>tbody>tr:not(.nxdetail):not(.alertrow):not(.actrow):not(.genrow):not(.visrow)>td::before{
-  display:block;color:var(--mut);font:600 .64rem/1.4 -apple-system,system-ui,sans-serif;
-  text-transform:uppercase;letter-spacing:.04em;margin-bottom:.12rem}
-/* id: column 1, spanning (and centered across) all three rows. */
+/* The label sits to the left of the value, not above it, so `display:flex` puts the `::before`
+   label (generated first) and the cell's own child(ren) — one badge, or the `at` cell's two jump
+   buttons — on one line. `detail` is the one cell excluded below: its content is several sibling
+   tokens rather than one value, and flexing it would lay each one out as its own shrunk column
+   (the same collapse a fixed-width table column once caused, one level down) — so it stays
+   unlabeled and in normal block flow, per its own rule further down. */
+.sttbl>tbody>tr:not(.nxdetail):not(.alertrow):not(.actrow):not(.genrow):not(.visrow)>td:not(:nth-child(4))::before{
+  display:inline;flex:none;color:var(--mut);font:600 .64rem -apple-system,system-ui,sans-serif;
+  text-transform:uppercase;letter-spacing:.04em}
+/* id: column 1, spanning (and centered across) all three rows. No label — position is one. */
 .sttbl>tbody>tr:not(.nxdetail):not(.alertrow):not(.actrow):not(.genrow):not(.visrow)>td:nth-child(1){
   grid-column:1;grid-row:1/4;align-self:center;color:var(--mut);font-weight:600}
-/* result / action / at: row 1, one column each, all on the same line. */
-.sttbl>tbody>tr:not(.nxdetail):not(.alertrow):not(.actrow):not(.genrow):not(.visrow)>td:nth-child(2){grid-column:2;grid-row:1}
-.sttbl>tbody>tr:not(.nxdetail):not(.alertrow):not(.actrow):not(.genrow):not(.visrow)>td:nth-child(3){grid-column:3;grid-row:1}
-.sttbl>tbody>tr:not(.nxdetail):not(.alertrow):not(.actrow):not(.genrow):not(.visrow)>td:nth-child(5){grid-column:4;grid-row:1}
-/* detail: row 2, spanning the result/action/at columns (not `id`, not `view`). */
+/* result / action / at: row 1, one column each, all on the same line — label then value. */
+.sttbl>tbody>tr:not(.nxdetail):not(.alertrow):not(.actrow):not(.genrow):not(.visrow)>td:nth-child(2){
+  grid-column:2;grid-row:1;display:flex;align-items:center;gap:.35rem;flex-wrap:wrap}
+.sttbl>tbody>tr:not(.nxdetail):not(.alertrow):not(.actrow):not(.genrow):not(.visrow)>td:nth-child(2)::before{content:"result"}
+.sttbl>tbody>tr:not(.nxdetail):not(.alertrow):not(.actrow):not(.genrow):not(.visrow)>td:nth-child(3){
+  grid-column:3;grid-row:1;display:flex;align-items:center;gap:.35rem;flex-wrap:wrap}
+.sttbl>tbody>tr:not(.nxdetail):not(.alertrow):not(.actrow):not(.genrow):not(.visrow)>td:nth-child(3)::before{content:"action"}
+.sttbl>tbody>tr:not(.nxdetail):not(.alertrow):not(.actrow):not(.genrow):not(.visrow)>td:nth-child(5){
+  grid-column:4;grid-row:1;display:flex;align-items:center;gap:.35rem;flex-wrap:wrap}
+.sttbl>tbody>tr:not(.nxdetail):not(.alertrow):not(.actrow):not(.genrow):not(.visrow)>td:nth-child(5)::before{content:"at"}
+/* detail: row 2, spanning the result/action/at columns (not `id`, not `view`) — unlabeled, and
+   in normal block flow (see the ::before exclusion above). */
 .sttbl>tbody>tr:not(.nxdetail):not(.alertrow):not(.actrow):not(.genrow):not(.visrow)>td:nth-child(4){grid-column:2/5;grid-row:2}
-/* view: its own trailing column, beside detail only (row 2) — not spanning row 1 or row 3 —
-   and centered, since a screenshot thumbnail narrower than the column would otherwise hug the
+/* view: its own trailing column, beside detail only (row 2) — not spanning row 1 or row 3 — its
+   label to the left, the group centered so a thumbnail narrower than the column doesn't hug the
    left edge. */
 .sttbl>tbody>tr:not(.nxdetail):not(.alertrow):not(.actrow):not(.genrow):not(.visrow)>td:nth-child(6){
-  grid-column:5;grid-row:2;text-align:center}
-/* reason: row 3, same span as detail — omitted (see `:empty` above) whenever the step has none. */
+  grid-column:5;grid-row:2;display:flex;align-items:center;justify-content:center;gap:.35rem}
+.sttbl>tbody>tr:not(.nxdetail):not(.alertrow):not(.actrow):not(.genrow):not(.visrow)>td:nth-child(6)::before{content:"view"}
+/* reason: row 3, same span as detail — omitted (see `:empty` above) whenever the step has none.
+   Label above, not beside: unlike result/action/at/view, its value is free text that can run to
+   more than one line, where a leading label would read as part of the sentence. */
 .sttbl>tbody>tr:not(.nxdetail):not(.alertrow):not(.actrow):not(.genrow):not(.visrow)>td:nth-child(7){grid-column:2/5;grid-row:3}
-.sttbl>tbody>tr:not(.nxdetail):not(.alertrow):not(.actrow):not(.genrow):not(.visrow)>td:nth-child(7)::before{content:"reason"}
+.sttbl>tbody>tr:not(.nxdetail):not(.alertrow):not(.actrow):not(.genrow):not(.visrow)>td:nth-child(7)::before{
+  content:"reason";display:block;margin-bottom:.12rem}
 /* Jump targets for a step's own start/end instant (its `before`/`after` moment, distinct from
    the scenario-level `before`/`after` phase tables this sits beside) — on one line. */
 .stepjump{display:inline;border:0;padding:0;margin:0;background:transparent;
  font:inherit;color:var(--ink);cursor:pointer}
 .stepjump:hover{color:#0a6cff;text-decoration:underline}
-.stepjump-end{margin-left:.4rem;color:var(--mut);font-size:.78rem}
+.stepjump-end{color:var(--mut);font-size:.78rem}
 .stepjump-end:hover{color:#0a6cff}
 /* Nested assertion table inside an `assert` step's detail cell (one row per check). */
 .atbl{border-collapse:collapse;width:auto}
