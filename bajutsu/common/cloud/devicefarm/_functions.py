@@ -10,17 +10,15 @@ import time
 import zipfile
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal
+from typing import Any, Literal
 
 import yaml
 
 from ._platform_run import _PlatformRun
+from .device_farm_client import DeviceFarmClient
 from .device_farm_error import DeviceFarmError
+from .transfer import Transfer
 from .verdict import Verdict
-
-if TYPE_CHECKING:
-    from .device_farm_client import DeviceFarmClient
-    from .transfer import Transfer
 
 # Device Farm caps one custom-environment execution at 150 minutes; poll no longer than that before
 # giving up rather than blocking a CI job indefinitely.

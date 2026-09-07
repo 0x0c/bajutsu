@@ -1,10 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
 
-if TYPE_CHECKING:
-    from .reference import Reference
+from .reference import Reference
 
 
 @dataclass(frozen=True, order=True)

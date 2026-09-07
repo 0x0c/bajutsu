@@ -8,7 +8,6 @@ import subprocess
 import urllib.parse
 import xml.etree.ElementTree as ET
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 from bajutsu.common.drivers.adb import (
     ActOutcome,
@@ -20,10 +19,8 @@ from bajutsu.common.drivers.adb import (
     slice_hierarchy_root,
 )
 
+from ._process import _Process
 from ._shared import _SERVER_APK, _TEST_APK, logger
-
-if TYPE_CHECKING:
-    from ._process import _Process
 
 # The response header the resident server stamps `GET /source` with: the device-clock time
 # (`SystemClock.uptimeMillis`) of the most recent accessibility event it had observed (BE-0332 Unit 3).

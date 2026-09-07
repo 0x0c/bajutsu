@@ -3,13 +3,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
 
-if TYPE_CHECKING:
-    from .day_point import DayPoint
-    from .hotspot import Hotspot
-    from .run_point import RunPoint
-    from .scenario_stat import ScenarioStat
+from .day_point import DayPoint
+from .hotspot import Hotspot
+from .run_point import RunPoint
+from .scenario_stat import ScenarioStat
 
 
 @dataclass(frozen=True)

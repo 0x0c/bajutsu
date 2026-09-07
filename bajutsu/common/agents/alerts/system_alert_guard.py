@@ -3,15 +3,13 @@
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING
 
 from bajutsu.common.drivers import base
 from bajutsu.common.drivers.elements import screen_size_from_elements
 from bajutsu.common.orchestrator import AlertEvent
 from bajutsu.common.screenshots import screenshot_bytes
 
-if TYPE_CHECKING:
-    from .alert_locator import AlertLocator
+from .alert_locator import AlertLocator
 
 _logger = logging.getLogger(__name__)
 

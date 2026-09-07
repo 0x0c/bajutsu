@@ -8,16 +8,12 @@ import re
 import shlex
 import subprocess
 from collections.abc import Mapping
-from typing import TYPE_CHECKING
 
 from bajutsu.common.devices.id import is_valid_device_id
 
+from ._shared import RunFn
 from .device_error import DeviceError
 from .touch_device import TouchDevice
-
-if TYPE_CHECKING:
-    from ._shared import RunFn
-
 
 # The device-side path `screenrecord` writes to before it is pulled to the run dir. One fixed path is
 # enough: a device runs one scenario at a time, and parallel lanes are distinct serials. Public so the

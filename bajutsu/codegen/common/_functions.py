@@ -3,16 +3,12 @@
 from __future__ import annotations
 
 import re
-from typing import TYPE_CHECKING
 
 from bajutsu.common.scenario import Scenario, Step
 from bajutsu.common.scenario.models.actions import bypass_hint
 
+from .code_generator import CodeGenerator
 from .codegen_error import CodegenError
-
-if TYPE_CHECKING:
-    from .code_generator import CodeGenerator
-
 
 # Body lines (launch env, launch, steps, the expect block) sit one level inside the test function;
 # the structural braces (`scenario_open` / `scenario_close`) carry their own indent. Both targets

@@ -3,13 +3,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
 
 from bajutsu.common.assertions.schema import SchemaContext
 from bajutsu.common.assertions.visual import VisualContext
 
-if TYPE_CHECKING:
-    from .golden_context import GoldenContext
+from .golden_context import GoldenContext
 
 
 @dataclass(frozen=True)

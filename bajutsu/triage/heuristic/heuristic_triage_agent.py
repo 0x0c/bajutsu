@@ -2,14 +2,10 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
-
 from ._functions import _close, _ids, fix_summary
 from .fix import Fix
 from .triage import Triage
-
-if TYPE_CHECKING:
-    from .triage_context import TriageContext
+from .triage_context import TriageContext
 
 _ACT_TARGETS = (
     "tap",

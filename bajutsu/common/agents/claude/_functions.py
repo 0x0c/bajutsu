@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, cast, get_args
+from typing import Any, cast, get_args
 
 from bajutsu.common.agents.protocols import HumanValueClass, Observation, Proposal
 from bajutsu.common.ai import ContentPart, ImagePart, MessageResponse, TextPart, ToolUseBlock
@@ -10,11 +10,9 @@ from bajutsu.common.ai.prompts import render_elements
 from bajutsu.common.evidence.redaction import Redactor
 from bajutsu.common.scenario import Assertion, Selector, Step
 
+from ._assertion_args import _AssertionArgs
+from ._target_args import _TargetArgs
 from ._tool_args import _ToolArgs
-
-if TYPE_CHECKING:
-    from ._assertion_args import _AssertionArgs
-    from ._target_args import _TargetArgs
 
 # Above this many on-screen elements a turn is considered pathological (a long list / data table),
 # and the non-addressable remainder is reported as a count rather than silently dropped (BE-0194 §2).

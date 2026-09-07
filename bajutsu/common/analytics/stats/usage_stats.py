@@ -3,12 +3,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
 
-if TYPE_CHECKING:
-    from .comparison_row import ComparisonRow
-    from .day_point import DayPoint
-    from .usage_row import UsageRow
+from .comparison_row import ComparisonRow
+from .day_point import DayPoint
+from .usage_row import UsageRow
 
 
 @dataclass(frozen=True)

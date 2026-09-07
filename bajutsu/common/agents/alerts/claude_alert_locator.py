@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
-
 from bajutsu.common.agents.ai_config import AiConfig
 from bajutsu.common.agents.claude_backed import ClaudeBackedAgent
 from bajutsu.common.ai import (
@@ -20,9 +18,7 @@ from bajutsu.common.evidence.redaction import Redactor
 from bajutsu.common.screenshots import png_size
 
 from ._functions import _decision_of
-
-if TYPE_CHECKING:
-    from .alert_decision import AlertDecision
+from .alert_decision import AlertDecision
 
 # Sonnet over Opus: this fires mid-wait (BE-0269), so its round-trip latency is on the run's
 # critical path — a locate-a-button task doesn't need Opus's extra reasoning depth.

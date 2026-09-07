@@ -2,14 +2,10 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
-
 from bajutsu.common.handoff import DEFAULT_TIMEOUT_SECONDS, HandoffRequest, HandoffResponse
 
 from ._functions import _read_line_bounded
-
-if TYPE_CHECKING:
-    from ._shared import Say
+from ._shared import Say
 
 
 class PromptHandoff:

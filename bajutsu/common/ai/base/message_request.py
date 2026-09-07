@@ -3,15 +3,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
 
 from .any_tool import AnyTool
+from .message import Message
 from .named_tool import NamedTool
-
-if TYPE_CHECKING:
-    from .message import Message
-    from .tool_def import ToolDef
-
+from .tool_def import ToolDef
 
 # Every current path forces a tool call — either "call some tool" or "call this tool". Free-choice
 # (optional tool use) is not modeled because no path uses it.

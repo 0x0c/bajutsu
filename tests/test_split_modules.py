@@ -139,7 +139,9 @@ def test_runtime_sibling_reference_becomes_a_relative_import() -> None:
     assert "from .child import" not in plan.files["base.py"]
 
 
-def test_annotation_only_sibling_is_imported_under_type_checking() -> None:
+def test_an_annotation_only_sibling_is_still_a_runtime_import() -> None:
+    # Pydantic rebuilds a model from its annotations at run time, so a name mentioned only in one
+    # still needs a real binding: deferring it under `TYPE_CHECKING` leaves the model undefined.
     plan = _plan(
         """
         from __future__ import annotations
@@ -155,9 +157,33 @@ def test_annotation_only_sibling_is_imported_under_type_checking() -> None:
         """
     )
     beta = plan.files["beta.py"]
-    assert "if TYPE_CHECKING:" in beta
-    assert "from typing import TYPE_CHECKING" in beta
-    assert beta.index("if TYPE_CHECKING:") < beta.index("from .alpha import Alpha")
+    assert "from .alpha import Alpha" in beta
+    assert "if TYPE_CHECKING:" not in beta
+
+
+def test_an_annotation_only_edge_is_deferred_only_to_break_a_cycle() -> None:
+    plan = _plan(
+        """
+        from __future__ import annotations
+
+
+        class Alpha:
+            def take(self, value: Beta) -> None:
+                pass
+
+
+        class Beta:
+            def make(self) -> object:
+                return Alpha()
+        """
+    )
+    # Beta reads Alpha at run time and cannot be deferred; Alpha reads Beta only in an annotation,
+    # so that is the edge rule 5 breaks — and the cycle needs no hand-written in-method import.
+    alpha = plan.files["alpha.py"]
+    assert "if TYPE_CHECKING:" in alpha
+    assert alpha.index("if TYPE_CHECKING:") < alpha.index("from .beta import Beta")
+    assert "from .alpha import Alpha" in plan.files["beta.py"]
+    assert plan.notes == ()
 
 
 def test_top_level_functions_move_together_into_one_file() -> None:

@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Protocol
+from typing import Protocol
 
-if TYPE_CHECKING:
-    from .cross_run_triage_context import CrossRunTriageContext
-    from .triage import Triage
+from .cross_run_triage_context import CrossRunTriageContext
+from .triage import Triage
 
 
 class CrossRunTriageAgent(Protocol):

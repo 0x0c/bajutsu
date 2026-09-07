@@ -3,10 +3,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
 
-if TYPE_CHECKING:
-    from .fix import Fix
+from .fix import Fix
 
 
 @dataclass(frozen=True)

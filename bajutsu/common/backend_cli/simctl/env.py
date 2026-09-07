@@ -10,7 +10,6 @@ import tempfile
 import time
 from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 from ._functions import (
     _probe_timed_out,
@@ -43,13 +42,9 @@ from ._functions import (
     validated_locale,
     validated_udid,
 )
-from ._shared import _LANGUAGES_KEY, _LOCALE_KEY
+from ._shared import _LANGUAGES_KEY, _LOCALE_KEY, RunFn
 from .device_error import DeviceError
 from .device_timeout import DeviceTimeout
-
-if TYPE_CHECKING:
-    from ._shared import RunFn
-
 
 # The one permission-vocabulary service (BE-0276) with no simctl privacy TCC (Transparency,
 # Consent, and Control) equivalent — iOS notification authorization is not part of TCC. Every other

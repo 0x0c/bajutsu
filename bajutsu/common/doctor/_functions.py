@@ -1,21 +1,16 @@
-"""Convention score for an app — how ready it is to be tested, plus the screen probe that feeds it.
-
-Pure scoring computed from a screen (a list of Element): id coverage over
-actionable elements, namespace conformance, and id uniqueness. AI is not
-involved. The screen probe (`probe_screen`) that reads that screen from the device is
-shared by the CLI and serve doctors (BE-0199); the environment/connection *gates* that decide
-whether to probe stay with each caller (they need a device and their own UX).
-"""
+"""Probe the current screen and grade its id coverage against the target's thresholds."""
 
 from __future__ import annotations
 
 import contextlib
-from dataclasses import dataclass
 
 from bajutsu.common.backend_cli import simctl
 from bajutsu.common.backends import make_driver
 from bajutsu.common.config import Effective, require_web, web_base_url
 from bajutsu.common.drivers import base
+
+from .doctor_probe_error import DoctorProbeError
+from .score import Score
 
 # Traits that count as "actionable" (the denominator for id coverage).
 ACTIONABLE_TRAITS = {
@@ -32,23 +27,6 @@ ACTIONABLE_TRAITS = {
 
 OK_COVERAGE = 0.9
 FAIL_COVERAGE = 0.7
-
-
-@dataclass(frozen=True)
-class Score:
-    """The current screen's accessibility-convention score — id coverage, conformance, and grade."""
-
-    actionable: int
-    with_id: int
-    id_coverage: float
-    namespace_conformance: float
-    duplicate_ids: int
-    grade: str  # "Ready" | "Partial" | "Blocked"
-    # Nothing actionable on the screen (likely blank / not loaded / wrong screen).
-    no_actionable: bool
-    missing_id: list[base.Element]  # actionable elements without an id
-    off_namespace: list[str]  # ids whose first segment is not a declared namespace
-    duplicates: list[str]  # ids that appear 2+ times on the screen
 
 
 def _is_actionable(el: base.Element) -> bool:
@@ -148,16 +126,6 @@ def render(s: Score) -> str:
     if s.duplicates:
         lines.append(f"  duplicate ids: {s.duplicates}")
     return "\n".join(lines)
-
-
-class DoctorProbeError(RuntimeError):
-    """The screen can't be probed for scoring — a fixable config error, not a crash.
-
-    Raised only for the config-level "can't even attempt the probe" case (e.g. a web target
-    with no baseUrl). The caller maps it to its own surface (CLI: `typer.Exit(2)`; serve:
-    `ValueError`). Device/reachability faults keep raising their transport error (`DeviceError`,
-    a Playwright error), which the callers already handle distinctly.
-    """
 
 
 def _first_udid(udid: str) -> str:

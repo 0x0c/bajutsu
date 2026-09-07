@@ -2,13 +2,12 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Protocol
+from typing import Protocol
 
 from bajutsu.common.scenario import Scenario
 
-if TYPE_CHECKING:
-    from .enrichment_proposal import EnrichmentProposal
-    from .step_context import StepContext
+from .enrichment_proposal import EnrichmentProposal
+from .step_context import StepContext
 
 
 class EnrichmentAgent(Protocol):

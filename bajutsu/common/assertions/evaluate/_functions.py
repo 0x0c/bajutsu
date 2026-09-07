@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import re
 from collections.abc import Callable
-from typing import TYPE_CHECKING
 
 from bajutsu.common.assertions._common import AssertionResult, _compile, _resolve_one, sel_str
 from bajutsu.common.assertions.network import (
@@ -34,10 +33,7 @@ from bajutsu.common.scenario import (
 )
 
 from .eval_context import EvalContext
-
-if TYPE_CHECKING:
-    from .golden_context import GoldenContext
-
+from .golden_context import GoldenContext
 
 # Assertion evaluators keyed by kind (the `Assertion` field name), each a thin adapter over the
 # per-kind `_eval_*` above that pulls the one set field off the assertion and the inputs its kind

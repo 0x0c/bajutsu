@@ -3,11 +3,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
 
-if TYPE_CHECKING:
-    from .namespace_coverage import NamespaceCoverage
-
+from .namespace_coverage import NamespaceCoverage
 
 # --- observed-id coverage: ids rendered across a run set (elements.json) vs declared namespaces ---
 

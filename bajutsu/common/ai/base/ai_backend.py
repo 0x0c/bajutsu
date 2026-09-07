@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Protocol
+from typing import Protocol
 
-if TYPE_CHECKING:
-    from .message_request import MessageRequest
-    from .message_response import MessageResponse
+from .message_request import MessageRequest
+from .message_response import MessageResponse
 
 
 class AiBackend(Protocol):

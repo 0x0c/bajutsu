@@ -4,12 +4,10 @@ from __future__ import annotations
 
 import select
 import sys
-from typing import TYPE_CHECKING
 
 from bajutsu.common.handoff import Handoff
 
-if TYPE_CHECKING:
-    from ._shared import Say
+from ._shared import Say
 
 
 def _read_line_bounded(timeout: float) -> str | None:

@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Protocol
+from typing import Protocol
 
-if TYPE_CHECKING:
-    from .observation import Observation
-    from .proposal import Proposal
+from .observation import Observation
+from .proposal import Proposal
 
 
 class Agent(Protocol):

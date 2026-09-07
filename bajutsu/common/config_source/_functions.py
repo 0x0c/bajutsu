@@ -1,14 +1,4 @@
-"""Acquire a config (and its scenario tree) from a Git source (BE-0063).
-
-`--config` keeps accepting a local path; in addition it accepts a Git spec
-(`github:<owner>/<repo>[@<ref>][:<path>]`, or `git+https://<host>/<owner>/<repo>.git[@<ref>][#<path>]`).
-The spec is materialized at an immutable commit SHA into a content-addressed cache, and the config's
-relative paths resolve against that checkout root. Only *acquisition* changes — the schema, runner,
-drivers, and the deterministic gate are untouched (DESIGN §6.5: git holds the history).
-
-The GitHub transport (commits API + tarball endpoint) is the one external dependency; it is a small
-injectable seam so the materialization logic tests offline against a fake.
-"""
+"""Parse a `github:` config spec and materialize it into the content-addressed cache (BE-0063)."""
 
 from __future__ import annotations
 
@@ -19,14 +9,16 @@ import shutil
 import subprocess
 import tarfile
 import tempfile
-import urllib.error
-import urllib.request
-from dataclasses import dataclass
 from email.message import Message
 from pathlib import Path
-from typing import Protocol
 
 from bajutsu.common.github.errors import GitHubAccessError
+
+from ._git_hub_transport import _GitHubTransport
+from ._shared import _OWNER, _REPO
+from .git_config_spec import GitConfigSpec
+from .materialized import Materialized
+from .transport import Transport
 
 DEFAULT_CONFIG = "bajutsu.config.yaml"
 
@@ -36,15 +28,6 @@ DEFAULT_CONFIG = "bajutsu.config.yaml"
 # This bajutsu-owned var is checked first, so a UI credential wins over an ambient one, and clearing
 # it never touches the operator's `GITHUB_TOKEN` / `GH_TOKEN`.
 GIT_CONFIG_TOKEN_ENV = "BAJUTSU_GIT_CONFIG_TOKEN"  # noqa: S105 — an env var name, not a secret
-
-# owner/repo constrained to GitHub's real charset (BE-0124): an owner is alphanumeric + hyphen (a
-# username/org — no dot, so it can never be a `.`/`..` traversal token), a repo also allows `_`/`.`
-# but a bare `.`/`..` segment is rejected in `parse_config_spec`. Neither admits `%`, so a
-# percent-encoded segment simply fails to match — it never reaches the API URL or the cache path.
-# These are single-character classes; each regex applies its own quantifier (`+`, or `+?` for the
-# git-url repo so a trailing `.git` is stripped rather than folded into the name).
-_OWNER = r"[A-Za-z0-9-]"
-_REPO = r"[A-Za-z0-9._-]"
 # `github:owner/repo[@ref][:path]` — the headline shorthand.
 _GITHUB_RE = re.compile(
     rf"^github:(?P<owner>{_OWNER}+)/(?P<repo>{_REPO}+)(?:@(?P<ref>[^:]+))?(?::(?P<path>.+))?$"
@@ -60,26 +43,6 @@ _FULL_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 def is_full_sha(ref: str | None) -> bool:
     """Whether `ref` is a full 40-hex commit SHA — the only ref that is an immutable, offline pin."""
     return bool(ref and _FULL_SHA_RE.match(ref))
-
-
-@dataclass(frozen=True)
-class GitConfigSpec:
-    """A parsed Git config source: which repo subtree, at which ref, to load the config from."""
-
-    host: str
-    owner: str
-    repo: str
-    ref: str | None  # branch / tag / SHA; None = the repo's default branch
-    path: str | None  # config path within the repo; None = DEFAULT_CONFIG at the root
-
-
-@dataclass(frozen=True)
-class Materialized:
-    """A repo subtree checked out at an immutable SHA: the config file, the checkout root, and the SHA."""
-
-    config_path: Path
-    root: Path
-    sha: str  # the resolved commit SHA (the determinism anchor / cache key)
 
 
 def parse_config_spec(value: str) -> GitConfigSpec | None:
@@ -98,14 +61,6 @@ def parse_config_spec(value: str) -> GitConfigSpec | None:
 
 def _spec(host: str, m: re.Match[str]) -> GitConfigSpec:
     return GitConfigSpec(host, m["owner"], m["repo"], m["ref"], m["path"])
-
-
-class Transport(Protocol):
-    """The Git-host calls materialization makes — injected so the logic tests offline."""
-
-    def commit_sha(self, spec: GitConfigSpec, ref: str) -> str: ...
-
-    def tarball_bytes(self, spec: GitConfigSpec, sha: str) -> bytes: ...
 
 
 def github_http_error_message(status: int, headers: Message, spec: GitConfigSpec) -> str:
@@ -221,32 +176,6 @@ def _github_app_private_key() -> str | None:
                 f"cannot read the GitHub App private key at BAJUTSU_GITHUB_APP_PRIVATE_KEY_FILE={path!r}: {e}"
             ) from e
     return None
-
-
-class _GitHubTransport:
-    """The real transport: GitHub's commits API (ref → SHA) and tarball endpoint, over urllib."""
-
-    def __init__(self, token: str | None) -> None:
-        self._headers = {"Authorization": f"Bearer {token}"} if token else {}
-
-    def _get(self, url: str, accept: str, spec: GitConfigSpec) -> bytes:
-        req = urllib.request.Request(url, headers={**self._headers, "Accept": accept})  # noqa: S310 — https GitHub API URL
-        try:
-            with urllib.request.urlopen(req, timeout=30) as resp:  # noqa: S310
-                return bytes(resp.read())
-        except urllib.error.HTTPError as e:
-            # Map the status (and 403 sub-type) to a cause-naming message instead of letting a raw
-            # HTTPError — a bare "404" that really means "no access" — reach the operator (BE-0224).
-            raise GitHubAccessError(github_http_error_message(e.code, e.headers, spec)) from e
-
-    def commit_sha(self, spec: GitConfigSpec, ref: str) -> str:
-        # The `…+sha` media type makes the commits endpoint return the bare SHA as the body.
-        url = f"https://api.github.com/repos/{spec.owner}/{spec.repo}/commits/{ref}"
-        return self._get(url, "application/vnd.github.sha", spec).decode().strip()
-
-    def tarball_bytes(self, spec: GitConfigSpec, sha: str) -> bytes:
-        url = f"https://api.github.com/repos/{spec.owner}/{spec.repo}/tarball/{sha}"
-        return self._get(url, "application/vnd.github+json", spec)
 
 
 def config_source_record(spec: GitConfigSpec | None, config: str) -> dict[str, object]:

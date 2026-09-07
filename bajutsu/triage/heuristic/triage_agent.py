@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Protocol
+from typing import Protocol
 
-if TYPE_CHECKING:
-    from .triage import Triage
-    from .triage_context import TriageContext
+from .triage import Triage
+from .triage_context import TriageContext
 
 
 class TriageAgent(Protocol):

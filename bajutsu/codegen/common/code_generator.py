@@ -2,12 +2,11 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Protocol
+from typing import Protocol
 
 from bajutsu.common.scenario import AfterRule, Assertion, Scenario, Step
 
-if TYPE_CHECKING:
-    from .after_emission import AfterEmission
+from .after_emission import AfterEmission
 
 
 class CodeGenerator(Protocol):

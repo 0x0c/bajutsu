@@ -7,7 +7,6 @@ import re
 from collections import Counter
 from collections.abc import Iterable, Mapping
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 from jinja2 import Environment, FileSystemLoader
 
@@ -17,13 +16,11 @@ from bajutsu.common.devices.os import DeviceOS
 
 from ._hotspot_tally import _HotspotTally
 from .day_point import DayPoint
+from .hotspot import Hotspot
 from .run_point import RunPoint
 from .scenario_stat import ScenarioStat
 from .stats import Stats
 from .target_metrics import TargetMetrics
-
-if TYPE_CHECKING:
-    from .hotspot import Hotspot
 
 # A run id opens with a UTC timestamp (`YYYYMMDD-HHMMSS`), so the day is a pure prefix parse; a run
 # id that doesn't match (a custom label) simply has no day and buckets under "" (unknown).

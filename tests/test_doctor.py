@@ -318,7 +318,7 @@ def test_probe_screen_takes_the_first_udid_of_a_comma_list(
     # Android path reads through `make_driver` at the resolved udid.
     made: list[tuple[str, str]] = []
     monkeypatch.setattr(
-        "bajutsu.common.doctor.make_driver",
+        "bajutsu.common.doctor._functions.make_driver",
         _recording_make_driver(made),
     )
     monkeypatch.setattr(

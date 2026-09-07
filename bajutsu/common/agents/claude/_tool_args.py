@@ -2,12 +2,8 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
-
+from ._assertion_args import _AssertionArgs
 from ._target_args import _TargetArgs
-
-if TYPE_CHECKING:
-    from ._assertion_args import _AssertionArgs
 
 
 class _ToolArgs(_TargetArgs, total=False):

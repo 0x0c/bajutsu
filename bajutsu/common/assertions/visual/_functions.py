@@ -3,17 +3,14 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 from bajutsu.common.assertions._common import AssertionResult, _resolve_one, sel_str
 from bajutsu.common.drivers import base
 from bajutsu.common.scenario import ExcludeRegion, Selector, SelectorRegion, VisualMatch
 
 from ._prepared import _Prepared
+from .visual_context import VisualContext
 from .visual_evidence import VisualEvidence
-
-if TYPE_CHECKING:
-    from .visual_context import VisualContext
 
 
 def _visual_scale(

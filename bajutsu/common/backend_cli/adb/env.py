@@ -6,7 +6,6 @@ import contextlib
 import subprocess
 from collections.abc import Mapping
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 from ._functions import (
     checked_serial,
@@ -28,11 +27,8 @@ from ._functions import (
     set_primary_clip_cmd,
     uninstall_cmd,
 )
+from ._shared import RunFn
 from .device_error import DeviceError
-
-if TYPE_CHECKING:
-    from ._shared import RunFn
-
 
 # The permission-vocabulary service (BE-0276, shared with iOS's TCC map in simctl.py) -> the
 # android.permission.* names it grants/revokes. A service maps to more than one permission when

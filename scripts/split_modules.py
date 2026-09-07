@@ -490,17 +490,68 @@ def _runtime_cycles(graph: dict[str, set[str]]) -> list[tuple[str, ...]]:
     return cycles
 
 
+def _siblings(stem: str, reads: _References, stems: dict[str, str]) -> dict[str, str]:
+    """The other split files this one reads a name from, keyed by that name."""
+    return {name: where for name, where in stems.items() if where != stem and name in reads.all}
+
+
+def _choose_deferred(
+    reads_by_stem: dict[str, _References], stems: dict[str, str]
+) -> tuple[dict[str, set[str]], list[str]]:
+    """Decide which sibling imports move under `TYPE_CHECKING`, and report the cycles left over.
+
+    Every sibling import is a runtime one by default. A name a class mentions only in an annotation
+    still needs a runtime binding whenever something resolves those annotations at run time —
+    Pydantic rebuilds a model from them, and a `TYPE_CHECKING` import leaves the name undefined. So
+    an import is deferred only where a cycle forces it, and only on an edge that is annotation-only,
+    which is rule 5's lazy treatment expressed as an import placement.
+    """
+    deferred: dict[str, set[str]] = {}
+    notes: list[str] = []
+    while True:
+        graph = {
+            stem: {
+                where
+                for name, where in _siblings(stem, reads, stems).items()
+                if name not in deferred.get(stem, set())
+            }
+            for stem, reads in reads_by_stem.items()
+        }
+        cycles = _runtime_cycles(graph)
+        if not cycles:
+            return deferred, notes
+        cycle = cycles[0]
+        for index, stem in enumerate(cycle):
+            target = cycle[(index + 1) % len(cycle)]
+            reads = reads_by_stem[stem]
+            names = {
+                name
+                for name, where in _siblings(stem, reads, stems).items()
+                if where == target and name not in deferred.get(stem, set())
+            }
+            if names and not (names & reads.runtime):
+                deferred.setdefault(stem, set()).update(names)
+                break
+        else:
+            notes.append(
+                f"  circular import {' -> '.join([*cycle, cycle[0]])}.py — break it with rule 5's "
+                "in-method import before the package will load"
+            )
+            return deferred, notes
+
+
 def _render_file(
     parsed: _Parsed,
     stem: str,
     owned: list[cst.SimpleStatementLine],
     declarations: list[_Declaration],
     stems: dict[str, str],
+    deferred: set[str],
 ) -> str:
     reads = _file_reads(owned, declarations)
-    siblings = {name: where for name, where in stems.items() if where != stem and name in reads.all}
-    runtime_siblings = {n: w for n, w in siblings.items() if n in reads.runtime}
-    deferred_siblings = {n: w for n, w in siblings.items() if n not in reads.runtime}
+    siblings = _siblings(stem, reads, stems)
+    runtime_siblings = {n: w for n, w in siblings.items() if n not in deferred}
+    deferred_siblings = {n: w for n, w in siblings.items() if n in deferred}
 
     type_checking: list[_Statement] = []
     for statement in parsed.type_checking:
@@ -616,21 +667,24 @@ def plan_split(source: str, *, name: str = "<module>", allow_file_paths: bool = 
     for declaration in parsed.declarations:
         grouped.setdefault(declaration.stem, []).append(declaration)
 
-    graph: dict[str, set[str]] = {}
-    files: dict[str, str] = {}
-    for stem in sorted(set(owned) | set(grouped)):
-        reads = _file_reads(owned.get(stem, []), grouped.get(stem, []))
-        graph[stem] = {stems[read] for read in reads.runtime if stems.get(read, stem) != stem}
-        files[f"{stem}.py"] = _render_file(
-            parsed, stem, owned.get(stem, []), grouped.get(stem, []), stems
+    reads_by_stem = {
+        stem: _file_reads(owned.get(stem, []), grouped.get(stem, []))
+        for stem in sorted(set(owned) | set(grouped))
+    }
+    deferred, cycle_notes = _choose_deferred(reads_by_stem, stems)
+    files = {
+        f"{stem}.py": _render_file(
+            parsed,
+            stem,
+            owned.get(stem, []),
+            grouped.get(stem, []),
+            stems,
+            deferred.get(stem, set()),
         )
+        for stem in reads_by_stem
+    }
     files["__init__.py"] = _render_init(parsed, stems)
-    notes += [
-        f"  circular import {' -> '.join([*cycle, cycle[0]])}.py — break it with rule 5's "
-        "in-method import before the package will load"
-        for cycle in _runtime_cycles(graph)
-    ]
-    return SplitPlan(files=files, notes=tuple(notes))
+    return SplitPlan(files=files, notes=tuple(notes + cycle_notes))
 
 
 def apply_split(path: Path, plan: SplitPlan) -> Path:

@@ -8,16 +8,12 @@ import os
 import re
 import subprocess
 from collections.abc import Mapping, Sequence
-from typing import TYPE_CHECKING
 
 from bajutsu.common.devices.id import is_valid_device_id
 
-from ._shared import _LANGUAGES_KEY, _LOCALE_KEY
+from ._shared import _LANGUAGES_KEY, _LOCALE_KEY, RunFn
 from .device_error import DeviceError
 from .device_timeout import DeviceTimeout
-
-if TYPE_CHECKING:
-    from ._shared import RunFn
 
 _logger = logging.getLogger(__name__)
 

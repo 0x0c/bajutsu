@@ -8,7 +8,7 @@ import re
 from collections.abc import Callable, Iterator, Sequence
 from dataclasses import asdict
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from pydantic import BaseModel
 
@@ -29,12 +29,11 @@ from ._lax_metrics import _LaxMetrics
 from .applied_fix import AppliedFix
 from .cross_run_triage_context import CrossRunTriageContext
 from .failed_step import FailedStep
+from .fix import Fix
 from .run_evidence import RunEvidence
+from .triage import Triage
 from .triage_context import TriageContext
 
-if TYPE_CHECKING:
-    from .fix import Fix
-    from .triage import Triage
 _FIX_LABELS = {
     "renameId": "rename id",
     "addIndex": "disambiguate selector",

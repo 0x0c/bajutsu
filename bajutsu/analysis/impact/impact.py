@@ -1,11 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
 
-if TYPE_CHECKING:
-    from .affected_step import AffectedStep
-    from .touched_ref import TouchedRef
+from .affected_step import AffectedStep
+from .touched_ref import TouchedRef
 
 
 @dataclass(frozen=True)
