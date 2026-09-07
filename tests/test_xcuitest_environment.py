@@ -27,7 +27,6 @@ from bajutsu.common.config import Effective, load_config, resolve
 from bajutsu.common.devices.os import DeviceOS
 from bajutsu.common.drivers.fake import FakeDriver
 from bajutsu.common.drivers.xcuitest import XcuitestChannelError
-from bajutsu.common.platform_lifecycle.environments import xcuitest as xcuitest_env
 from bajutsu.common.platform_lifecycle.environments.xcuitest import (
     _MAX_WARM_REUSES,
     _MAX_WARM_REUSES_ENV,
