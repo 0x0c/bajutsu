@@ -613,16 +613,15 @@ def test_run_with_heartbeat_never_starts_the_run_once_the_lease_is_lost_mid_fetc
     driving the device beside whichever worker won the re-lease, and only discard the result
     afterward. Pinned here by asserting `execute_job_spec` is never called at all.
     """
-    release = threading.Event()
     started = threading.Event()
 
     def slow_workspace(work: Path, spec: dict[str, Any], urls: Any) -> Path:
-        release.wait(2.0)
-        # Give the main thread time to finish `lost.set()` before this thread checks it: `set()`
-        # wakes a waiter via the OS, which is slower than the handful of bytecodes the main thread
-        # needs to run between returning 409 and setting the flag, but not so much slower that a
-        # loaded CI runner is guaranteed to preserve the order without this margin.
-        time.sleep(0.05)
+        # Deliberately *not* keyed off the heartbeat: it would fire before the main thread
+        # runs `lost.set()`, so waking on it would leave this thread racing that assignment. No
+        # signal exists after `lost.set()` either — the only hook is inside `_post_json`, which
+        # returns first — so bound the fetch by a wait nothing ever sets, long enough (25 times
+        # `_run_hb`'s 0.02 interval) that the 409 and the `lost.set()` behind it have both landed.
+        threading.Event().wait(0.5)
         return work
 
     def recording_execute(spec: dict[str, Any], **kwargs: Any) -> _FakeJob:
@@ -635,7 +634,6 @@ def test_run_with_heartbeat_never_starts_the_run_once_the_lease_is_lost_mid_fetc
     def hb_409(
         url: str, body: dict[str, Any], *, token: str | None = None, timeout: float | None = None
     ) -> tuple[int, Any]:
-        release.set()
         return 409, {}
 
     monkeypatch.setattr(worker_mod, "_post_json", hb_409)

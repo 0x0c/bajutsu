@@ -13,7 +13,7 @@ import subprocess
 import threading
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
-from typing import Any, TypeIs
+from typing import Any, TypeGuard
 
 import yaml
 
@@ -482,15 +482,16 @@ def valid_run_id(run_id: str) -> bool:
     return bool(_RUN_ID_RE.fullmatch(run_id))
 
 
-def valid_sha256(value: object) -> TypeIs[str]:
+def valid_sha256(value: object) -> TypeGuard[str]:
     """Whether *value* is a full lowercase hex sha256 digest.
 
     Content-addressed uploads (BE-0243, BE-0268) name a bundle, an artifact, or a composition by such
     a digest, and every one of them becomes a path component or an object-store key. A digest that
     reaches the server from a client-shaped record, a compose request, or a queued job spec is
     untrusted, so it is checked here before it is ever joined onto a path — the shape alone rules out
-    ``..``, a separator, and an absolute path. Narrowing (`TypeIs`) so a caller that guards on it
-    need not also assert the value is a `str`."""
+    ``..``, a separator, and an absolute path. Narrowing (`TypeGuard`, not `TypeIs`) so a caller that
+    guards on it need not also assert the value is a `str`: `TypeIs` is bidirectional, and a `False`
+    answer here means the *shape* is wrong, which says nothing about the value not being a `str`."""
     return isinstance(value, str) and bool(_SHA256_RE.fullmatch(value))
 
 

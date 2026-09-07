@@ -70,7 +70,7 @@ must land under. One value describes either kind, so the units below branch on i
 than on how the bind happened.
 
 Zipping the composed tree into the single-zip shape would have removed the branch entirely, at a
-cost the reviewer was right to weigh: a full copy of the app binary per composition, undoing
+cost worth weighing: a full copy of the app binary per composition, undoing
 BE-0268's per-leg dedup, plus a synchronous multi-hundred-megabyte zip inside the bind request.
 Naming the legs instead keeps that dedup and pays nothing at bind time.
 
