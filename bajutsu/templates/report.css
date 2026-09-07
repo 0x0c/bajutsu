@@ -336,19 +336,21 @@ table.sttbl>tbody>tr:not(.nxdetail):not(.alertrow):not(.actrow):not(.genrow)>td:
   content:"reason";display:block;margin-bottom:.12rem}
 /* Jump targets for a step's own start/end instant (its `before`/`after` moment, distinct from
    the scenario-level `before`/`after` phase tables this sits beside) — on one line. */
-.stepjump{display:inline;border:0;padding:0;margin:0;background:transparent;
- font:inherit;color:var(--ink);cursor:pointer}
-.stepjump:hover{color:#0a6cff;text-decoration:underline}
+/* A dotted underline at rest signals "clickable, not just data" without reading as an ordinary
+   link; hover swaps it for a solid blue one, the same affordance the "tree" links use. */
+.stepjump{display:inline;border:0;border-bottom:1px dotted var(--mut);padding:0;margin:0;
+ background:transparent;font:inherit;color:var(--ink);cursor:pointer}
+.stepjump:hover{color:#0a6cff;border-bottom-style:solid;border-bottom-color:#0a6cff}
 .stepjump-end{color:var(--mut);font-size:.78rem}
 .stepjump-end:hover{color:#0a6cff}
 /* No recording means no player, so report.js's per-scenario loop returns before wiring these
    (it needs the `<video>`) — show the times as plain text rather than as controls that look
    clickable and do nothing. */
-.scn:not(:has(video)) .stepjump{cursor:default;pointer-events:none}
+.scn:not(:has(video)) .stepjump{cursor:default;pointer-events:none;border-bottom-style:none}
 /* Nested assertion table inside an `assert` step's detail cell (one row per check). */
 .atbl{border-collapse:collapse;width:auto}
 .atbl td{border:0;padding:.04rem .55rem .04rem 0;vertical-align:top}
-.atbl td:first-child{width:1%;white-space:nowrap}
+.atbl td:first-child{width:1%;white-space:nowrap;vertical-align:middle}
 tr.skip td{color:var(--mut);opacity:.65}
 /* A system prompt the guard cleared so a blocked step could be retried (a sub-row under
    the step, and a note under the expectations table). */
@@ -490,7 +492,8 @@ tr.visrow>td{background:#fafafb}
  .tvtbl tr.tvrow:hover td{background:#2a2f3a}
  tr.srow.playing{background:#3a3520}
  tr.nrow{background:#1d2230}
- .stepjump:hover,.stepjump-end:hover{color:#5b9cff}
+ .stepjump:hover{color:#5b9cff;border-bottom-color:#5b9cff}
+ .stepjump-end:hover{color:#5b9cff}
  .nxbody,tr.nxdetail>td{background:#1b1c1f}
  img.shot,.tv-shot img{background:#2a2b2f}
  .vt.active{background:#4a4d52}
