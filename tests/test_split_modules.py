@@ -8,6 +8,7 @@ small fixture module, together with the refusals that keep a file needing human 
 
 from __future__ import annotations
 
+import ast
 import re
 import subprocess
 import sys
@@ -1560,3 +1561,117 @@ def test_a_real_run_replaces_the_module_with_a_package_that_imports(tmp_path: Pa
         check=False,
     )
     assert formatted.returncode == 0, formatted.stdout
+
+
+def _header_imports(source: str) -> set[str]:
+    """The plain `import x` names a generated file binds at module level."""
+    return {
+        alias.name
+        for node in ast.parse(source).body
+        if isinstance(node, ast.Import)
+        for alias in node.names
+    }
+
+
+@pytest.mark.parametrize(
+    ("body", "needed"),
+    [
+        # A nested function's own import satisfies only itself; the outer read still needs the
+        # header import.
+        (
+            """
+            def outer(self) -> str:
+                def inner() -> str:
+                    import json
+
+                    return json.dumps({})
+
+                return inner() + json.dumps({})
+            """,
+            True,
+        ),
+        # A lambda, a comprehension and a class body inside the method all read through the
+        # method's own frame, so the method's import satisfies them.
+        (
+            """
+            def run(self) -> str:
+                import json
+
+                return (lambda: json.dumps({}))()
+            """,
+            False,
+        ),
+        (
+            """
+            def run(self) -> list[str]:
+                import json
+
+                return [json.dumps(x) for x in ()]
+            """,
+            False,
+        ),
+        (
+            """
+            def build(self) -> type:
+                import json
+
+                class Inner:
+                    payload = json.dumps({})
+
+                return Inner
+            """,
+            False,
+        ),
+        # A sibling method that makes no import of its own keeps the header import alive.
+        (
+            """
+            def a(self) -> str:
+                import json
+
+                return json.dumps({})
+
+            def b(self) -> str:
+                return json.dumps({})
+            """,
+            True,
+        ),
+    ],
+)
+def test_a_local_import_satisfies_exactly_its_own_scope(body: str, needed: bool) -> None:
+    plan = _plan(
+        f"""
+        import json
+
+
+        class Alpha:
+{textwrap.indent(textwrap.dedent(body).strip(), " " * 12)}
+
+
+        class Beta:
+            pass
+        """
+    )
+    assert ("json" in _header_imports(plan.files["alpha.py"])) is needed
+
+
+def test_an_annotation_is_never_satisfied_by_a_local_import() -> None:
+    # The annotation is evaluated where the `def` is, so the method's own import cannot serve it.
+    plan = _plan(
+        """
+        from __future__ import annotations
+
+        import json
+
+
+        class Alpha:
+            def decode(self, value: json.JSONDecoder) -> None:
+                import json
+
+                json.dumps({})
+
+
+        class Beta:
+            pass
+        """
+    )
+    assert "json" in _header_imports(plan.files["alpha.py"])
