@@ -30,6 +30,11 @@ import libcst as cst
 # assignment above them trips ruff's E402. A sibling module has neither problem.
 FUNCTIONS_MODULE = "_functions"
 SHARED_MODULE = "_shared"
+# Module-level code that binds nothing — a `model_rebuild()` call, a registration — is rule 4's
+# no-single-owner case in its purest form, and `__init__.py` is where the item's design puts it.
+# Binding nothing is exactly what makes that placement safe: appended after the re-export imports it
+# trips neither E402 nor a cycle, and every name it reads is already in scope.
+INIT_MODULE = "__init__"
 RESERVED_STEMS = frozenset({"__init__", FUNCTIONS_MODULE, SHARED_MODULE})
 
 
@@ -38,12 +43,17 @@ class SplitError(Exception):
 
 
 def snake_case(name: str) -> str:
-    """Render a class name as its module filename, keeping any leading underscores."""
+    """Render a class name as its module filename, keeping any leading underscores.
+
+    A name that lands on a Python keyword takes PEP 8's trailing underscore: the scenario schema's
+    `If` step would otherwise want `if.py`, which no import statement can name.
+    """
     underscores = len(name) - len(name.lstrip("_"))
     core = name[underscores:]
     core = re.sub(r"(.)([A-Z][a-z]+)", r"\1_\2", core)
     core = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", core)
-    return "_" * underscores + core.lower()
+    stem = "_" * underscores + core.lower()
+    return f"{stem}_" if keyword.iskeyword(stem) else stem
 
 
 class _References(cst.CSTVisitor):
@@ -410,8 +420,6 @@ def _check_splittable(parsed: _Parsed, name: str, *, allow_file_paths: bool) -> 
     for declaration in parsed.declarations:
         if declaration.stem in RESERVED_STEMS and declaration.is_class:
             raise SplitError(f"class {declaration.name} would collide with {declaration.stem}.py")
-        if keyword.iskeyword(declaration.stem):
-            raise SplitError(f"class {declaration.name} maps to the keyword {declaration.stem}.py")
         if declaration.is_class:
             if declaration.stem in stems:
                 raise SplitError(
@@ -449,11 +457,7 @@ def _assign_owners(parsed: _Parsed) -> tuple[dict[int, str], list[str]]:
     notes: list[str] = []
     for index, statement in enumerate(parsed.module_level):
         if not statement.binds:
-            placement[index] = SHARED_MODULE
-            notes.append(
-                f"  module-level statement binding nothing placed in {SHARED_MODULE}.py — "
-                "confirm it belongs there"
-            )
+            placement[index] = INIT_MODULE
             continue
         owners = sorted(
             {stem for stem, reads in declaration_reads.items() if reads.all & set(statement.binds)}
@@ -624,12 +628,18 @@ def _render_file(
                 body=cst.IndentedBlock(body=type_checking)
             )
         )
-    body.extend(owned)
+    # A statement derived from its own owner has to follow it: `_ASSERTION_KINDS` reads
+    # `Assertion.model_fields`, so emitting it above the class would raise a NameError on import.
+    declared = {declaration.name for declaration in declarations}
+    body.extend(statement for statement in owned if not (_references(statement).all & declared))
     body.extend(declaration.node for declaration in declarations)
+    body.extend(statement for statement in owned if _references(statement).all & declared)
     return _render(body)
 
 
-def _render_init(parsed: _Parsed, stems: dict[str, str]) -> str:
+def _render_init(
+    parsed: _Parsed, stems: dict[str, str], trailing: list[cst.SimpleStatementLine]
+) -> str:
     exported: list[tuple[str, str]] = []
     seen: set[str] = set()
     for statement in parsed.module_level:
@@ -665,6 +675,7 @@ def _render_init(parsed: _Parsed, stems: dict[str, str]) -> str:
         body.append(cst.parse_statement(f"from .{where} import {names}"))
     listed = ", ".join(f'"{name}"' for name in dunder_all)
     body.append(cst.parse_statement(f"__all__ = [{listed}]"))
+    body.extend(trailing)
     return _render(body)
 
 
@@ -717,7 +728,7 @@ def plan_split(source: str, *, name: str = "<module>", allow_file_paths: bool = 
 
     reads_by_stem = {
         stem: _file_reads(owned.get(stem, []), grouped.get(stem, []))
-        for stem in sorted(set(owned) | set(grouped))
+        for stem in sorted((set(owned) | set(grouped)) - {INIT_MODULE})
     }
     deferred, cycle_notes = _choose_deferred(reads_by_stem, stems)
     files = {
@@ -731,7 +742,7 @@ def plan_split(source: str, *, name: str = "<module>", allow_file_paths: bool = 
         )
         for stem in reads_by_stem
     }
-    files["__init__.py"] = _render_init(parsed, stems)
+    files["__init__.py"] = _render_init(parsed, stems, owned.get(INIT_MODULE, []))
     if parsed.main_guard is not None:
         files["__main__.py"] = _render_main(parsed, stems)
     return SplitPlan(files=files, notes=tuple(notes + cycle_notes))

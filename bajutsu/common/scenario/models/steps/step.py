@@ -1,13 +1,8 @@
-"""The step: exactly one action plus optional modifiers.
-
-Includes the macro (`use`), the runtime variable capture (`extract`), and the deterministic
-control-flow steps (`if`/`forEach`) whose nested step lists make this the one module where a
-forward reference to `Step` is needed.
-"""
+"""One step: exactly one action, plus its optional modifiers."""
 
 from __future__ import annotations
 
-from typing import Literal, Self
+from typing import TYPE_CHECKING, Self
 
 from pydantic import Field, field_validator, model_validator
 
@@ -53,88 +48,14 @@ from bajutsu.common.scenario.models.actions import (
 from bajutsu.common.scenario.models.assertions import Assertion, Wait
 from bajutsu.common.scenario.models.selector import Selector
 
+from ._shared import _MODIFIERS
+from .extract import Extract
+from .use import Use
 
-class Use(_Model):
-    """Invoke a reusable component, substituting its declared params with `with`.
-
-    The `use` step is expanded away (replaced by the component's steps) before the run, so it is a
-    compile-time macro, not a runtime action — determinism is unaffected.
-    """
-
-    component: str
-    with_: dict[str, str] = Field(default_factory=dict, alias="with")
-
-
-class Extract(_Model):
-    """Capture a UI element's property into a runtime variable (``vars.*``)."""
-
-    sel: Selector
-    prop: Literal["value", "label", "identifier"] = "value"
-
-
-class If(_Model):
-    """Conditional execution.
-
-    Evaluate an assertion as the condition, then run ``then`` steps if it passes or ``else`` steps
-    otherwise.
-    """
-
-    condition: Assertion
-    then: list[Step] = Field(default_factory=list)
-    else_: list[Step] | None = Field(default=None, alias="else")
-
-
-class ForEach(_Model):
-    """Iterate over elements matching a selector.
-
-    Each element's identifier is stored as ``vars.<as>`` and the nested steps are executed.
-    """
-
-    sel: Selector
-    as_: str = Field(alias="as")
-    steps: list[Step] = Field(default_factory=list)
-
-
-class Interrupt(_Model):
-    """A handler for an interstitial screen that can appear at an unpredictable point (BE-0314).
-
-    ``condition`` is the same assertion the ``if`` step evaluates; the runner checks it
-    opportunistically against trees it has already fetched (a ``wait``'s poll tick, an act step's
-    pre-action read), wherever in the step sequence the screen happens to surface, and runs
-    ``steps`` to clear it when it matches. The steps share the enclosing scenario's ``vars.*``, the
-    same as ``if``'s branches do.
-    """
-
-    condition: Assertion
-    steps: list[Step] = Field(default_factory=list)
-
-
-class AfterRule(_Model):
-    """One `after` entry (BE-0392): the teardown ``steps`` to run for one scenario outcome.
-
-    ``on`` names the outcome this entry answers — ``always``, or the scenario's own machine-checked
-    verdict (``success`` / ``error``). ``success``/``error`` extend the word ``capturePolicy``'s
-    ``Trigger.result`` already spells for a failed outcome (there one step's, here the whole
-    scenario's) rather than inventing a second vocabulary; ``always`` is the one addition, for
-    cleanup that does not depend on the outcome at all. More than one entry may carry the same
-    ``on`` and they compose in declaration order, the same way two ``capturePolicy`` rules may share
-    a trigger. The steps share the enclosing scenario's ``vars.*``, so an entry can delete the very
-    record an earlier ``http`` step's ``saveBody`` captured.
-    """
-
-    on: Literal["always", "success", "error"]
-    steps: list[Step] = Field(default_factory=list)
-
-
-class Web(_Model):
-    """Enter the web context: resolve a native WebView host, then run inner steps against its DOM.
-
-    The ``within`` selector resolves natively to exactly one ``WKWebView`` element; inner ``steps``
-    address the normalized DOM (``data-testid`` → ``Element.identifier``), not the native a11y tree.
-    """
-
-    within: Selector
-    steps: list[Step]
+if TYPE_CHECKING:
+    from .for_each import ForEach
+    from .if_ import If
+    from .web import Web
 
 
 # `name` becomes a filesystem path segment twice over — the run's step_id
@@ -228,13 +149,4 @@ class Step(_Model):
         return self
 
 
-If.model_rebuild()
-ForEach.model_rebuild()
-Interrupt.model_rebuild()
-Web.model_rebuild()
-
-# The action field names, derived from the model so a new action is declared in exactly one
-# place — adding a `Step` field — instead of also appending to a parallel hand-maintained tuple
-# (a per-action merge-conflict point). `_MODIFIERS` are the non-action fields.
-_MODIFIERS = ("capture", "extract", "name", "from_")
 _STEP_ACTIONS = tuple(f for f in Step.model_fields if f not in _MODIFIERS)

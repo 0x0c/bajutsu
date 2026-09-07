@@ -815,7 +815,8 @@ def test_respawn_uses_the_tighter_readiness_ceiling(
     # Patch the module-level name `_spawn_cold` resolves against — its own module's globals since
     # BE-0411 split the package, not the package's re-export.
     monkeypatch.setattr(
-        "bajutsu.common.platform_lifecycle.environments.xcuitest.xcuitest_environment._spawn_cold_with_retry", spy
+        "bajutsu.common.platform_lifecycle.environments.xcuitest.xcuitest_environment._spawn_cold_with_retry",
+        spy,
     )
 
     XcuitestEnvironment("xcuitest", "UDID", env_run=run, respawn=False).start(eff, Preconditions())
@@ -844,7 +845,8 @@ def test_in_place_respawn_uses_the_tighter_readiness_ceiling(
         return original(*args, **kwargs)
 
     monkeypatch.setattr(
-        "bajutsu.common.platform_lifecycle.environments.xcuitest.xcuitest_environment._spawn_cold_with_retry", spy
+        "bajutsu.common.platform_lifecycle.environments.xcuitest.xcuitest_environment._spawn_cold_with_retry",
+        spy,
     )
 
     env = XcuitestEnvironment("xcuitest", "UDID", env_run=run)  # respawn=False: a first bring-up
@@ -875,7 +877,8 @@ def test_erase_forced_cold_spawn_keeps_the_full_ceiling(
         return original(*args, **kwargs)
 
     monkeypatch.setattr(
-        "bajutsu.common.platform_lifecycle.environments.xcuitest.xcuitest_environment._spawn_cold_with_retry", spy
+        "bajutsu.common.platform_lifecycle.environments.xcuitest.xcuitest_environment._spawn_cold_with_retry",
+        spy,
     )
 
     env = XcuitestEnvironment("xcuitest", "UDID", env_run=run)

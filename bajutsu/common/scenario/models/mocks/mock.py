@@ -1,8 +1,4 @@
-"""Deterministic network stubs.
-
-A mock matches an outgoing request (reusing the request-side fields of the traffic matcher) and
-returns a canned response instead of hitting the network.
-"""
+"""One deterministic network stub the app under test calls instead of the real service."""
 
 from __future__ import annotations
 
@@ -11,14 +7,7 @@ from pydantic import Field
 from bajutsu.common.scenario.models._base import _Model
 from bajutsu.common.scenario.models.assertions import RequestMatch
 
-
-class MockResponse(_Model):
-    """The canned response a mock returns (defaults to an empty 200)."""
-
-    status: int = 200
-    headers: dict[str, str] = Field(default_factory=dict)
-    body: str | None = None
-    delay_ms: float | None = Field(default=None, alias="delayMs")  # artificial latency
+from .mock_response import MockResponse
 
 
 class Mock(_Model):

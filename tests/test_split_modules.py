@@ -28,6 +28,10 @@ def _plan(source: str) -> SplitPlan:
         ("HTTPError", "http_error"),
         ("XcuitestDriver", "xcuitest_driver"),
         ("_JSON", "_json"),
+        # PEP 8's trailing underscore: `if.py` is unimportable, so the scenario schema's `If` step
+        # cannot simply take its own lowercase name.
+        ("If", "if_"),
+        ("Not", "not_"),
     ],
 )
 def test_snake_case_keeps_leading_underscores(name: str, expected: str) -> None:
@@ -294,6 +298,28 @@ def test_module_level_code_with_several_owners_is_shared_and_reported() -> None:
     assert "from ._shared import _LIMIT" in plan.files["alpha.py"]
     assert "from ._shared import _LIMIT" in plan.files["beta.py"]
     assert any("alpha, beta" in note for note in plan.notes)
+
+
+def test_code_that_binds_nothing_runs_at_the_end_of_the_package_init() -> None:
+    # `If.model_rebuild()` in scenario/models/steps.py. It has to run where every name is in scope,
+    # which after the split is the package `__init__` — from a sibling module it resolves against
+    # that module's globals instead, and Pydantic cannot find the forward-referenced `Step`.
+    plan = _plan(
+        """
+        class Alpha:
+            pass
+
+
+        class Beta:
+            pass
+
+
+        Alpha.rebuild()
+        """
+    )
+    init = plan.files["__init__.py"]
+    assert init.index("__all__") < init.index("Alpha.rebuild()")
+    assert "_shared.py" not in plan.files
 
 
 def test_module_level_code_with_no_owner_is_shared_without_a_note() -> None:
@@ -608,3 +634,25 @@ def test_an_entry_point_guard_becomes_the_packages_dunder_main() -> None:
     assert "from . import main" in main
     assert 'if __name__ == "__main__":' in main
     assert "__main__" not in plan.files["__init__.py"]
+
+
+def test_module_level_code_derived_from_its_owner_follows_it() -> None:
+    # `_ASSERTION_KINDS = tuple(f for f in Assertion.model_fields …)` in scenario/models/assertions.py.
+    # It belongs in `Assertion`'s own file by rule 4, but above the class it raises NameError on
+    # import rather than failing anything statically.
+    plan = _plan(
+        """
+        class Alpha:
+            def fields(self) -> tuple[str, ...]:
+                return _FIELDS
+
+
+        _FIELDS = tuple(Alpha.__annotations__)
+
+
+        class Beta:
+            pass
+        """
+    )
+    alpha = plan.files["alpha.py"]
+    assert alpha.index("class Alpha:") < alpha.index("_FIELDS = ")

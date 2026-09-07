@@ -437,7 +437,8 @@ def test_xcuitest_environment_requires_test_runner_in_config(
     # has staged the bundle locally (`make runner-bundle`) would have `start()` spawn a real runner
     # instead of raising, making the gate depend on the ambient tree.
     monkeypatch.setattr(
-        "bajutsu.common.platform_lifecycle.environments.xcuitest._functions.bundled_products_dir", lambda: None
+        "bajutsu.common.platform_lifecycle.environments.xcuitest._functions.bundled_products_dir",
+        lambda: None,
     )
     xe = XcuitestEnvironment("xcuitest", "UDID", env_run=lambda a, extra_env: "")
     with pytest.raises(simctl.DeviceError, match="testRunner"):
@@ -457,7 +458,8 @@ def test_xcuitest_environment_start_launches_runner_and_creates_driver(
         return ""
 
     monkeypatch.setattr(
-        "bajutsu.common.platform_lifecycle.environments.xcuitest.xcuitest_environment._allocate_port", lambda: 54321
+        "bajutsu.common.platform_lifecycle.environments.xcuitest.xcuitest_environment._allocate_port",
+        lambda: 54321,
     )
 
     popen_calls: list[dict[str, Any]] = []
@@ -536,7 +538,8 @@ def test_xcuitest_environment_applies_permissions_before_the_runner_launches(
         return ""
 
     monkeypatch.setattr(
-        "bajutsu.common.platform_lifecycle.environments.xcuitest.xcuitest_environment._allocate_port", lambda: 54321
+        "bajutsu.common.platform_lifecycle.environments.xcuitest.xcuitest_environment._allocate_port",
+        lambda: 54321,
     )
 
     popen_started_after_privacy: list[bool] = []
@@ -758,7 +761,8 @@ def test_spawn_cold_discards_a_never_ready_runner(
     from bajutsu.common.drivers.xcuitest import XcuitestChannelError
 
     monkeypatch.setattr(
-        "bajutsu.common.platform_lifecycle.environments.xcuitest.xcuitest_environment._allocate_port", lambda: 12345
+        "bajutsu.common.platform_lifecycle.environments.xcuitest.xcuitest_environment._allocate_port",
+        lambda: 12345,
     )
     # Shrink the cold-startup ceiling so a never-ready wait fails in one poll rather than 120s.
     monkeypatch.setattr(
@@ -817,7 +821,8 @@ def test_xcuitest_environment_forwards_preconditions_to_runner_env(
     from bajutsu.common.config import XcuitestConfig
 
     monkeypatch.setattr(
-        "bajutsu.common.platform_lifecycle.environments.xcuitest.xcuitest_environment._allocate_port", lambda: 11111
+        "bajutsu.common.platform_lifecycle.environments.xcuitest.xcuitest_environment._allocate_port",
+        lambda: 11111,
     )
 
     popen_calls: list[dict[str, Any]] = []

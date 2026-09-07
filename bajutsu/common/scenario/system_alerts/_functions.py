@@ -1,44 +1,16 @@
-"""Locale-keyed button labels for the iOS system prompts a permission preset cannot reach (BE-0320).
-
-`handleSystemAlert` taps a SpringBoard prompt's button by its visible text, and BE-0320 pins the
-Simulator's system language so that text is deterministic. This table closes the remaining gap for
-the prompts BE-0276's `permissions` presets cannot pre-answer — notification authorization is not a
-TCC (Transparency, Consent, and Control) service, App Tracking Transparency (ATT) has no `simctl`
-toggle at all, and the cross-process paste consent is TCC-backed as `kTCCServicePasteboard` yet has
-no `simctl` toggle either (BE-0369) — so a scenario about any of them can name the *intent*
-(`grant` / `deny`) instead of transcribing whichever language the pinned locale renders.
-
-Deliberately narrow. It covers those named prompts alone, never an open-ended translation of
-arbitrary SpringBoard text, and only the languages whose values have been read back from a
-Simulator. Every other alert keeps using the literal `label` / `labelMatches` a scenario supplies,
-unchanged.
-
-This is a source of button *labels*, not a claim about which process owns the alert: `savePassword`
-is raised into the application's own process, and BE-0406 added it here anyway because the path that
-taps a label is chosen separately, by whether the SpringBoard query can see the alert. `_SURFACES`
-below is what records that difference, per prompt.
-
-The values are Apple's own, transcribed from the iOS Simulator runtime's shipped strings:
-`UserNotificationsServer.framework/<lang>.lproj/Localizable.strings` (`PERMISSION_ALERT_ALLOW` /
-`PERMISSION_ALERT_DENY`), `TCC.framework/<lang>.lproj/Localizable.strings`
-(`REQUEST_ACCESS_ALLOW_kTCCServiceUserTracking` / `REQUEST_ACCESS_DENY_kTCCServiceUserTracking`),
-`DragUI.framework/<lang>.lproj/Localizable.strings` (`PASTE_AUTHORIZATION_BUTTON_ALLOW` /
-`PASTE_AUTHORIZATION_BUTTON_DENY`), and — for `savePassword` — `WebUI.framework`'s
-`Save Password (save login information sheet)`, `... (save login information sheet in app)`,
-`Never for This Website (save login information sheet)`, `Not Now (save login information sheet)`
-and `Never for This Card (save credit card data sheet)`.
-Re-reading those files under a new runtime is what checks this table, rather than trusting it. Two
-properties of `WebUI.framework`'s location matter when re-checking it: it lives in the runtime's
-cryptex, at `System/Cryptexes/OS/System/Library/PrivateFrameworks/`, rather than beside the three
-frameworks above; and every `.strings` file is an Apple binary property list, so it yields its
-contents to `plutil` rather than to a plain-text search.
-"""
+"""Resolve a named prompt and choice into the shape a backend can act on."""
 
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
-from typing import Literal, TypedDict
+from typing import Literal
+
+from ._prompt_surfaces import _PromptSurfaces
+from ._prompts import _Prompts
+from ._shape import _Shape
+from .alert_surfaces import AlertSurfaces
+from .resolved_alert_shape import ResolvedAlertShape
+from .uncovered_system_alert_locale import UncoveredSystemAlertLocale
 
 # The prompts this table covers. `notifications` matches the permission vocabulary's spelling
 # (`drivers.base.PERMISSION_SERVICES`) for the same OS prompt; `tracking` is ATT and `paste` is the
@@ -50,37 +22,6 @@ SystemAlertPrompt = Literal["notifications", "tracking", "paste", "savePassword"
 # What the author means, rather than which button says it. `deny` is the prompt's negative choice,
 # which is not always a plain refusal — ATT's is "Ask App Not to Track".
 SystemAlertChoice = Literal["grant", "deny"]
-
-
-class _Shape(TypedDict):
-    """One rendering of a prompt in one language: how to recognize it, and what each choice taps.
-
-    A prompt renders as more than one shape when the operating system varies its buttons by context
-    or by version — `savePassword` does both. `identifying` is every label that must be present for
-    this shape to be the alert on screen; `excludes` is the labels whose presence rules it out, for
-    a shape another alert's button set would otherwise satisfy. A `TypedDict` so mypy, not a runtime
-    check, rejects a half-filled entry — one that would resolve `deny` while `grant` raised a
-    `KeyError` mid-run.
-    """
-
-    identifying: tuple[str, ...]
-    grant: str
-    deny: str
-    excludes: tuple[str, ...]
-
-
-class _Prompts(TypedDict):
-    """Every prompt `SystemAlertPrompt` names, with its labels.
-
-    Declaring a new prompt without its labels is then a type error, rather than a schema that
-    accepts a step no lookup can resolve. The keys must stay in step with `SystemAlertPrompt`; the
-    per-prompt maps are keyed by language subtag (lowercase, no region — see `system_alert_label`).
-    """
-
-    notifications: dict[str, list[_Shape]]
-    tracking: dict[str, list[_Shape]]
-    paste: dict[str, list[_Shape]]
-    savePassword: dict[str, list[_Shape]]
 
 
 # Keyed by prompt, then language subtag, then one entry per shape. Note the English deny labels for
@@ -194,34 +135,6 @@ _LABELS: _Prompts = {
 }
 
 
-class AlertSurfaces(TypedDict):
-    """Which of Bajutsu's three answer paths a prompt can actually be declared and answered on.
-
-    Recorded per prompt because `savePassword` is the first to diverge (BE-0406): iOS raises it into
-    the application's own process, so `springboard.alerts` never sees it and only the guard's in-tree
-    dismissal can clear it. Three consumers read this — the `handleSystemAlert` step rejects a prompt
-    it could never resolve, the in-tree paths arm only on rules a tree match can reach, and the
-    interruption policy pushed to the runner drops a rule that surface can never meet.
-    """
-
-    step: bool
-    native: bool
-    in_tree: bool
-
-
-class _PromptSurfaces(TypedDict):
-    """Every prompt `SystemAlertPrompt` names, with the surfaces it reaches.
-
-    A `TypedDict` for the same reason `_Prompts` is one: declaring a prompt without its record is
-    then a type error, rather than a `KeyError` raised out of `alert_surfaces` at parse time.
-    """
-
-    notifications: AlertSurfaces
-    tracking: AlertSurfaces
-    paste: AlertSurfaces
-    savePassword: AlertSurfaces
-
-
 # SpringBoard owns the first three, so each reaches the step and the native probe and nothing else.
 # `savePassword` is the mirror image: the in-tree dismissal alone.
 _SURFACES: _PromptSurfaces = {
@@ -230,28 +143,6 @@ _SURFACES: _PromptSurfaces = {
     "paste": {"step": True, "native": True, "in_tree": False},
     "savePassword": {"step": False, "native": False, "in_tree": True},
 }
-
-
-@dataclass(frozen=True)
-class ResolvedAlertShape:
-    """One shape of one prompt, resolved for a locale and a choice.
-
-    The scenario layer's half of `orchestrator.types.ResolvedAlertRule`, kept here so the schema
-    stays a portable inner contract that pulls in no orchestrator layer; `run` pairs each of these
-    with the prompt's `AlertSurfaces` to build the rule the guard matches with.
-    """
-
-    identifying_labels: frozenset[str]
-    tap_label: str
-    excluded_labels: frozenset[str]
-
-
-class UncoveredSystemAlertLocale(ValueError):
-    """A `prompt` / `choice` pair was asked for under a language the table does not cover.
-
-    Raised rather than guessed at: a wrong label would tap nothing (or, worse, the other button),
-    and BE-0320 exists to remove exactly that kind of accident.
-    """
 
 
 def alert_surfaces(prompt: SystemAlertPrompt) -> AlertSurfaces:
