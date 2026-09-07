@@ -805,7 +805,9 @@ def test_every_call_carries_its_bound(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_a_call_that_never_returns_raises_a_device_fault(monkeypatch: pytest.MonkeyPatch) -> None:
     # Driven against a real subprocess that outlives its bound, since what is under test is the
     # translation of `subprocess.run`'s own timeout — not a stub standing in for it.
-    monkeypatch.setattr(simctl, "_SIMCTL_TIMEOUT_S", 0.3)
+    # `_timeout_for` reads the bound in `_functions`'s own globals, so patching the package's
+    # re-export would rebind a name nothing resolves and this call would run its real 60s.
+    monkeypatch.setattr(simctl._functions, "_SIMCTL_TIMEOUT_S", 0.3)
     sleeper = [sys.executable, "-c", "import time; time.sleep(30)"]
 
     with pytest.raises(simctl.DeviceTimeout) as excinfo:

@@ -481,3 +481,28 @@ def test_a_runtime_cycle_between_split_files_is_reported() -> None:
         """
     )
     assert any("circular import" in note for note in plan.notes)
+
+
+def test_a_tuple_unpacking_assignment_binds_every_one_of_its_names() -> None:
+    # `_EV_SYN, _EV_KEY, _EV_ABS = 0, 1, 3` in bajutsu/common/backend_cli/adb.py. Reading only the
+    # tuple as a whole leaves all three invisible, so nothing imports them and the split file fails
+    # ruff's F821 on names it still reads.
+    plan = _plan(
+        """
+        _FIRST, _SECOND = 1, 2
+
+
+        class Alpha:
+            def total(self) -> int:
+                return _FIRST
+
+
+        class Beta:
+            def total(self) -> int:
+                return _SECOND
+        """
+    )
+    assert "_FIRST, _SECOND = 1, 2" in plan.files["_shared.py"]
+    assert "from ._shared import _FIRST" in plan.files["alpha.py"]
+    assert "from ._shared import _SECOND" in plan.files["beta.py"]
+    assert "from ._shared import _FIRST as _FIRST" in plan.files["__init__.py"]

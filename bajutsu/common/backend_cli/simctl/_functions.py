@@ -1,56 +1,65 @@
-"""simctl wrapper — erase / boot / launch / openurl / io.
-
-Command builders are pure and unit-tested. Execution goes through an injectable
-runner so the device-touching part stays thin and swappable in tests.
-"""
+"""Drive one Simulator through the simctl command line, under a deadline on every call."""
 
 from __future__ import annotations
 
-import contextlib
 import json
 import logging
 import os
-import plistlib
 import re
 import subprocess
-import tempfile
-import time
-from collections.abc import Callable, Mapping, Sequence
-from pathlib import Path
+from collections.abc import Mapping, Sequence
+from typing import TYPE_CHECKING
 
-from bajutsu.common.devices import errors as device_errors
 from bajutsu.common.devices.id import is_valid_device_id
+
+from ._shared import _LANGUAGES_KEY, _LOCALE_KEY
+from .device_error import DeviceError
+from .device_timeout import DeviceTimeout
+
+if TYPE_CHECKING:
+    from ._shared import RunFn
 
 _logger = logging.getLogger(__name__)
 
-# (argv, extra_env) -> stdout
-RunFn = Callable[[list[str], Mapping[str, str] | None], str]
+
+# A locale is config-supplied, so it reaches an argv the same way a `--udid` does; the same policy
+# applies (chiefly: never leads with `-`, which `defaults` would read as an option). Deliberately
+# permissive about the body so an ICU keyword form (`en_US@calendar=japanese`) still passes.
+_LOCALE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_@=.+-]*$")
 
 
-class DeviceError(device_errors.DeviceError):
-    """A simctl operation failed in a way the user can act on (e.g. launching an
-    app that isn't installed, or an invalid device).
-
-    The iOS-specific subclass of the platform-neutral `device_errors.DeviceError` (BE-0260): a
-    generic handler catches the base, iOS-only code catches this. Carries a clean, actionable
-    message — the CLI surfaces it and exits 2, instead of dumping a Python traceback.
-    """
+# The Simulator's global preference domain, where its system-wide language and locale live. Writing
+# it needs a booted device (`simctl spawn` runs the guest's own `defaults`), which is why the
+# BE-0320 pin happens after `boot` rather than as a launch argument.
+_GLOBAL_DOMAIN = "-globalDomain"
 
 
-class DeviceTimeout(DeviceError, device_errors.DeviceTimeout):
-    """A simctl command exceeded its deadline — the observable symptom of a wedged CoreSimulator.
+# Every simctl call that goes through `real_run` carries a deadline (BE-0363), so a wedged
+# CoreSimulator surfaces as a named device fault rather than hanging until CI cancels the whole job
+# — a cancelled job names no cause at all. One value cannot serve every command, which is why there
+# are two below and why the helper picks between them from the command itself: `bootstatus` waits
+# out a full boot, while `list` returns in well under a second.
 
-    Subclassing `DeviceError` leaves every handler that already converts or propagates a device
-    fault working unchanged. Being a distinct type is what lets the runner-discard teardown — which
-    absorbs a device fault so an app that is not running cannot fail a teardown — still let a hang
-    through (BE-0363). This module's own deliberate suppressions key on `CalledProcessError` alone,
-    so a timeout escapes them with none of them narrowed.
+# The commands whose duration the device or the app sets, not simctl. `bootstatus` waits out a full
+# boot and `boot` / `erase` drive the same machinery, while `install` transfers a whole app bundle,
+# so its cost scales with the app under test — an input no bound can see. Sized against the roughly
+# 80 seconds the iOS end-to-end workflow prices a CI Simulator boot at, since CI is both the slower
+# environment and the one where a hang matters; the headroom over that is deliberate, because the
+# bound exists to catch a call that will never return, not to police a slow one.
+_DEVICE_BLOCKING_TIMEOUT_S = 300.0
+_DEVICE_BLOCKING_SUBCOMMANDS = frozenset({"bootstatus", "boot", "erase", "install"})
 
-    The platform-neutral `device_errors.DeviceTimeout` is a *second* base rather than a replacement
-    (BE-0374), so this stays everything it already was — a `simctl.DeviceError`, and through it a
-    `device_errors.DeviceError` — while the backend-agnostic run pipeline gains a name for it that
-    costs it no iOS import.
-    """
+# Every other command costs only simctl's own small, bounded work, so nothing about the app or the
+# scenario can stretch it — `list` returns in well under a second. This sits far above all of them,
+# and still catches a wedge long before a CI job's own `timeout-minutes` would.
+#
+# The pasteboard is the one family the host itself can stall (see `_PBCOPY_*` above), and the two
+# halves are bounded differently on purpose. The write runs outside this helper with its own
+# per-attempt deadline and a retry, because it was measured stalling transiently and re-feeding the
+# same stdin is safe. The read (`pbpaste`) takes this bound and raises, because its result is the
+# scenario's data: retrying it is the device-level decision BE-0363 deferred to the recovery ladder,
+# and a read that raises at a named deadline already improves on the unbounded hang it replaced.
+_SIMCTL_TIMEOUT_S = 60.0
 
 
 def device_error(exc: subprocess.CalledProcessError) -> DeviceError:
@@ -110,12 +119,6 @@ def launch_cmd(udid: str, bundle_id: str, args: Sequence[str] = ()) -> list[str]
     ]
 
 
-# A locale is config-supplied, so it reaches an argv the same way a `--udid` does; the same policy
-# applies (chiefly: never leads with `-`, which `defaults` would read as an option). Deliberately
-# permissive about the body so an ICU keyword form (`en_US@calendar=japanese`) still passes.
-_LOCALE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_@=.+-]*$")
-
-
 def validated_locale(locale: str) -> str:
     """Return `locale` if it is safe to place on a `defaults` argv, else raise.
 
@@ -150,18 +153,6 @@ def locale_args(locale: str) -> list[str]:
     `handleSystemAlert` taps — is a separate process Bajutsu never launches, so its own language
     comes from the device's global preference domain instead (`system_locale_cmds`, BE-0320)."""
     return ["-AppleLocale", locale, "-AppleLanguages", f"({language_of(locale)})"]
-
-
-# The Simulator's global preference domain, where its system-wide language and locale live. Writing
-# it needs a booted device (`simctl spawn` runs the guest's own `defaults`), which is why the
-# BE-0320 pin happens after `boot` rather than as a launch argument.
-_GLOBAL_DOMAIN = "-globalDomain"
-
-# The two global-domain keys that decide which language SpringBoard renders in. `AppleLanguages` is
-# written as a one-element array (not appended to) so the pinned language is the device's first
-# choice with nothing behind it to fall back to — the same single value `locale_args` gives the app.
-_LANGUAGES_KEY = "AppleLanguages"
-_LOCALE_KEY = "AppleLocale"
 
 
 def export_globals_cmd(udid: str) -> list[str]:
@@ -214,24 +205,6 @@ def set_location_cmd(udid: str, lat: float, lon: float) -> list[str]:
 
 def clear_location_cmd(udid: str) -> list[str]:
     return ["xcrun", "simctl", "location", validated_udid(udid), "clear"]
-
-
-# The one permission-vocabulary service (BE-0276) with no simctl privacy TCC (Transparency,
-# Consent, and Control) equivalent — iOS notification authorization is not part of TCC. Every other
-# vocabulary entry names its own TCC service (`base.PERMISSION_SERVICES`'s spelling matches
-# `simctl privacy`'s service names 1:1), so no separate service->TCC-name map is needed.
-_NO_TCC_SERVICE = "notifications"
-
-# simctl's host<->Simulator pasteboard sync (`pbcopy`) intermittently times out — simctl
-# exits 60 (ETIMEDOUT), or the call hangs past a reasonable bound — which is transient: a
-# re-run clears it. Retry a bounded number of times so a genuine fault still surfaces. The
-# budget is deliberately generous (linear backoff, ~15s over five attempts): CI has been
-# seen wedged past three quick tries (~1.5s), and this recovery path is only paid when a
-# timeout actually occurs, so widening it costs nothing on the healthy path.
-_PBCOPY_MAX_ATTEMPTS = 5
-_PBCOPY_RETRY_DELAY_S = 1.5
-_PBCOPY_TIMEOUT_S = 30.0
-_PBCOPY_TIMEOUT_EXIT = 60  # simctl's ETIMEDOUT — the one transient exit worth retrying
 
 
 def privacy_cmd(udid: str, action: str, tcc_service: str, bundle_id: str) -> list[str]:
@@ -379,34 +352,6 @@ def validated_device_arg(value: str) -> str:
     if value and not value.startswith("-"):
         return value
     raise DeviceError(f"invalid simctl device argument: {value!r}")
-
-
-# Every simctl call that goes through `real_run` carries a deadline (BE-0363), so a wedged
-# CoreSimulator surfaces as a named device fault rather than hanging until CI cancels the whole job
-# — a cancelled job names no cause at all. One value cannot serve every command, which is why there
-# are two below and why the helper picks between them from the command itself: `bootstatus` waits
-# out a full boot, while `list` returns in well under a second.
-
-# The commands whose duration the device or the app sets, not simctl. `bootstatus` waits out a full
-# boot and `boot` / `erase` drive the same machinery, while `install` transfers a whole app bundle,
-# so its cost scales with the app under test — an input no bound can see. Sized against the roughly
-# 80 seconds the iOS end-to-end workflow prices a CI Simulator boot at, since CI is both the slower
-# environment and the one where a hang matters; the headroom over that is deliberate, because the
-# bound exists to catch a call that will never return, not to police a slow one.
-_DEVICE_BLOCKING_TIMEOUT_S = 300.0
-_DEVICE_BLOCKING_SUBCOMMANDS = frozenset({"bootstatus", "boot", "erase", "install"})
-
-# Every other command costs only simctl's own small, bounded work, so nothing about the app or the
-# scenario can stretch it — `list` returns in well under a second. This sits far above all of them,
-# and still catches a wedge long before a CI job's own `timeout-minutes` would.
-#
-# The pasteboard is the one family the host itself can stall (see `_PBCOPY_*` above), and the two
-# halves are bounded differently on purpose. The write runs outside this helper with its own
-# per-attempt deadline and a retry, because it was measured stalling transiently and re-feeding the
-# same stdin is safe. The read (`pbpaste`) takes this bound and raises, because its result is the
-# scenario's data: retrying it is the device-level decision BE-0363 deferred to the recovery ladder,
-# and a read that raises at a named deadline already improves on the unbounded hang it replaced.
-_SIMCTL_TIMEOUT_S = 60.0
 
 
 def _subcommand_of(args: list[str]) -> str:
@@ -686,235 +631,3 @@ def create_device(
     if not udid:
         raise DeviceError(f"simctl create {device_type} printed no udid")
     return validated_udid(udid)
-
-
-class Env:
-    """Thin simctl front end for one device."""
-
-    def __init__(self, udid: str, run: RunFn = real_run) -> None:
-        # Validate at construction so a bad --udid fails fast at the object boundary (the builders
-        # below also validate, so this is belt-and-suspenders — the same posture the device drivers
-        # take for their own udid).
-        self.udid = validated_udid(udid)
-        self._run = run
-
-    def erase(self) -> None:
-        self._run(erase_cmd(self.udid), None)
-
-    # The four suppressions below absorb the ordinary "already in that state" failure — shutting a
-    # device down that is already off, uninstalling an app that was never installed. Each keys on
-    # `CalledProcessError` alone, so a `DeviceTimeout` propagates instead (BE-0363): a hung
-    # `shutdown` is not that ordinary outcome, it is the wedge the recovery ladder needs to hear
-    # about. Widening any of them to `DeviceError` would put the silence back.
-
-    def shutdown(self) -> None:
-        with contextlib.suppress(subprocess.CalledProcessError):
-            self._run(shutdown_cmd(self.udid), None)
-
-    def boot(self) -> None:
-        with contextlib.suppress(subprocess.CalledProcessError):
-            self._run(boot_cmd(self.udid), None)
-
-    def system_locale_matches(self, locale: str) -> bool | None:
-        """Whether the device's global domain already renders the language `pin_system_locale` writes.
-
-        `None` distinguishes "could not read the domain" from a definite mismatch, so a caller can
-        act on what it actually observed: skipping the write needs a positive match, while failing
-        the run needs a positive *mis*match — an unreadable device is neither. A domain that reads
-        back fine but carries no pinned language is a *mismatch*, not an unknown: it is positive
-        evidence that nothing pinned it.
-
-        A match is one language with **nothing queued behind it** whose subtag is the one we would
-        write, plus an exact `AppleLocale`. Comparing the subtag rather than the whole entry matters
-        for the common case: a freshly created Simulator inherits the host's language-region tag
-        (`en-US`), which selects the same language as the bare `en` this writes, so an exact string
-        comparison would rewrite and reboot every device that was already right. A second language
-        behind the first is still a mismatch — SpringBoard can fall back to it for a string the first
-        lacks, which is the "matched by accident" behaviour this exists to remove.
-
-        Raises:
-            DeviceError: `locale` is not safe to place on a `defaults` argv — checked up front, so a
-                malformed one never costs a subprocess round trip first.
-        """
-        checked = validated_locale(locale)
-        try:
-            exported = plistlib.loads(self._run(export_globals_cmd(self.udid), None).encode())
-        except DeviceTimeout as exc:
-            _probe_timed_out(exc, "an unreadable global domain")
-            return None
-        except (subprocess.CalledProcessError, plistlib.InvalidFileException, ValueError):
-            return None
-        if not isinstance(exported, dict):
-            return None
-        languages = exported.get(_LANGUAGES_KEY)
-        if not isinstance(languages, list) or len(languages) != 1:
-            return False  # absent, or a fallback queued behind the first
-        return (
-            language_of(str(languages[0])) == language_of(checked)
-            and exported.get(_LOCALE_KEY) == checked
-        )
-
-    def pin_system_locale(self, locale: str) -> bool:
-        """Write the device's system-wide language and locale unless already exact; True if it wrote.
-
-        The caller reboots the Simulator when this returns True — a running SpringBoard does not pick
-        a global-domain write up live (BE-0320). Skipping the write on a device that already carries
-        the value is what keeps the common case (a Simulator pinned by an earlier spawn, or already
-        on the configured locale) at the cost of one read instead of a second boot cycle. Only a
-        positive match skips the write; an unreadable domain (`None`) writes, since nothing was
-        observed to already be right.
-        """
-        if self.system_locale_matches(locale) is True:
-            return False
-        for cmd in system_locale_cmds(self.udid, locale):
-            self._run(cmd, None)
-        return True
-
-    def is_installed(self, bundle_id: str) -> bool:
-        try:
-            self._run(get_app_container_cmd(self.udid, bundle_id), None)
-        except DeviceTimeout as exc:
-            _probe_timed_out(exc, "not installed")
-            return False
-        except subprocess.CalledProcessError:
-            return False
-        else:
-            return True
-
-    def install(self, app_path: str) -> None:
-        self._run(install_cmd(self.udid, app_path), None)
-
-    def uninstall(self, bundle_id: str) -> None:
-        with contextlib.suppress(subprocess.CalledProcessError):
-            self._run(uninstall_cmd(self.udid, bundle_id), None)
-
-    def launch(
-        self,
-        bundle_id: str,
-        args: Sequence[str] = (),
-        env: Mapping[str, str] | None = None,
-    ) -> None:
-        self._run(launch_cmd(self.udid, bundle_id, args), child_env(env or {}))
-
-    def terminate(self, bundle_id: str) -> None:
-        with contextlib.suppress(subprocess.CalledProcessError):
-            self._run(terminate_cmd(self.udid, bundle_id), None)
-
-    def openurl(self, url: str) -> None:
-        self._run(openurl_cmd(self.udid, url), None)
-
-    def screenshot(self, path: str) -> None:
-        self._run(screenshot_cmd(self.udid, path), None)
-
-    def set_location(self, lat: float, lon: float) -> None:
-        self._run(set_location_cmd(self.udid, lat, lon), None)
-
-    def clear_location(self) -> None:
-        self._run(clear_location_cmd(self.udid), None)
-
-    def reset_permissions(self, bundle_id: str) -> None:
-        """Reset every TCC grant/revoke this bundle carries back to "ask on next use" (`simctl
-        privacy reset all`).
-
-        `simctl install`/`uninstall` do not touch TCC.db — verified on-device (BE-0407 follow-up):
-        a grant survives both a plain reinstall and an uninstall-then-install of the same bundle
-        id, only `simctl erase` clears it. A caller that means to hand a scenario a clean slate
-        (mirroring `adb.Env.clear`'s permission reset on Android) must reset explicitly rather than
-        relying on either install path to do it.
-        """
-        self._run(privacy_cmd(self.udid, "reset", "all", bundle_id), None)
-
-    def apply_permissions(self, bundle_id: str, permissions: Mapping[str, str]) -> None:
-        """Grant or revoke each `service: grant|revoke` entry in `permissions` up front, so a
-        runtime prompt never blocks the run (`simctl privacy`, BE-0276).
-
-        Every entry's service and action are validated before any `simctl privacy` call runs, so
-        an unsupported service or an unrecognized action fails before the device is touched at all
-        — never partway through, leaving some services already mutated (preflight/schema normally
-        reject this before any device work; this validation is the runtime backstop for a caller
-        that bypasses both).
-
-        Raises:
-            DeviceError: a service has no TCC equivalent (`notifications`), or an action is neither
-                `grant` nor `revoke`.
-        """
-        for service, action in permissions.items():
-            if service == _NO_TCC_SERVICE:
-                raise DeviceError(f"permissions.{service} has no simctl privacy equivalent on iOS")
-            if action not in ("grant", "revoke"):
-                raise DeviceError(
-                    f"unknown simctl privacy action: {action!r} (expected grant|revoke)"
-                )
-        for service, action in permissions.items():
-            self._run(privacy_cmd(self.udid, action, service, bundle_id), None)
-
-    def clear_keychain(self) -> None:
-        self._run(keychain_reset_cmd(self.udid), None)
-
-    def clear_clipboard(self) -> None:
-        # pbcopy reads from stdin, which RunFn doesn't support. Use subprocess
-        # directly but route through a class-level attribute so tests can patch it.
-        self._run_pbcopy(pbcopy_cmd(self.udid))
-
-    def set_clipboard(self, text: str) -> None:
-        # Same simctl pbcopy as clearing, but with the seed text on stdin.
-        self._run_pbcopy(pbcopy_cmd(self.udid), text)
-
-    @staticmethod
-    def _run_pbcopy(cmd: list[str], text: str = "") -> None:
-        # pbcopy is idempotent — re-feeding the same stdin is safe — so retry the transient
-        # simctl pasteboard timeout (see `_PBCOPY_*`) rather than fail the whole scenario on it.
-        last: subprocess.CalledProcessError | subprocess.TimeoutExpired | None = None
-        for attempt in range(_PBCOPY_MAX_ATTEMPTS):
-            try:
-                subprocess.run(
-                    cmd,
-                    input=text,
-                    capture_output=True,
-                    text=True,
-                    check=True,
-                    timeout=_PBCOPY_TIMEOUT_S,
-                )
-            except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
-                last = exc
-                # Only the transient exit-60 timeout (and a Python-side hang, which has no
-                # returncode) is worth retrying; a genuine simctl failure — an un-booted device,
-                # a bad UDID — won't clear on a re-run, so surface it now rather than after the
-                # full backoff budget.
-                if (
-                    isinstance(exc, subprocess.CalledProcessError)
-                    and exc.returncode != _PBCOPY_TIMEOUT_EXIT
-                ):
-                    raise
-                if attempt + 1 < _PBCOPY_MAX_ATTEMPTS:
-                    time.sleep(_PBCOPY_RETRY_DELAY_S * (attempt + 1))
-            else:
-                return
-        assert last is not None  # the loop runs at least once, so a failure sets `last`
-        raise last
-
-    def get_clipboard(self) -> str:
-        # pbpaste returns the pasteboard content on stdout; RunFn already yields stdout.
-        return self._run(pbpaste_cmd(self.udid), None)
-
-    def home(self) -> None:
-        self._run(home_cmd(self.udid), None)
-
-    def foreground(self, bundle_id: str) -> None:
-        self._run(foreground_cmd(self.udid, bundle_id), None)
-
-    def override_status_bar(self, **kwargs: str | int) -> None:
-        self._run(status_bar_override_cmd(self.udid, **kwargs), None)
-
-    def clear_status_bar(self) -> None:
-        self._run(status_bar_clear_cmd(self.udid), None)
-
-    def push(self, bundle_id: str, payload: dict[str, object]) -> None:
-        """Deliver a simulated push: write the APNs payload to a temp file, then push it."""
-        with tempfile.NamedTemporaryFile("w", suffix=".apns", delete=False, encoding="utf-8") as f:
-            json.dump(payload, f)
-            path = f.name
-        try:
-            self._run(push_cmd(self.udid, bundle_id, path), None)
-        finally:
-            Path(path).unlink()

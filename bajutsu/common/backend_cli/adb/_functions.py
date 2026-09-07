@@ -1,44 +1,104 @@
-"""adb wrapper — clean-state / launch / deeplink / input / screencap / device list.
-
-The Android environment ([BE-0007]) is the twin of the iOS `simctl` sequence: a clean state is
-`pm clear <package>` (the `erase` equivalent), launch is `am start`, and a deeplink is an
-`am start -a android.intent.action.VIEW`. Command builders are pure and unit-tested; execution
-goes through an injectable runner so the device-touching part stays thin and swappable in tests —
-the same shape as `simctl.py`.
-
-adb carries everything an operation needs in its argv (intent extras included), so the runner is
-the plain ``argv -> stdout`` form, not simctl's ``(argv, env)`` — no launch env
-is forwarded through the parent process.
-"""
+"""Drive one device through the adb command line, from shell calls up to synthesized touches."""
 
 from __future__ import annotations
 
 import base64
-import contextlib
 import math
 import re
 import shlex
 import subprocess
-from collections.abc import Callable, Mapping
-from dataclasses import dataclass
-from pathlib import Path
+from collections.abc import Mapping
+from typing import TYPE_CHECKING
 
-from bajutsu.common.devices import errors as device_errors
 from bajutsu.common.devices.id import is_valid_device_id
 
-# argv -> stdout. adb needs no parent-process env (unlike simctl's SIMCTL_CHILD_*).
-RunFn = Callable[[list[str]], str]
+from .device_error import DeviceError
+from .touch_device import TouchDevice
+
+if TYPE_CHECKING:
+    from ._shared import RunFn
 
 
-class DeviceError(device_errors.DeviceError):
-    """An adb operation failed in a way the user can act on (e.g. no emulator, app not installed).
+# The device-side path `screenrecord` writes to before it is pulled to the run dir. One fixed path is
+# enough: a device runs one scenario at a time, and parallel lanes are distinct serials. Public so the
+# interval starter pulls from and cleans up the same path it records to.
+VIDEO_DEVICE_PATH = "/sdcard/bajutsu-scenario.mp4"
 
-    Carries a clean, actionable message — the CLI surfaces it and exits 2, the same boundary as the
-    iOS device errors. The Android-specific subclass of the platform-neutral
-    `device_errors.DeviceError` (BE-0260): the generic CLI entrypoints (`run` / `crawl` / `audit` /
-    `record`) catch that base, so an Android device failure surfaces the same way — a clean exit-2
-    rather than an unhandled traceback — without their handlers importing the iOS `simctl` module.
-    """
+
+# --- raw touch injection for a reliable double-tap (BE-0208) ---
+#
+# `input tap x y ; input tap x y` starts a fresh JVM per tap, so the inter-tap gap overruns the
+# platform's double-tap window even chained in one round-trip (BE-0210). `sendevent` is a tiny native
+# binary, so two contacts fire well inside the window — but it writes `/dev/input` directly, so it
+# needs root and the concrete touchscreen node (discovered from `getevent -lp`). The driver gates on
+# `id -u` and falls back to `input tap` when either is unavailable, so a non-rooted device is
+# unaffected. Linux input protocol B, one finger: type/code constants below name the raw events.
+_EV_SYN, _EV_KEY, _EV_ABS = 0, 1, 3
+_SYN_REPORT = 0
+_BTN_TOUCH = 330
+_ABS_MT_SLOT, _ABS_MT_POSITION_X, _ABS_MT_POSITION_Y = 47, 53, 54
+_ABS_MT_TRACKING_ID, _ABS_MT_PRESSURE = 57, 58
+_TOUCH_PRESSURE = 50  # a nominal non-zero pressure so the contact reads as a real finger
+# sendevent parses values as unsigned, so the -1 that lifts a protocol-B contact wraps to 2**32-1.
+_MT_TRACKING_ID_LIFT = (1 << 32) - 1
+_TAP_TRACKING_IDS = (100, 101)  # a distinct contact id per tap of the double-tap
+
+_ADD_DEVICE = re.compile(r"add device \d+:\s*(\S+)")
+_AXIS_MAX = re.compile(r"\bmax (\d+)")
+_EVENT_INDEX = re.compile(r"(\d+)$")
+
+
+# --- two-contact raw gestures: pinch / rotate (BE-0232) ---
+#
+# A pinch or a rotate needs two contacts moving at once, which `input` cannot express — so, like the
+# double-tap (BE-0210), they go through `sendevent` protocol B, extended from one slot to two. Both
+# contacts go down, sweep together across several interleaved SYN_REPORT frames, then lift; a teleport
+# reads as a tap, not a gesture, because the platform's GestureDetector needs the motion to classify a
+# scale or a rotation. Unlike the double-tap there is no single-touch approximation of two fingers, so
+# the driver requires a rooted device and fails loudly otherwise (BE-0232) rather than falling back.
+_GESTURE_TRACKING_IDS = (200, 201)  # a distinct contact id per finger (slot 0 / slot 1)
+# Interleaved move frames between the down and the up: enough travel for the platform to carry the
+# gesture past its touch slop and classify it. A condition wait on the mirrored a11y value — not a
+# fixed count — is what proves the gesture landed, so this only shapes the motion, never the verdict.
+_GESTURE_STEPS = 8
+
+# A point in tree (pixel) coordinates, and a (slot-0, slot-1) pair of them. Geometry is computed in
+# pixel space (below) and scaled per-axis to the device's raw range by the driver, because the raw
+# axes are square while the screen is not — rotating in raw space would distort the sweep.
+_Point = tuple[float, float]
+_Contacts = tuple[_Point, _Point]
+
+
+# --- resident UI Automator server (BE-0245) ---
+
+# The resident server's fixed loopback port on the device (matches
+# BajutsuAndroidUIAutomatorServer's ResidentServerTest); bajutsu reaches it over `adb forward`.
+RESIDENT_DEVICE_PORT = 6790
+
+# The androidTest instrumentation that runs the resident server: the `.test` package (androidx adds
+# the suffix to the server's applicationId) driven by AndroidJUnitRunner, scoped to the one blocking
+# `serve()` method so `am instrument` starts nothing else.
+RESIDENT_INSTRUMENTATION = "dev.bajutsu.android.server.test/androidx.test.runner.AndroidJUnitRunner"
+RESIDENT_TEST_METHOD = "dev.bajutsu.android.server.ResidentServerTest#serve"
+
+
+# Clipboard runs through the app's in-app receiver (BajutsuAndroid), not `cmd clipboard`: on a real
+# device / the google_apis image `cmd clipboard set/get-primary-clip` answers "No shell command
+# implementation" (exit 0, a silent no-op), and since Android 10 only the foreground app / default
+# IME may touch the clipboard, so a shell-uid process cannot (`service call clipboard` hits
+# ClipboardService.checkAndSetPrimaryClip and is brittle across API levels) — BE-0233. The app under
+# test *is* foreground while a scenario drives it, so bajutsu sends an ordered `am broadcast` to a
+# receiver inside the app, which reads/writes the clipboard from the app process and returns the
+# value in the broadcast result. `am broadcast` acts as the finish-receiver, so the receiver's
+# `setResultCode`/`setResultData` come back on stdout.
+CLIPBOARD_ACTION = "dev.bajutsu.CLIPBOARD"
+
+# The receiver sets this result code so a run can tell "the app handled it" from "no receiver was
+# present" (am leaves the code at 0). Must match BajutsuAndroid's receiver.
+CLIPBOARD_RESULT_OK = 1
+
+_RESULT_CODE_RE = re.compile(r"result=(-?\d+)")
+_RESULT_DATA_RE = re.compile(r'data="([^"]*)"')
 
 
 def device_error(exc: subprocess.CalledProcessError) -> DeviceError:
@@ -94,12 +154,6 @@ def dump_cmd(serial: str) -> list[str]:
 def screencap_cmd(serial: str) -> list[str]:
     """Capture the screen as PNG bytes on stdout (`exec-out` keeps the stream binary-clean)."""
     return _adb(serial, "exec-out", "screencap", "-p")
-
-
-# The device-side path `screenrecord` writes to before it is pulled to the run dir. One fixed path is
-# enough: a device runs one scenario at a time, and parallel lanes are distinct serials. Public so the
-# interval starter pulls from and cleans up the same path it records to.
-VIDEO_DEVICE_PATH = "/sdcard/bajutsu-scenario.mp4"
 
 
 def screenrecord_cmd(
@@ -220,13 +274,6 @@ def logcat_tail_cmd(serial: str, lines: int = 200) -> list[str]:
     return _adb(serial, "logcat", "-d", "-t", str(lines))
 
 
-KEYCODE_BACK = 4  # `input keyevent` code for the system back button (Android's true system back).
-KEYCODE_DEL = 67  # backspace — deletes the character before the cursor (BE-0265 delete / clear).
-KEYCODE_CTRL_LEFT = 113  # left Control, the modifier for the select-all / copy key combinations.
-KEYCODE_A = 29  # the `A` key — with Ctrl held, "select all" in a focused text field (BE-0265).
-KEYCODE_C = 31  # the `C` key — with Ctrl held, "copy" the active selection (BE-0265).
-
-
 def tap_cmd(serial: str, x: float, y: float) -> list[str]:
     return _adb(serial, "shell", "input", "tap", _num(x), _num(y))
 
@@ -248,38 +295,6 @@ def double_tap_cmd(serial: str, x: float, y: float) -> list[str]:
     """
     xs, ys = _num(x), _num(y)
     return _adb(serial, "shell", "input", "tap", xs, ys, ";", "input", "tap", xs, ys)
-
-
-# --- raw touch injection for a reliable double-tap (BE-0208) ---
-#
-# `input tap x y ; input tap x y` starts a fresh JVM per tap, so the inter-tap gap overruns the
-# platform's double-tap window even chained in one round-trip (BE-0210). `sendevent` is a tiny native
-# binary, so two contacts fire well inside the window — but it writes `/dev/input` directly, so it
-# needs root and the concrete touchscreen node (discovered from `getevent -lp`). The driver gates on
-# `id -u` and falls back to `input tap` when either is unavailable, so a non-rooted device is
-# unaffected. Linux input protocol B, one finger: type/code constants below name the raw events.
-_EV_SYN, _EV_KEY, _EV_ABS = 0, 1, 3
-_SYN_REPORT = 0
-_BTN_TOUCH = 330
-_ABS_MT_SLOT, _ABS_MT_POSITION_X, _ABS_MT_POSITION_Y = 47, 53, 54
-_ABS_MT_TRACKING_ID, _ABS_MT_PRESSURE = 57, 58
-_TOUCH_PRESSURE = 50  # a nominal non-zero pressure so the contact reads as a real finger
-# sendevent parses values as unsigned, so the -1 that lifts a protocol-B contact wraps to 2**32-1.
-_MT_TRACKING_ID_LIFT = (1 << 32) - 1
-_TAP_TRACKING_IDS = (100, 101)  # a distinct contact id per tap of the double-tap
-
-_ADD_DEVICE = re.compile(r"add device \d+:\s*(\S+)")
-_AXIS_MAX = re.compile(r"\bmax (\d+)")
-_EVENT_INDEX = re.compile(r"(\d+)$")
-
-
-@dataclass(frozen=True)
-class TouchDevice:
-    """A touchscreen `/dev/input` node and its raw coordinate range, from `getevent -lp`."""
-
-    path: str
-    max_x: int
-    max_y: int
 
 
 def getevent_probe_cmd(serial: str) -> list[str]:
@@ -373,27 +388,6 @@ def sendevent_double_tap_cmd(serial: str, device_path: str, raw_x: int, raw_y: i
         for line in _tap_events(device_path, raw_x, raw_y, tracking_id)
     )
     return _adb(serial, "shell", script)
-
-
-# --- two-contact raw gestures: pinch / rotate (BE-0232) ---
-#
-# A pinch or a rotate needs two contacts moving at once, which `input` cannot express — so, like the
-# double-tap (BE-0210), they go through `sendevent` protocol B, extended from one slot to two. Both
-# contacts go down, sweep together across several interleaved SYN_REPORT frames, then lift; a teleport
-# reads as a tap, not a gesture, because the platform's GestureDetector needs the motion to classify a
-# scale or a rotation. Unlike the double-tap there is no single-touch approximation of two fingers, so
-# the driver requires a rooted device and fails loudly otherwise (BE-0232) rather than falling back.
-_GESTURE_TRACKING_IDS = (200, 201)  # a distinct contact id per finger (slot 0 / slot 1)
-# Interleaved move frames between the down and the up: enough travel for the platform to carry the
-# gesture past its touch slop and classify it. A condition wait on the mirrored a11y value — not a
-# fixed count — is what proves the gesture landed, so this only shapes the motion, never the verdict.
-_GESTURE_STEPS = 8
-
-# A point in tree (pixel) coordinates, and a (slot-0, slot-1) pair of them. Geometry is computed in
-# pixel space (below) and scaled per-axis to the device's raw range by the driver, because the raw
-# axes are square while the screen is not — rotating in raw space would distort the sweep.
-_Point = tuple[float, float]
-_Contacts = tuple[_Point, _Point]
 
 
 def pinch_contacts(center: _Point, half: float, scale: float) -> tuple[_Contacts, _Contacts]:
@@ -559,28 +553,6 @@ def pm_revoke_cmd(serial: str, package: str, permission: str) -> list[str]:
     return _adb(serial, "shell", "pm", "revoke", package, permission)
 
 
-# The permission-vocabulary service (BE-0276, shared with iOS's TCC map in simctl.py) -> the
-# android.permission.* names it grants/revokes. A service maps to more than one permission when
-# Android splits it (fine + coarse location; read + write contacts/calendar); `pm grant`/`pm
-# revoke` runs once per mapped permission. Covers the whole vocabulary — the adb backend advertises
-# every service, unlike iOS's `notifications` gap — so `Env.apply_permissions` never misses a key
-# for a service preflight already admitted.
-SERVICE_TO_ANDROID_PERMISSIONS: dict[str, tuple[str, ...]] = {
-    "location": (
-        "android.permission.ACCESS_FINE_LOCATION",
-        "android.permission.ACCESS_COARSE_LOCATION",
-    ),
-    "camera": ("android.permission.CAMERA",),
-    "microphone": ("android.permission.RECORD_AUDIO",),
-    "contacts": ("android.permission.READ_CONTACTS", "android.permission.WRITE_CONTACTS"),
-    # `photos` requires API 33+ (`READ_MEDIA_IMAGES`/`READ_MEDIA_VIDEO`); a target below API 33 has
-    # no mapping here and would need the legacy `READ_EXTERNAL_STORAGE` permission instead.
-    "photos": ("android.permission.READ_MEDIA_IMAGES", "android.permission.READ_MEDIA_VIDEO"),
-    "calendar": ("android.permission.READ_CALENDAR", "android.permission.WRITE_CALENDAR"),
-    "notifications": ("android.permission.POST_NOTIFICATIONS",),
-}
-
-
 def install_cmd(serial: str, apk_path: str) -> list[str]:
     # -r reinstall keeping data, -t allow test/debug APKs (the showcase builds are debug).
     return _adb(serial, "install", "-r", "-t", apk_path)
@@ -588,25 +560,6 @@ def install_cmd(serial: str, apk_path: str) -> list[str]:
 
 def uninstall_cmd(serial: str, package: str) -> list[str]:
     return _adb(serial, "uninstall", package)
-
-
-# --- resident UI Automator server (BE-0245) ---
-
-# The resident server's fixed loopback port on the device (matches
-# BajutsuAndroidUIAutomatorServer's ResidentServerTest); bajutsu reaches it over `adb forward`.
-RESIDENT_DEVICE_PORT = 6790
-
-# The androidTest instrumentation that runs the resident server: the `.test` package (androidx adds
-# the suffix to the server's applicationId) driven by AndroidJUnitRunner, scoped to the one blocking
-# `serve()` method so `am instrument` starts nothing else.
-RESIDENT_INSTRUMENTATION = "dev.bajutsu.android.server.test/androidx.test.runner.AndroidJUnitRunner"
-RESIDENT_TEST_METHOD = "dev.bajutsu.android.server.ResidentServerTest#serve"
-# The server's own package (its applicationId); force-stopped at lease end to kill any device-side
-# instrumentation the local adb client's exit did not.
-RESIDENT_SERVER_PACKAGE = "dev.bajutsu.android.server"
-# The instrumentation APK's own package: the server package plus Android's conventional `.test`
-# suffix. Named here so the resident channel can clear both before it installs either.
-RESIDENT_TEST_PACKAGE = f"{RESIDENT_SERVER_PACKAGE}.test"
 
 
 def forward_cmd(serial: str, device_port: int = RESIDENT_DEVICE_PORT) -> list[str]:
@@ -699,25 +652,6 @@ def geo_fix_cmd(serial: str, lat: float, lon: float) -> list[str]:
     are swapped here — the one place the order matters.
     """
     return _adb(serial, "emu", "geo", "fix", str(lon), str(lat))
-
-
-# Clipboard runs through the app's in-app receiver (BajutsuAndroid), not `cmd clipboard`: on a real
-# device / the google_apis image `cmd clipboard set/get-primary-clip` answers "No shell command
-# implementation" (exit 0, a silent no-op), and since Android 10 only the foreground app / default
-# IME may touch the clipboard, so a shell-uid process cannot (`service call clipboard` hits
-# ClipboardService.checkAndSetPrimaryClip and is brittle across API levels) — BE-0233. The app under
-# test *is* foreground while a scenario drives it, so bajutsu sends an ordered `am broadcast` to a
-# receiver inside the app, which reads/writes the clipboard from the app process and returns the
-# value in the broadcast result. `am broadcast` acts as the finish-receiver, so the receiver's
-# `setResultCode`/`setResultData` come back on stdout.
-CLIPBOARD_ACTION = "dev.bajutsu.CLIPBOARD"
-
-# The receiver sets this result code so a run can tell "the app handled it" from "no receiver was
-# present" (am leaves the code at 0). Must match BajutsuAndroid's receiver.
-CLIPBOARD_RESULT_OK = 1
-
-_RESULT_CODE_RE = re.compile(r"result=(-?\d+)")
-_RESULT_DATA_RE = re.compile(r'data="([^"]*)"')
 
 
 def _b64(text: str) -> str:
@@ -839,167 +773,3 @@ def device_catalog(run: RunFn = real_run) -> dict[str, dict[str, str]]:
             continue
         catalog[serial] = {"name": model, "runtime": f"Android {release}" if release else "Android"}
     return catalog
-
-
-class Env:
-    """Thin adb front end for one device/emulator."""
-
-    def __init__(self, serial: str, run: RunFn = real_run) -> None:
-        # Validate at construction (like AdbDriver): Env is what AndroidEnvironment.start drives
-        # for the real device-lifecycle path, so a bad serial fails here, not deep in a command.
-        self.serial = checked_serial(serial)
-        self._run = run
-
-    def boot_completed(self) -> bool:
-        """Whether `sys.boot_completed` is `1` — the boot-readiness signal polled as a condition
-        wait (no fixed sleep), the Android peer of `simctl bootstatus`.
-
-        A device adb cannot see yet reads as "not booted" (retried by the poll), but a missing `adb`
-        binary is not a transient not-booted-yet state, so `FileNotFoundError` propagates rather than
-        being masked into a spin to the boot deadline.
-        """
-        try:
-            return self._run(get_prop_cmd(self.serial, "sys.boot_completed")).strip() == "1"
-        except subprocess.CalledProcessError:
-            return False  # adb ran but the device is not ready yet
-        except FileNotFoundError:
-            raise  # adb itself is absent — fail fast, do not spin
-        except OSError:
-            return False  # a transient runner error; the next poll retries
-
-    def clear(self, package: str) -> None:
-        self._run(pm_clear_cmd(self.serial, package))
-
-    def install(self, apk_path: str) -> None:
-        self._run(install_cmd(self.serial, apk_path))
-
-    def uninstall(self, package: str) -> None:
-        """Remove `package` if it is there, so the install that follows describes the APK alone.
-
-        A leftover install is not neutral: `install -r` refuses one whose signature differs, and where
-        it succeeds it keeps components the new build renamed or dropped, leaving the device running a
-        mix of two builds. Absent is the ordinary case on a fresh emulator, and `adb uninstall` fails
-        for it, so the failure is suppressed the way `force_stop` suppresses its own.
-        """
-        with contextlib.suppress(subprocess.CalledProcessError, OSError):
-            self._run(uninstall_cmd(self.serial, package))
-
-    def force_stop(self, package: str) -> None:
-        with contextlib.suppress(subprocess.CalledProcessError):
-            self._run(force_stop_cmd(self.serial, package))
-
-    def _pm_run(self, action: str, package: str, permission: str) -> None:
-        """Run one `pm grant`/`pm revoke` and surface any stdout as a `DeviceError`.
-
-        `pm grant`/`pm revoke` exit 0 even for an unknown permission or an app that predates
-        runtime permissions, printing the error to stdout — so a silent mistake would otherwise
-        surface only as a later, misleading step failure. Any stdout (silent on success) is
-        surfaced loudly instead. Shared by `grant_permissions` (the config-level list, BE-0210) and
-        `apply_permissions` (the per-scenario field, BE-0276) — same command shape, same contract.
-
-        Raises:
-            DeviceError: `action` is neither `grant` nor `revoke` (should not happen — every caller
-                passes a literal or an already-validated `Scenario.permissions` value — but this
-                fails loudly rather than silently falling through to one command or the other), or
-                `pm grant`/`pm revoke` reported a problem.
-        """
-        if action == "grant":
-            cmd_for = pm_grant_cmd
-        elif action == "revoke":
-            cmd_for = pm_revoke_cmd
-        else:
-            raise DeviceError(f"unknown pm action: {action!r} (expected grant|revoke)")
-        out = self._run(cmd_for(self.serial, package, permission)).strip()
-        if out:
-            raise DeviceError(f"pm {action} failed for {permission} on {package}: {out}")
-
-    def grant_permissions(self, package: str, permissions: list[str]) -> None:
-        """Grant each configured runtime permission up front (BE-0210), one `pm grant` per entry.
-
-        Raises:
-            DeviceError: see `_pm_run`.
-        """
-        for permission in permissions:
-            self._pm_run("grant", package, permission)
-
-    def apply_permissions(self, package: str, permissions: Mapping[str, str]) -> None:
-        """Grant or revoke each `service: grant|revoke` entry in `permissions` up front (BE-0276),
-        one `pm grant`/`pm revoke` per mapped `android.permission.*` — the per-scenario twin of
-        `grant_permissions`'s config-level list.
-
-        Every entry's service and action are validated before any `pm` call runs, so an unmapped
-        service or an unrecognized action fails before the device is touched at all — never
-        partway through, leaving some services already mutated (should not happen in practice —
-        the adb backend advertises the whole vocabulary and `Scenario.permissions` validates the
-        action, so preflight/schema would have already rejected it — but this validation is the
-        runtime backstop for a caller that bypasses both).
-
-        Raises:
-            DeviceError: a service has no mapping, an action is neither `grant` nor `revoke`, or
-                see `_pm_run`.
-        """
-        for service, action in permissions.items():
-            if service not in SERVICE_TO_ANDROID_PERMISSIONS:
-                raise DeviceError(f"permissions.{service} has no android.permission.* mapping")
-            if action not in ("grant", "revoke"):
-                raise DeviceError(f"unknown pm action: {action!r} (expected grant|revoke)")
-        for service, action in permissions.items():
-            for permission in SERVICE_TO_ANDROID_PERMISSIONS[service]:
-                self._pm_run(action, package, permission)
-
-    def resolve_activity(self, package: str) -> str:
-        """The launcher component (`<package>/<activity>`) for `package`, via the package manager.
-
-        Raises:
-            DeviceError: the package manager returned no launcher activity (app not installed, or no
-                launcher intent) — surfaced cleanly rather than launching an empty component.
-        """
-        out = self._run(resolve_activity_cmd(self.serial, package))
-        for raw in reversed(out.splitlines()):
-            line = raw.strip()
-            # A launcher component is `<package>/<activity>`: a `/` with a non-empty left side and
-            # no spaces. Requiring a non-empty left side rejects a stray absolute path (`/data/…`)
-            # in the manager's chatter that would otherwise be launched as a bogus component.
-            head, sep, tail = line.partition("/")
-            if sep and head and tail and " " not in line:
-                return line
-        raise DeviceError(f"no launcher activity for {package} (is it installed?)")
-
-    def launch(self, package: str, env: Mapping[str, str] | None = None) -> None:
-        """Launch the app's default launcher activity, forwarding `env` as intent extras."""
-        self._run(launch_cmd(self.serial, self.resolve_activity(package), env or {}))
-
-    def open_url(self, url: str, package: str) -> None:
-        self._run(deeplink_cmd(self.serial, url, package))
-
-    def screenshot(self, path: str) -> None:
-        """Write a PNG screenshot to `path` from `screencap`'s binary stdout.
-
-        Routed through a class-level attribute (like `simctl.Env._run_pbcopy`) so tests can patch
-        the binary capture without a device, and so the PNG bytes never pass through the text RunFn.
-        """
-        self._run_capture(screencap_cmd(self.serial), path)
-
-    @staticmethod
-    def _run_capture(cmd: list[str], path: str) -> None:
-        out = subprocess.run(cmd, capture_output=True, check=True).stdout
-        with Path(path).open("wb") as f:
-            f.write(out)
-
-    # Device control: the subset the emulator can honor, the Android peer of simctl's setLocation /
-    # clipboard. setLocation is a pure emulator-console op (BE-0211); clipboard goes through the app's
-    # in-app receiver (BE-0233), so its methods take the target package to address the broadcast. The
-    # rest of the DeviceControl family has no faithful emulator equivalent and is not wired (see
-    # `platform_lifecycle.device_control.android_device_control`).
-
-    def set_location(self, lat: float, lon: float) -> None:
-        self._run(geo_fix_cmd(self.serial, lat, lon))
-
-    def set_clipboard(self, package: str, text: str) -> None:
-        parse_clipboard_result(self._run(set_primary_clip_cmd(self.serial, package, text)))
-
-    def clear_clipboard(self, package: str) -> None:
-        parse_clipboard_result(self._run(clear_primary_clip_cmd(self.serial, package)))
-
-    def get_clipboard(self, package: str) -> str:
-        return parse_clipboard_result(self._run(get_primary_clip_cmd(self.serial, package)))

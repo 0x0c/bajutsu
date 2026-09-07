@@ -219,7 +219,7 @@ _LANE_CLAIMED: tuple[str, ...] = (
     "bajutsu/common/platform_lifecycle/environments/xcuitest.py",
     "bajutsu/common/platform_lifecycle/environments/xcuitest_live.py",
     "bajutsu/common/provisioning/provision.py",
-    "bajutsu/common/backend_cli/adb_resident.py",
+    "bajutsu/common/backend_cli/adb_resident/",
     "bajutsu/serve/",
     "bajutsu/templates/",
     "bajutsu/record/cli.py",
@@ -320,7 +320,7 @@ _LANE_PATHS: dict[str, str] = {
         # it can change adb's runtime behavior even though adb.py itself is untouched.
         r"|bajutsu/common/drivers/adb\.py$"
         r"|bajutsu/common/drivers/coordinate_tree\.py$"
-        r"|bajutsu/common/backend_cli/adb_resident\.py$"
+        r"|bajutsu/common/backend_cli/adb_resident/"
         # The Android lifecycle environment (boot, install, the BE-0236 provision profile) — the
         # Android half of the `platform_lifecycle/` carve-out.
         r"|bajutsu/common/platform_lifecycle/environments/android\.py$"

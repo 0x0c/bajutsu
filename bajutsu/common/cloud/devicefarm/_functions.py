@@ -1,33 +1,4 @@
-"""AWS Device Farm batch submitter core (BE-0235; iOS support BE-0238; serve fan-out BE-0336).
-
-Device Farm is a *batch* device cloud: it does not lend a device to drive over the network — it runs
-*your* commands on a host that already has the reserved device connected (over `adb` on Android, over
-the Xcode toolchain on iOS). So this is not a runtime provider (there is no device to acquire); it is
-glue that ferries Bajutsu to the Device Farm host and back. Bajutsu runs *inside* Device Farm exactly
-as it does anywhere — the same deterministic core, the same pass/fail from machine-checkable
-assertions — so the verdict this module surfaces comes from **Bajutsu's own manifest**, never from
-Device Farm's run classification.
-
-This module is the reusable core, so the serve fan-out (BE-0336) and the CLI wrapper
-(`scripts/devicefarm_submit.py`) share one submitter and one verdict path. The flow, all outside the
-deterministic `run`/CI verdict path:
-
-1. `render_test_spec` — the custom-environment test spec that installs deps, runs `bajutsu run`
-   (the adb backend on Android, the XCUITest backend on iOS) for each scenario, and copies `runs/`
-   into ``$DEVICEFARM_LOG_DIR`` so the artifacts come back.
-2. `build_package` — bundle the Bajutsu payload (source/wheel + config + scenarios) for upload.
-3. `submit_and_collect` — upload the app artifact (an Android `.apk` or an iOS `.ipa`), the test
-   package, and the spec; schedule the run; poll it to completion; download the artifacts; and derive
-   the verdict via `verdict_from_manifest`.
-
-The AWS SDK (boto3) is reached only through the `DeviceFarmClient` / `Transfer` seams, so this module
-imports without the ``aws`` extra and its logic is unit-tested against an in-memory fake; the real
-boto3 client and the presigned-URL transfer that fill those seams live in the CLI wrapper
-(`scripts/devicefarm_submit.py`) and serve's startup bootstrap (`bajutsu/serve/batch_bootstrap.py`).
-Raw-adb access on the Device Farm host is a by-product of its toolchain rather than a first-class
-guarantee (the first-class path is Appium); this module documents that so a future Device Farm change
-does not silently break it.
-"""
+"""Submit a run to Device Farm, poll it to completion, and read Bajutsu's verdict back."""
 
 from __future__ import annotations
 
@@ -38,11 +9,18 @@ import stat
 import time
 import zipfile
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Literal, Protocol
+from typing import TYPE_CHECKING, Any, Literal
 
 import yaml
+
+from ._platform_run import _PlatformRun
+from .device_farm_error import DeviceFarmError
+from .verdict import Verdict
+
+if TYPE_CHECKING:
+    from .device_farm_client import DeviceFarmClient
+    from .transfer import Transfer
 
 # Device Farm caps one custom-environment execution at 150 minutes; poll no longer than that before
 # giving up rather than blocking a CI job indefinitely.
@@ -52,11 +30,6 @@ _HARD_CAP_SECONDS = 150 * 60
 # (gentle on the Device Farm API). `_POLL_INTERVAL_SECONDS` is that ceiling — the old fixed interval.
 _POLL_INITIAL_SECONDS = 3
 _POLL_INTERVAL_SECONDS = 30
-
-
-def _next_poll_delay(previous: float) -> float:
-    """The next status-poll wait: double the previous one, capped at ``_POLL_INTERVAL_SECONDS``."""
-    return min(previous * 2, _POLL_INTERVAL_SECONDS)
 
 
 Platform = Literal["android", "ios"]
@@ -72,20 +45,6 @@ _UPLOAD_TEST_SPEC = "APPIUM_PYTHON_TEST_SPEC"
 # Device Farm's DeviceFilter PLATFORM values (uppercase), keyed by Bajutsu's platform. Used to build
 # the deviceSelectionConfiguration the serve fan-out path schedules with (see `device_selection_for`).
 _DF_PLATFORM_ATTR: dict[Platform, str] = {"android": "ANDROID", "ios": "IOS"}
-
-
-@dataclass(frozen=True)
-class _PlatformRun:
-    """How the Device Farm host reaches the reserved device for one platform.
-
-    `backend` is Bajutsu's ``--backend``; `udid` is the shell-ready ``--udid`` argument spliced into
-    the run command (a fixed alias, or an environment reference the host expands); `probe` runs in
-    `pre_test` to prove the reserved device is visible before the run.
-    """
-
-    backend: str
-    udid: str
-    probe: str
 
 
 # Android resolves the single connected device through adb's `booted` alias; iOS has no such alias,
@@ -126,44 +85,6 @@ _PACKAGE_EXCLUDES = frozenset(
 _PACKAGE_EXCLUDE_PREFIXES = (".env", ".aws")
 
 
-def _is_excluded(rel_parts: tuple[str, ...]) -> bool:
-    """Return True if *rel_parts* names a path that must not enter the package.
-
-    A component matches `_PACKAGE_EXCLUDES` exactly (e.g. `.git`) or starts with one of
-    `_PACKAGE_EXCLUDE_PREFIXES` (e.g. `.env`, `.env.local`, `.aws`).
-    """
-    return any(
-        part in _PACKAGE_EXCLUDES or part.startswith(_PACKAGE_EXCLUDE_PREFIXES)
-        for part in rel_parts
-    )
-
-
-# Device Farm's APPIUM_PYTHON_TEST_PACKAGE validation requires a `requirements.txt` at the package
-# root (alongside a `tests/` directory). Bajutsu is a pyproject/uv project with no such file, and the
-# custom test spec installs it directly (`pip install "$DEVICEFARM_TEST_PACKAGE_PATH"`), so we
-# synthesize an empty one purely to satisfy the structural check rather than pin anything here.
-REQUIREMENTS_TXT = (
-    "# Present only to satisfy Device Farm's APPIUM_PYTHON_TEST_PACKAGE validation.\n"
-    '# Bajutsu is installed by the custom test spec (pip install "$DEVICEFARM_TEST_PACKAGE_PATH"),\n'
-    "# so no runtime dependencies are pinned here.\n"
-)
-
-
-class DeviceFarmError(RuntimeError):
-    """A Device Farm submission failed loudly — a missing payload, a failed upload, or a run that
-    never completed. Never swallowed: a test tool that hides its own failure is worse than none."""
-
-
-@dataclass(frozen=True)
-class Verdict:
-    """Bajutsu's verdict for a Device Farm run, read from the downloaded ``manifest.json`` tree."""
-
-    ok: bool
-    passed: int
-    total: int
-    failures: list[str] = field(default_factory=list)
-
-
 # ---------------------------------------------------------------------------
 # Test spec
 # ---------------------------------------------------------------------------
@@ -179,6 +100,23 @@ class Verdict:
 _UV = "$HOME/.local/bin/uv"  # where `pip install --user uv` lands on the Device Farm host
 _VENV = "$HOME/bajutsu-venv"
 _BAJUTSU = f"{_VENV}/bin/bajutsu"
+
+
+def _next_poll_delay(previous: float) -> float:
+    """The next status-poll wait: double the previous one, capped at ``_POLL_INTERVAL_SECONDS``."""
+    return min(previous * 2, _POLL_INTERVAL_SECONDS)
+
+
+def _is_excluded(rel_parts: tuple[str, ...]) -> bool:
+    """Return True if *rel_parts* names a path that must not enter the package.
+
+    A component matches `_PACKAGE_EXCLUDES` exactly (e.g. `.git`) or starts with one of
+    `_PACKAGE_EXCLUDE_PREFIXES` (e.g. `.env`, `.env.local`, `.aws`).
+    """
+    return any(
+        part in _PACKAGE_EXCLUDES or part.startswith(_PACKAGE_EXCLUDE_PREFIXES)
+        for part in rel_parts
+    )
 
 
 def _python_bootstrap_commands(python_version: str) -> list[str]:
@@ -350,80 +288,6 @@ def verdict_from_manifest(runs_root: Path) -> Verdict:
             else:
                 failures.append(str(scenario.get("scenario", "<unknown>")))
     return Verdict(ok=total > 0 and passed == total, passed=passed, total=total, failures=failures)
-
-
-# ---------------------------------------------------------------------------
-# AWS seams
-# ---------------------------------------------------------------------------
-
-
-class DeviceFarmClient(Protocol):
-    """The slice of the boto3 ``devicefarm`` client the submitter uses (so an in-memory fake fits).
-
-    Each method mirrors the boto3 call of the same name; the responses are the nested dicts boto3
-    returns (``{"upload": {...}}``, ``{"run": {...}}``, ``{"artifacts": [...]}``).
-
-    Each stub body is ``raise NotImplementedError``: a bare ``...`` here is a newly-added expression
-    statement CodeQL flags as "no effect" (a new-file line can't inherit the dismissal the same idiom
-    carries on ``main``, e.g. ``network.py``'s ``Collector``), while a docstring-only body would
-    silently return ``None`` against the non-``None`` annotation if the Protocol were ever called
-    directly. ``raise`` is CodeQL-clean and fails loud, so it closes both gaps at once.
-    """
-
-    def create_upload(self, *, projectArn: str, name: str, type: str) -> dict[str, Any]:  # noqa: N803 - boto3 kwargs
-        """Register a new upload; boto3 returns ``{"upload": {...}}`` with the presigned PUT URL."""
-        raise NotImplementedError
-
-    def get_upload(self, *, arn: str) -> dict[str, Any]:
-        """Fetch an upload's status (``INITIALIZED`` → ``SUCCEEDED`` / ``FAILED``)."""
-        raise NotImplementedError
-
-    def schedule_run(self, **kwargs: Any) -> dict[str, Any]:
-        """Schedule a run from the uploaded app/test/spec; boto3 returns ``{"run": {...}}``."""
-        raise NotImplementedError
-
-    def get_run(self, *, arn: str) -> dict[str, Any]:
-        """Fetch a run's current status; boto3 returns ``{"run": {...}}``."""
-        raise NotImplementedError
-
-    def list_artifacts(self, *, arn: str, type: str) -> dict[str, Any]:
-        """List a run's artifacts of the given type; boto3 returns ``{"artifacts": [...]}``."""
-        raise NotImplementedError
-
-
-class Transfer(Protocol):
-    """The HTTP file transfer the submitter uses against Device Farm's presigned S3 URLs."""
-
-    def upload(self, url: str, path: Path) -> None:
-        """PUT the file at `path` to the presigned `url`."""
-        raise NotImplementedError
-
-    def download(self, url: str) -> bytes:
-        """Fetch and return the raw bytes of the artifact at `url` (dispatch is `_store_artifact`)."""
-        raise NotImplementedError
-
-
-class HttpTransfer:
-    """The real presigned-URL transfer over urllib (lazy import so the base install stays SDK-free).
-
-    Both the CLI wrapper (`scripts/devicefarm_submit.py`) and serve's startup bootstrap
-    (`bajutsu/serve/batch_bootstrap.py`) use this concrete. Keeping it here removes the duplicate
-    and ensures a timeout change or retry policy reaches both callers at once.
-    """
-
-    def upload(self, url: str, path: Path) -> None:
-        import urllib.request
-
-        request = urllib.request.Request(url, data=path.read_bytes(), method="PUT")  # noqa: S310
-        # An explicit timeout keeps a stalled S3 connection from hanging past the poll loops' cap.
-        urllib.request.urlopen(request, timeout=300).close()  # noqa: S310 - Device Farm presigned https URL
-
-    def download(self, url: str) -> bytes:
-        import urllib.request
-
-        with urllib.request.urlopen(url, timeout=300) as response:  # noqa: S310 - Device Farm presigned https URL
-            payload: bytes = response.read()
-        return payload
 
 
 def _upload_one(

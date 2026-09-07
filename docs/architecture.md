@@ -471,7 +471,7 @@ Android; on iOS it rests on the fast suite's bookkeeping proof alone.
   (pinch / rotate), parallel runs across N `BrowserContext` lanes, and a target-level `deviceMode`
   (desktop default, or a Playwright device preset for mobile emulation; BE-0228); `appTrace` stays
   iOS-only (`os_log`/simctl-based)
-- The **Android adb backend** (`common/drivers/adb.py` + `common/backend_cli/adb.py`): `tap`/`long_press`/`double_tap` send
+- The **Android adb backend** (`common/drivers/adb.py` + `common/backend_cli/adb`): `tap`/`long_press`/`double_tap` send
   the resolved element's identity to the resident server's `POST /act`, which re-resolves and
   injects device-side so the gesture lands on the bounds the device holds at inject time, falling
   back to a host-computed frame-center coordinate tap once retries exhaust or the channel has no

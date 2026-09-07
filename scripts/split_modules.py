@@ -274,19 +274,25 @@ class _Parsed:
     dunder_all: list[str] | None = None
 
 
+def _target_names(target: cst.BaseExpression) -> list[str]:
+    """Every name one assignment target binds, unpacking `a, b = …` down to its elements."""
+    if isinstance(target, cst.Name):
+        return [target.value]
+    if isinstance(target, (cst.Tuple, cst.List)):
+        return [name for element in target.elements for name in _target_names(element.value)]
+    if isinstance(target, cst.StarredElement):
+        return _target_names(target.value)
+    return []  # `obj.attr` / `seq[i]` bind nothing this module re-exports
+
+
 def _assign_targets(statement: cst.SimpleStatementLine) -> tuple[str, ...]:
     names: list[str] = []
     for small in statement.body:
         if isinstance(small, cst.Assign):
-            names.extend(
-                target.target.value
-                for target in small.targets
-                if isinstance(target.target, cst.Name)
-            )
-        elif isinstance(small, (cst.AnnAssign, cst.AugAssign)) and isinstance(
-            small.target, cst.Name
-        ):
-            names.append(small.target.value)
+            for target in small.targets:
+                names.extend(_target_names(target.target))
+        elif isinstance(small, (cst.AnnAssign, cst.AugAssign)):
+            names.extend(_target_names(small.target))
         elif isinstance(small, cst.TypeAlias):
             names.append(small.name.value)
     return tuple(names)
