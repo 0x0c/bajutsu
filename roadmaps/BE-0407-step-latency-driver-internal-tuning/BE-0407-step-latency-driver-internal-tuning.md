@@ -478,7 +478,7 @@ Log:
   be dismissed mid-call. XCUITest's non-reentrancy (BE-0323) forbids a concurrent dismissal from
   another thread. The blocked call holds the main thread throughout. Unit 17's dump-skip has no
   known lighter-weight substitute for keeping the Android read mark advancing. Unit 14's reuse
-  ceiling was already closed by data. Unit 20 was already closed by unit 2. Unit 24 was already
+  ceiling was already closed by a lack of data. Unit 20 was already closed by unit 2. Unit 24 was already
   closed by unit 16. Every Progress box is now checked. Units landed as designed stay plain. Units
   closed by decision carry a strikethrough, with the reason nested beneath. Status moves to
   Implemented. The remaining gap toward this item's own latency targets is the device-side
