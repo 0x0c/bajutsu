@@ -206,9 +206,12 @@ identifier／frame のキーが変わっていなければ即座に返します�
   `screen_size_from_elements(driver.query())`）は、呼び出し地点に再利用できる既読ツリーがないため、
   統合するにはドライバ側に直近読み取りのキャッシュが要る。これは下記の常駐サーバの作業とともに保留
   にする。
-- [ ] **後続の項目に切り出し**。ダンプごとの起動を常駐 UI Automator サーバで置き換え、`uiautomator
-  dump` をフォールバックに残す。検証に実機が必要で、計装をパッケージする作業も伴うため、この項目の
-  高速ゲート内の変更には収まらない。
+- [x] ~~ダンプごとの起動を常駐 UI Automator サーバで置き換え、`uiautomator dump` をフォール
+  バックに残す。~~
+  - 後続の項目に切り出しました。検証に実機が必要で、計装をパッケージする作業も伴うため、
+    この項目の高速ゲート内の変更には収まりません。
+    [BE-0245](../BE-0245-adb-resident-uiautomator-server/BE-0245-adb-resident-uiautomator-server-ja.md)
+    として着地しました。
 - [x] 高速ゲートで読み取り回数を検査して改善を守る（ランナー側の削減は
   `tests/orchestrator/test_read_count.py`、adb の `_settle` の読み取りは `tests/test_adb.py`）。
   実時間のゲートはスコープ外のまま（環境に依存し、不安定になる）。

@@ -203,9 +203,11 @@ with before/after per-step timings recorded on device.
   one-off reads (`screen_size_from_elements(driver.query())` in the shared gesture / alert / crawl
   handlers) each read a tree that is *not* already in hand at the call site, so folding them needs a
   driver-level last-read cache — deferred with the resident-server work below.
-- [ ] **Carved out to a follow-up item** — replace per-dump startup with a resident UI Automator
-  server, `uiautomator dump` kept as fallback. Needs a device to verify and a packaged
-  instrumentation, so it does not fit this item's fast-gate change.
+- [x] ~~Replace per-dump startup with a resident UI Automator server, `uiautomator dump` kept as
+  fallback.~~
+  - Carved out to a follow-up item: needs a device to verify and a packaged instrumentation, so it
+    does not fit this item's fast-gate change. Landed as
+    [BE-0245](../BE-0245-adb-resident-uiautomator-server/BE-0245-adb-resident-uiautomator-server.md).
 - [x] Guard the win with a read-count assertion on the fast gate (`tests/orchestrator/test_read_count.py`
   for the runner reductions, `tests/test_adb.py` for the adb `_settle` reads); a wall-clock timing
   gate stays out of scope (environment-dependent, would be flaky).

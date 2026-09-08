@@ -7,7 +7,7 @@
 |---|---|
 | Proposal | [BE-0407](BE-0407-step-latency-driver-internal-tuning.md) |
 | Author | [@0x0c](https://github.com/0x0c) |
-| Status | **In progress** |
+| Status | **Implemented** |
 | Tracking issue | [Search](https://github.com/bajutsu-e2e/bajutsu/issues?q=is%3Aissue+label%3Aroadmap-tracking+in%3Atitle+"BE-0407") |
 | Implementing PR | [#1897](https://github.com/bajutsu-e2e/bajutsu/pull/1897) (Group 1, units 1, 3-5), [#1912](https://github.com/bajutsu-e2e/bajutsu/pull/1912) (Group 1 unit 6, Group 2 units 7, 9, 10, 11, 12, 13, and half of 14), [#1925](https://github.com/bajutsu-e2e/bajutsu/pull/1925) (Group 1 unit 2, completing Group 1), [#1938](https://github.com/bajutsu-e2e/bajutsu/pull/1938) (Group 3 units 16, 18, 19, 21, 22, 23) |
 | Topic | Platform support |
@@ -280,12 +280,16 @@ half alone; *Progress* below records the measurement behind dropping its `elemen
   nothing even where the fast path does not apply.
 - [x] Group 2, unit 7 — batch the tap-path attribute reads into one `el.snapshot()` call; cache
   `app.frame` for the life of a resident lease (guarded against caching a transient `.zero` read).
-- [ ] Group 2, unit 8 — generalize BE-0396's coordinate tap beyond Safari. Attempted, then
-  reverted after review: `el.isHittable` checks XCUITest's own hit point for the element (which
-  honours a custom `accessibilityActivationPoint` and can differ from the frame's geometric
-  center under partial occlusion), while a coordinate tap always lands on that geometric center —
-  a silent mis-tap on an element whose real hit point was clear. Needs a design that reconciles
-  the two points before it can land.
+- [x] ~~Group 2, unit 8 — generalize BE-0396's coordinate tap beyond Safari.~~
+  - Attempted, then reverted after review: `el.isHittable` checks XCUITest's own hit point for the
+    element (which honours a custom `accessibilityActivationPoint` and can differ from the
+    frame's geometric center under partial occlusion), while a coordinate tap always lands on
+    that geometric center — a silent mis-tap on an element whose real hit point was clear. A
+    follow-up investigation confirmed XCUITest's public API exposes neither the resolved
+    activation point nor a point-to-element hit test, so the two points cannot be reconciled
+    without either accepting that risk or re-querying the tree at tap time — which would undo the
+    round trip this unit exists to save. Decided: keep the Safari-only route; not pursued further
+    within this item.
 - [x] Group 2, unit 9 — skip the `safariViewService.state` XPC probe unless the app's own
   snapshot shows a browser remote-view boundary node.
 - [x] Group 2, unit 10 — make `/zorder` lazy. Deviation from the literal design: `nativeZ` is
@@ -306,20 +310,25 @@ half alone; *Progress* below records the measurement behind dropping its `elemen
   keeps its 1.0s backoff.
 - [x] Group 2, unit 13 — check `alerts.firstMatch.exists` before enumerating SpringBoard alert
   buttons.
-- [ ] Group 2, unit 14 — half shipped. Skipping reinstall when the app bundle's digest is
+- [x] Group 2, unit 14 — half shipped. Skipping reinstall when the app bundle's digest is
   unchanged landed, scoped to `reinstall: overwrite` (never `clean`, whose uninstall-then-install
-  is a deliberate data wipe the digest check must not skip). Raising
-  `BAJUTSU_XCUITEST_MAX_WARM_REUSES` above 3 did not: that default is BE-0291's own empirical
-  finding for when the resident runner starts crashing, and nothing in this pass measured a
-  device that tolerates more reuses to justify moving it.
-- [ ] Group 2, unit 15 — type text via `simctl pbcopy` and a paste keystroke. Attempted, then
-  reverted after an on-device run of `text_editing.yaml`:
-  `app.typeKey("v", modifierFlags: .command)` triggers iOS's cross-app "Allow Paste" consent
-  alert on every paste ("\"BajutsuRunnerUITests-Runner\" would like to paste from \"Showcase
-  SwiftUI\" — Do you want to allow this?"), which blocks the runner's main thread indefinitely —
-  no button its interruption monitor is registered to answer — timing out `POST /type` and
-  crashing the runner. Needs a way to suppress or auto-answer that alert, or confirmation it does
-  not fire on some other iOS version, before this can land.
+  is a deliberate data wipe the digest check must not skip). ~~Raising
+  `BAJUTSU_XCUITEST_MAX_WARM_REUSES` above 3~~
+  - Not pursued: that default is BE-0291's own empirical finding for when the resident runner
+    starts crashing, and nothing in this pass measured a device that tolerates more reuses to
+    justify moving it. Not pursued further within this item.
+- [x] ~~Group 2, unit 15 — type text via `simctl pbcopy` and a paste keystroke.~~
+  - Attempted, then reverted after an on-device run of `text_editing.yaml`:
+    `app.typeKey("v", modifierFlags: .command)` triggers iOS's cross-app "Allow Paste" consent
+    alert on every paste ("\"BajutsuRunnerUITests-Runner\" would like to paste from \"Showcase
+    SwiftUI\" — Do you want to allow this?"), which blocks the runner's main thread indefinitely —
+    no button its interruption monitor is registered to answer — timing out `POST /type` and
+    crashing the runner. A follow-up investigation found no dismissal mechanism in this codebase
+    can reach that alert: every existing alert handler runs only between XCUITest calls or right
+    before XCUITest synthesizes the next interaction, and XCUITest's non-reentrancy (BE-0323)
+    forbids a second, concurrent call from another thread while the blocked `typeKey` call holds
+    the main thread; no `simctl privacy`-style suppression exists for the pasteboard consent
+    either. Decided: keep plain per-character `typeText`; not pursued further within this item.
 - [x] Group 3, unit 16 — the mechanism confirmed by direct measurement, and the fix is a
   one-line correction rather than a redesign. `_device_act` sent one value for two purposes: the
   mark the device's own pre-injection read must postdate, and the anchor for the barrier armed
@@ -345,36 +354,45 @@ half alone; *Progress* below records the measurement behind dropping its `elemen
   path` check that the device still carries both.
 - [x] Group 3, unit 23 — the resident channel hands the driver the tree it already parsed to strip
   the decor windows, and the narrowed body is serialized only when a `rawTree` capture asks for it.
-- [ ] Group 3, unit 17 — skip `settledDump`'s second read when no accessibility event fired between
-  the two. Implemented, then reverted after measurement. The premise is sound in isolation: a
-  node's bounds reach a dump by way of an accessibility event, so no event means no change. What it
-  misses is that the confirming dump is also what *keeps the event stream flowing to the server's
-  own listener*, and the read mark that listener maintains is what the host's read-lag barrier
-  releases on. Without the second dump the mark stalls: an API 34 emulator's `controls.yaml`
-  scroll step went to 7.5, 7.7 and 10.0 seconds against 5.7, 5.9 and 6.0 with the dump restored,
-  because the pan's barrier spent its whole budget on a mark that never advanced. Landing this
-  needs a way to keep the mark live that does not depend on the dump.
-- [ ] Group 3, unit 20 — take screenshots from the resident server with
-  `UiAutomation.takeScreenshot()`. Not implemented: the design predates unit 2, which landed the
-  day before ([#1925](https://github.com/bajutsu-e2e/bajutsu/pull/1925)) and already moved the
-  `adb exec-out screencap` subprocess off the critical path by overlapping it with the tree read.
-  Moving the shot onto the resident channel would undo that overlap rather than deepen it: the
-  server serves one connection at a time, so the shot would serialize behind the read it currently
-  runs beside. Unit 2 measured that pair at 3361ms serialized against 2182ms overlapped, against
-  the 103ms subprocess spin-up this unit targets. A concurrent server would be the way in, and
-  whether `UiAutomation` tolerates a screenshot beside a dump is undocumented — a determinism
-  question, not a performance one, so it is not guessed at here.
-- [ ] Group 3, unit 24 — add a `swipe` variant to `/act`. Implemented twice, reverted both times
-  after on-device measurement. With `UiDevice.swipe` the `controls.yaml` scroll step went to 12.8
-  seconds against the coordinate path's 4.2: UiAutomator paces its drag through
-  `UiAutomation.executeAndWaitForEvent`, which consumes the events it sees, and a pan's events all
-  land *during* the drag — so none reached the read mark, the reply confirmed no publish, and the
-  host's barrier spent its full four seconds. Rebuilding the drag from its own `MotionEvent`s (the
-  shape `injectDoubleTap` already uses for the same reason) brought it to 7.5 seconds, still worse
-  than the coordinate path, and a server-side probe showed the read mark unchanged across the whole
-  pan — so that drag was not moving the content either. The unit's stated root cause was unit 16's
-  fixed budget, and unit 16 has now removed it; what remains of a `scroll` step is the drag's own
-  duration, which BE-0400 fixes deliberately, plus one confirming read.
+- [x] ~~Group 3, unit 17 — skip `settledDump`'s second read when no accessibility event fired
+  between the two.~~
+  - Implemented, then reverted after measurement. The premise is sound in isolation: a node's
+    bounds reach a dump by way of an accessibility event, so no event means no change. What it
+    misses is that the confirming dump is also what *keeps the event stream flowing to the
+    server's own listener*, and the read mark that listener maintains is what the host's
+    read-lag barrier releases on. Without the second dump the mark stalls: an API 34 emulator's
+    `controls.yaml` scroll step went to 7.5, 7.7 and 10.0 seconds against 5.7, 5.9 and 6.0 with
+    the dump restored, because the pan's barrier spent its whole budget on a mark that never
+    advanced. A follow-up investigation found no lighter-weight platform call that keeps the mark
+    live without the dump — the server's own comments describe `waitForIdle` as resting on the
+    same event stream the listener observes, but name no substitute for whatever effect the dump
+    itself has on that stream. Decided: keep the two-dumps-agree settle; not pursued further
+    within this item.
+- [x] ~~Group 3, unit 20 — take screenshots from the resident server with
+  `UiAutomation.takeScreenshot()`.~~
+  - Not implemented: the design predates unit 2, which landed the day before
+    ([#1925](https://github.com/bajutsu-e2e/bajutsu/pull/1925)) and already moved the
+    `adb exec-out screencap` subprocess off the critical path by overlapping it with the tree
+    read. Moving the shot onto the resident channel would undo that overlap rather than deepen
+    it: the server serves one connection at a time, so the shot would serialize behind the read
+    it currently runs beside. Unit 2 measured that pair at 3361ms serialized against 2182ms
+    overlapped, against the 103ms subprocess spin-up this unit targets. A concurrent server would
+    be the way in, and whether `UiAutomation` tolerates a screenshot beside a dump is undocumented
+    — a determinism question, not a performance one. Decided: not pursued further within this
+    item; unit 2 already closed the gap this unit targeted.
+- [x] ~~Group 3, unit 24 — add a `swipe` variant to `/act`.~~
+  - Implemented twice, reverted both times after on-device measurement. With `UiDevice.swipe` the
+    `controls.yaml` scroll step went to 12.8 seconds against the coordinate path's 4.2:
+    UiAutomator paces its drag through `UiAutomation.executeAndWaitForEvent`, which consumes the
+    events it sees, and a pan's events all land *during* the drag — so none reached the read
+    mark, the reply confirmed no publish, and the host's barrier spent its full four seconds.
+    Rebuilding the drag from its own `MotionEvent`s (the shape `injectDoubleTap` already uses for
+    the same reason) brought it to 7.5 seconds, still worse than the coordinate path, and a
+    server-side probe showed the read mark unchanged across the whole pan — so that drag was not
+    moving the content either. The unit's stated root cause was unit 16's fixed budget, and unit
+    16 has now removed it; what remains of a `scroll` step is the drag's own duration, which
+    BE-0400 fixes deliberately, plus one confirming read. Decided: not pursued further within
+    this item; its root cause is already closed.
 - [x] Rerun [`trace_run.py`](misc/step-performance/trace_run.py) against `controls.yaml` after
   each group lands, and record the resulting per-step wall-clock here. iOS, after Group 1 unit 6
   and the shipped half of Group 2 (2026-09-06, iPhone 17 Pro Simulator, `controls.yaml`): `POST
@@ -451,6 +469,18 @@ Log:
   fell from 3.46–5.67s to 2.32–4.57s across three runs each side, with `scroll` unchanged within
   the emulator's noise. Units 17, 20 and 24 were each implemented and reverted after measurement
   found them slower than what they replace — see the Progress notes on all three.
+- Closed out units 8, 14 (`MAX_WARM_REUSES` half), 15, 17, 20, and 24 as decided against, rather
+  than left open, after a fresh investigation of each found no path to landing them safely: unit 8
+  cannot reconcile a coordinate tap's landing point with `isHittable`'s activation point because
+  XCUITest's public API exposes neither the resolved activation point nor a point-to-element hit
+  test; unit 15's paste alert cannot be dismissed mid-call because XCUITest's non-reentrancy
+  (BE-0323) forbids a concurrent dismissal from another thread while the blocked call holds the
+  main thread; unit 17's dump-skip has no known lighter-weight substitute for whatever keeps the
+  Android read mark advancing; units 14's reuse ceiling, 20, and 24 were already closed by data,
+  by unit 2, and by unit 16 respectively. Every Progress box is now checked — units landed as
+  designed stay plain, units closed by decision are struck through with the reason nested
+  beneath. Status moves to Implemented; the remaining gap toward this item's own latency targets
+  is the device-side executor tracked in BE-0408–BE-0410.
 
 ## References
 
