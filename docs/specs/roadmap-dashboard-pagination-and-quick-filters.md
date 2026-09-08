@@ -2,9 +2,9 @@
 
 > ステータス: ドラフト
 > 対象: `scripts/build_roadmap_dashboard.py`（Roadmap status ダッシュボード生成スクリプト）
-> 関連: [BE-0094（ダッシュボード本体）](https://github.com/bajutsu-e2e/bajutsu/blob/main/roadmaps/BE-0094-roadmap-status-dashboard/BE-0094-roadmap-status-dashboard.md)・
-> [BE-0219（検索）](https://github.com/bajutsu-e2e/bajutsu/blob/main/roadmaps/BE-0219-roadmap-dashboard-search/BE-0219-roadmap-dashboard-search.md)・
-> [BE-0311（テーブルビュー）](https://github.com/bajutsu-e2e/bajutsu/blob/main/roadmaps/BE-0311-roadmap-dashboard-table-view/BE-0311-roadmap-dashboard-table-view.md)
+> 関連: [BE-0094（ダッシュボード本体）](../../roadmaps/BE-0094-roadmap-status-dashboard/BE-0094-roadmap-status-dashboard.md)・
+> [BE-0219（検索）](../../roadmaps/BE-0219-roadmap-dashboard-search/BE-0219-roadmap-dashboard-search.md)・
+> [BE-0311（テーブルビュー）](../../roadmaps/BE-0311-roadmap-dashboard-table-view/BE-0311-roadmap-dashboard-table-view.md)
 
 Roadmap status ページに、未完了項目だけを一発で絞り込むショートカットボタンと、カテゴリの一括展開・折りたたみボタン、
 テーブルビューのページングを追加する。カード表示の初期状態や各ステータスチップの初期 ON/OFF は変更しない。
