@@ -302,9 +302,9 @@ file. Batch 7's commit also updates the `ignore_imports` entry in `pyproject.tom
     package by name, and they hold 1,771 cases. 61 percent of those cases name none of that
     package's classes. 30 percent name one class. 10 percent name two or more. Of the 327
     classes in those packages, 96 turn up by name in a case in their mirror file. In 41 of the
-    57 files, under half the cases resolve to a single class. A per-class split thus has no
-    class to file six cases in ten under. It would leave an empty test module for seven classes
-    in ten. The cause is the one rule 2 already names on the source side. These files group
+    57 files, under half the cases resolve to a single class. A per-class split would thus leave
+    six cases in ten with no owner. It would produce an empty test module for seven classes in
+    ten. The cause is the one rule 2 already names on the source side. These files group
     their cases around a module's functions. The split keeps those functions together in
     `_functions.py`. Other cases group around end-to-end behavior that runs through a public
     entry point. Splitting per class would re-partition the suite along a boundary its cases do
