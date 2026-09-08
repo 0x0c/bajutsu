@@ -382,3 +382,85 @@ def test_worker_lease_204_is_written_without_a_body(tmp_path: Path) -> None:
     finally:
         server.shutdown()
         server.server_close()
+
+
+def test_worker_lease_signs_the_uploaded_bundles_zip(
+    serve_engine: Callable[..., Engine], tmp_path: Path
+) -> None:
+    # A single-zip bind (BE-0073) holds its whole tree as one stored object, so the lease signs one
+    # GET for it — without which the run starts against an appPath binary no worker ever received.
+    state, repo = _state_with_db(serve_engine, tmp_path)
+    state.object_store = _FakeStore()
+    spec = {
+        "cmd": ["bajutsu", "run"],
+        "bundle": {"id": "a" * 64, "artifacts": None, "scenarios_filename": None},
+    }
+    repo.enqueue_job("j1", org_id="o1", spec=spec)
+    payload, code = ops.worker_lease(state, "w1")
+    assert code == 200
+    assert payload["bundle_urls"] == {
+        "bundle": f"https://signed.example/get/o1/uploads/{'a' * 64}.zip"
+    }
+
+
+def test_worker_lease_signs_a_composed_triples_legs_separately(
+    serve_engine: Callable[..., Engine], tmp_path: Path
+) -> None:
+    # A composed triple (BE-0268) keeps its three artifacts as separate objects, so the lease signs
+    # each one and the worker re-composes — object storage keeps the per-leg dedup that item bought.
+    state, repo = _state_with_db(serve_engine, tmp_path)
+    state.object_store = _FakeStore()
+    spec = {
+        "cmd": ["bajutsu", "run"],
+        "bundle": {
+            "id": "a" * 64,
+            "artifacts": {"config": "b" * 64, "binary": "d" * 64},
+            "scenarios_filename": None,
+        },
+    }
+    repo.enqueue_job("j1", org_id="o1", spec=spec)
+    payload, code = ops.worker_lease(state, "w1")
+    assert code == 200
+    assert payload["bundle_urls"] == {
+        "config": f"https://signed.example/get/o1/uploads/config/{'b' * 64}",
+        "binary": f"https://signed.example/get/o1/uploads/binary/{'d' * 64}",
+    }
+
+
+def test_worker_lease_omits_bundle_urls_for_a_job_that_ships_none(
+    serve_engine: Callable[..., Engine], tmp_path: Path
+) -> None:
+    state, repo = _state_with_db(serve_engine, tmp_path)
+    state.object_store = _FakeStore()
+    repo.enqueue_job("j1", org_id="o1", spec={"cmd": ["run"], "bundle": None})
+    payload, code = ops.worker_lease(state, "w1")
+    assert code == 200
+    assert "bundle_urls" not in payload
+
+
+def test_worker_lease_refuses_to_sign_a_bundle_id_that_is_not_a_digest(
+    serve_engine: Callable[..., Engine], tmp_path: Path
+) -> None:
+    # The id comes back out of a stored job row, and it becomes an object-store key, so it is
+    # re-validated here rather than trusted for having been server-authored once.
+    state, repo = _state_with_db(serve_engine, tmp_path)
+    state.object_store = _FakeStore()
+    spec = {"cmd": ["run"], "bundle": {"id": "../../other-org/secret", "artifacts": None}}
+    repo.enqueue_job("j1", org_id="o1", spec=spec)
+    payload, code = ops.worker_lease(state, "w1")
+    assert code == 200
+    assert "bundle_urls" not in payload
+
+
+def test_worker_lease_signs_nothing_for_a_malformed_artifacts_block(
+    serve_engine: Callable[..., Engine], tmp_path: Path
+) -> None:
+    # `artifacts` distinguishes a composed triple from a single-zip bind, so a non-mapping value is
+    # a spec this signer cannot read — it signs nothing rather than guessing at the other shape.
+    state, repo = _state_with_db(serve_engine, tmp_path)
+    state.object_store = _FakeStore()
+    spec = {"cmd": ["run"], "bundle": {"id": "a" * 64, "artifacts": ["config"]}}
+    repo.enqueue_job("j1", org_id="o1", spec=spec)
+    payload, code = ops.worker_lease(state, "w1")
+    assert code == 200
+    assert "bundle_urls" not in payload

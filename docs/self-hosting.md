@@ -540,6 +540,27 @@ the control plane signs** — the control plane is the only place the object sto
 The bytes still flow worker→storage directly (the signed URL points at MinIO), so the worker needs
 network reachability to the object store, just not its secrets.
 
+A run off an **uploaded bundle** travels the same way. The control plane binds a dropped zip, or a
+composed `(config, scenarios, binary)` triple. It keeps that tree on its own disk, out of any
+worker's reach. The lease carries one signed read URL per stored object the bundle holds.
+
+The worker rebuilds the tree under `.bundles/<org>/<id>/` in its working directory. It runs the job from
+the tree's root. The config's relative `appPath`, `scenarios`, and `baselines` then resolve as
+written. The bundle's content digest keys that tree, so a second run off it downloads nothing. The
+digest also keeps two builds apart. Two bundles whose binaries share a path but differ in bytes
+never share a workspace.
+
+This path needs an object store configured. A control plane running without one has stored the
+bundle nowhere. Such a job now fails with `bundle unavailable`, instead of at install time.
+
+Two notes for operating it:
+
+- **Nothing evicts a tree.** A pipeline that uploads a bundle per build accumulates one tree per
+  build. Prune `.bundles/` on a schedule if the worker's disk is tight.
+- **A bundle's run no longer downloads the organization's stored baselines.** The bundle ships its
+  own. If you approve baselines through serve and also upload bundles, put the approved images in
+  the bundle.
+
 Wrap it in a `LaunchAgent` (as in Tier A) so it survives reboots. The worker polls the control
 plane's `/api/worker/lease` endpoint over HTTP (no Redis needed), runs each job on a fresh
 Simulator, uploads the `runs/<id>/` tree (including `console.log`), and posts the result back to

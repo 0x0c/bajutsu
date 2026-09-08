@@ -413,7 +413,7 @@
     "bajutsu/serve/operations/target_comparison.py": 94.59,
     "bajutsu/serve/operations/theme_editor.py": 95.71,
     "bajutsu/serve/operations/triage.py": 88.88,
-    "bajutsu/serve/operations/upload.py": 91.14,
+    "bajutsu/serve/operations/upload.py": 91.1,
     "bajutsu/serve/operations/version.py": 95.0,
     "bajutsu/serve/operations/worker.py": 98.11,
     "bajutsu/serve/operations/worker_uploads.py": 97.36,

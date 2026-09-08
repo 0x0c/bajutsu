@@ -5,11 +5,12 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from bajutsu.serve.helpers import valid_run_id
+from bajutsu.serve.helpers import valid_run_id, valid_sha256
 from bajutsu.serve.jobs import persist_run
 from bajutsu.serve.orgs import DEFAULT_ORG
-from bajutsu.serve.server.object_store import baseline_prefix, org_prefix
+from bajutsu.serve.server.object_store import baseline_prefix, org_prefix, upload_store_key
 from bajutsu.serve.state import ServeState
+from bajutsu.serve.upload_artifacts import ARTIFACT_KINDS, artifact_store_key
 
 
 def _clean_capabilities(raw: Any) -> list[str]:
@@ -35,6 +36,11 @@ def worker_lease(
     When the job materializes visual baselines and a hosted object store is configured, the response
     also carries ``baseline_urls`` — one presigned GET URL per baseline under the *leased job's* org
     prefix (BE-0160) — so the worker downloads them over plain HTTP, with no cloud credentials.
+
+    A job dispatched off an uploaded bundle carries ``bundle_urls`` the same way: a presigned GET URL
+    per stored object the bundle is made of, which the worker rebuilds into the workspace it runs the
+    job from. Without them the run would start against an ``appPath`` binary only the control plane
+    holds.
     """
     if state.repository is None:
         return {"error": "server backend has no database configured"}, 503
@@ -46,9 +52,45 @@ def worker_lease(
     if leased is None:
         return {}, 204
     resp: dict[str, Any] = {"job_id": leased.id, "org_id": leased.org_id, "spec": leased.spec}
-    if leased.spec.get("materialize_baselines") and state.object_store is not None:
-        resp["baseline_urls"] = _baseline_urls(state, leased.org_id or DEFAULT_ORG)
+    if state.object_store is not None:
+        org = leased.org_id or DEFAULT_ORG
+        if leased.spec.get("materialize_baselines"):
+            resp["baseline_urls"] = _baseline_urls(state, org)
+        if urls := _bundle_urls(state, org, leased.spec.get("bundle")):
+            resp["bundle_urls"] = urls
     return resp, 200
+
+
+def _bundle_urls(state: ServeState, org: str, bundle: Any) -> dict[str, str]:
+    """Presigned GET URLs for the uploaded bundle a job runs off; empty when it runs off none.
+
+    A single-zip bind (BE-0073) holds its whole tree as one stored zip, signed here under ``bundle``.
+    A composed triple (BE-0268) holds one object per supplied leg instead, each signed under its own
+    artifact kind, so the worker re-composes the tree and object storage keeps BE-0268's per-leg
+    dedup rather than a whole-tree copy per composition. `Upload.worker_ref` decides which shape a
+    job carries; this signs whatever it names.
+
+    The org comes from the leased job, never from the worker, so a signed URL can only ever address
+    the leaseholder's own tenant prefix — the same rule `_baseline_urls` follows. Every sha is
+    re-validated as a full hex digest before it becomes a storage key: it travels through the queue
+    and comes back out of a stored job row, so it is not a value freshly computed here.
+    """
+    assert state.object_store is not None  # caller guards; narrows the type for the signer below
+    if not isinstance(bundle, dict) or not valid_sha256(bundle.get("id")):
+        return {}
+    artifacts = bundle.get("artifacts")
+    if artifacts is None:
+        key = upload_store_key(state.object_store_prefix, org, bundle["id"])
+        return {"bundle": state.object_store.presigned_url(key)}
+    if not isinstance(artifacts, dict):
+        return {}
+    return {
+        kind: state.object_store.presigned_url(
+            artifact_store_key(state.object_store_prefix, org, kind, sha)
+        )
+        for kind in ARTIFACT_KINDS
+        if valid_sha256(sha := artifacts.get(kind))
+    }
 
 
 def _baseline_urls(state: ServeState, org: str) -> dict[str, str]:

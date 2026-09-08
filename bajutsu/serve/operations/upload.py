@@ -17,7 +17,6 @@ from __future__ import annotations
 import hashlib
 import logging
 import os
-import re
 import tempfile
 import zipfile
 from pathlib import Path
@@ -27,9 +26,9 @@ import yaml
 
 from bajutsu.common.scenario import load_scenario_file
 from bajutsu.serve.authz import _record_audit, _target_forbidden
-from bajutsu.serve.helpers import list_targets, valid_scenario_ref
+from bajutsu.serve.helpers import list_targets, valid_scenario_ref, valid_sha256
 from bajutsu.serve.operations.composition import materialize_composition
-from bajutsu.serve.server.object_store import org_prefix, upload_prefix
+from bajutsu.serve.server.object_store import org_prefix, upload_store_key
 from bajutsu.serve.state import ServeState
 from bajutsu.serve.upload_artifacts import (
     ARTIFACT_KINDS,
@@ -56,16 +55,6 @@ _logger = logging.getLogger(__name__)
 # kind can't silently drift between the two.
 _COMPOSED_KINDS: tuple[ArtifactKind, ...] = tuple(k for k in ARTIFACT_KINDS if k != "config")
 
-# A full, lowercase hex sha256 digest — exactly what hashlib.sha256().hexdigest() produces, and the
-# only shape `_upload_store_key`/`_org_uploads_dir` may safely turn into a path component or an
-# object-store key. `bind_upload_config`'s own sha256 always matches (server-computed while
-# streaming the upload); `restore_uploaded_config`'s comes from the org's stored record, whose
-# locator a client shaped at bind, so it is untrusted and must be checked before it ever
-# reaches `uploads_dir / sha256` — an unchecked `../`-laden value would let a stored record walk
-# a materialize call outside the cache root (mirrors the Git source's own `_FULL_SHA_RE` guard on a
-# resolved commit SHA, `bajutsu/common/config_source.py`).
-_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
-
 
 def _safe_filename(name: str, *, default: str = "bundle.zip") -> str:
     """A display-safe basename for an uploaded file (provenance only): strip any directory and
@@ -75,10 +64,8 @@ def _safe_filename(name: str, *, default: str = "bundle.zip") -> str:
 
 
 def _upload_store_key(state: ServeState, org: str, sha256: str) -> str:
-    """The object-store key a bundle's raw zip lives at for *org* (BE-0243): nested under the same
-    per-org prefix every sibling store (artifacts/scenarios/baselines) already uses, so one org's
-    upload can never dedupe against — or be resolved by — another org's identical-content upload."""
-    return f"{upload_prefix(org_prefix(state.object_store_prefix, org))}{sha256}.zip"
+    """`upload_store_key` bound to this deployment's store prefix (BE-0243)."""
+    return upload_store_key(state.object_store_prefix, org, sha256)
 
 
 def _org_uploads_dir(state: ServeState, org: str) -> Path:
@@ -345,7 +332,7 @@ def artifact_exists(
     artifact sha is before it is ever turned into a path or object-store key."""
     if kind not in ARTIFACT_KINDS:
         return {"error": f"unknown artifact kind: {kind!r}"}, 400
-    if not isinstance(sha256, str) or not _SHA256_RE.fullmatch(sha256):
+    if not valid_sha256(sha256):
         return {"error": "sha256 must be a full lowercase hex digest"}, 400
     org = state.org_of(actor)
     if state.object_store is not None:
@@ -453,7 +440,7 @@ def _collect_optional_shas(
 ) -> tuple[Any, int] | None:
     """Validate the optional `scenarios`/`binary` legs and add each present one to *shas* (which
     already holds the required `config` leg). Every leg is untrusted (a client-shaped stored record
-    or compose request), so a present sha must be a full lowercase hex digest (`_SHA256_RE`) before
+    or compose request), so a present sha must be a full lowercase hex digest (`valid_sha256`) before
     it is ever turned into a path or object-store key — the same guard the `config` leg gets in each
     caller. Returns an `(error, 400)` tuple on an invalid present leg, else `None`. An absent or
     empty leg is simply skipped (a config may need neither)."""
@@ -461,7 +448,7 @@ def _collect_optional_shas(
         sha = artifacts.get(kind)
         if sha is None or sha == "":
             continue
-        if not isinstance(sha, str) or not _SHA256_RE.fullmatch(sha):
+        if not valid_sha256(sha):
             return {"error": f"invalid {kind} artifact sha"}, 400
         shas[kind] = sha
     return None
@@ -552,6 +539,9 @@ def _compose_and_bind(
         artifact_names=_artifact_display_names(
             shas, filename=filename, scenarios_filename=scenarios_filename
         ),
+        # The name the composition was actually built with, so a worker rebuilding this tree lands
+        # its single-YAML `scenarios` leg at the same path (`Upload.scenarios_name`).
+        scenarios_name=scenarios_filename,
     )
     state.bind_upload(upload, session)
     return upload, 200
@@ -576,10 +566,10 @@ def _restore_composed_config(
     required (BE-0393): they survive a restart, so a replica that already composed this triple
     rebinds it without a fetch. Every leg in *artifacts* is untrusted (the org's
     stored record, whose locator a client shaped at bind), so each present sha is validated with
-    `_SHA256_RE` before it is ever turned into a path or object-store key, the same reasoning
+    `valid_sha256` before it is ever turned into a path or object-store key, the same reasoning
     `restore_uploaded_config`'s legacy path already applies to its own single `sha256`."""
     config_sha = artifacts.get("config")
-    if not isinstance(config_sha, str) or not _SHA256_RE.fullmatch(config_sha):
+    if not valid_sha256(config_sha):
         return None
     shas: dict[str, str] = {"config": config_sha}
     err = _collect_optional_shas(artifacts, shas)
@@ -631,7 +621,7 @@ def bind_composition(
     if not isinstance(artifacts, dict):
         return {"error": "artifacts must be an object"}, 400
     config_sha = artifacts.get("config")
-    if not isinstance(config_sha, str) or not _SHA256_RE.fullmatch(config_sha):
+    if not valid_sha256(config_sha):
         return {"error": "a config artifact sha256 is required"}, 400
     shas: dict[str, str] = {"config": config_sha}
     err = _collect_optional_shas(artifacts, shas)
@@ -740,7 +730,7 @@ def restore_uploaded_config(
     first (BE-0393): the extracted tree is keyed by content hash and survives a restart, so a replica
     that still holds it rebinds without a fetch. *source*
     reached the org row from a client-shaped bind, so its
-    `sha256` is untrusted: it must be a full lowercase hex digest (`_SHA256_RE`) before it is ever
+    `sha256` is untrusted: it must be a full lowercase hex digest (`valid_sha256`) before it is ever
     turned into a path (`uploads_dir / sha256`) or object-store key, the same way the Git source
     validates a resolved commit SHA before doing the same (`bajutsu/common/config_source.py`) — an
     unvalidated value could otherwise walk `materialize_bundle` outside the cache root (a `../`) or
@@ -760,7 +750,7 @@ def restore_uploaded_config(
             state, source, artifacts, org=org, actor=actor, session=session
         )
     sha256 = source.get("sha256")
-    if not isinstance(sha256, str) or not _SHA256_RE.fullmatch(sha256):
+    if not valid_sha256(sha256):
         return None
     uploads_dir = _org_uploads_dir(state, org)
     dest = uploads_dir / sha256

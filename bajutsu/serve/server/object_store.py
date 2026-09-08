@@ -54,9 +54,20 @@ def baseline_prefix(base: str = "") -> str:
 
 def upload_prefix(base: str = "") -> str:
     """The object-key prefix for durably-persisted uploaded zip bundles under *base*
-    (``<base>uploads/<sha256>.zip``, BE-0243). Shared by the upload bind and the
-    `restore_uploaded_config` fetch-and-extract fallback, so both agree on keys."""
+    (``<base>uploads/<sha256>.zip``, BE-0243). Shared by the upload bind, the
+    `restore_uploaded_config` fetch-and-extract fallback, and `artifact_store_key`'s per-kind
+    nesting, so all three agree on keys."""
     return f"{base}uploads/"
+
+
+def upload_store_key(prefix: str, org: str, sha256: str) -> str:
+    """The object-store key *org*'s uploaded zip bundle lives at (BE-0243).
+
+    Nested under the same per-org prefix every sibling store already uses, so one org's upload can
+    never dedupe against — or be resolved by — another org's identical-content upload. Sits here
+    beside `artifact_store_key` because the bind that writes this key and the lease that signs a GET
+    for it live in different modules, and a layout change must reach both."""
+    return f"{upload_prefix(org_prefix(prefix, org))}{sha256}.zip"
 
 
 # Keep in sync with serve.orgs.DEFAULT_ORG; duplicated to avoid importing it on this hot path.
