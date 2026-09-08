@@ -1,6 +1,6 @@
 # Roadmap status ページの絞り込みショートカットとテーブルページング
 
-> ステータス: ドラフト
+> ステータス: 実装完了
 > 対象: `scripts/build_roadmap_dashboard.py`（Roadmap status ダッシュボード生成スクリプト）
 > 関連: [BE-0094（ダッシュボード本体）](../../roadmaps/BE-0094-roadmap-status-dashboard/BE-0094-roadmap-status-dashboard.md)・
 > [BE-0219（検索）](../../roadmaps/BE-0219-roadmap-dashboard-search/BE-0219-roadmap-dashboard-search.md)・
@@ -184,7 +184,7 @@ Proposal・In progress の信号が薄まる。両者を混同しないよう、
 | 4 | ✅ テーブルビューにページ送りコンテナ(`.be-pager`)を追加し、`TABLE_PAGE_SIZE` ・`matchedRows()` ・`renderPager()` ・`applyTablePaging()` を実装し、`apply()` と `sortBy()` の末尾から呼び出す | `scripts/build_roadmap_dashboard.py`（`render_html()`, `_STYLE`, `_SCRIPT`） | 新規テストが `.be-pager` の存在、`is-paged-out` が初期 HTML に含まれないこと(no-JS 時に全行表示のままであること)を検証し、`make lint-js` と `make test` が通る | 1 |
 | 5 | ✅ ページ上部の説明文(`_INTRO`)に、絞り込みショートカットとページングの説明を追記する | `scripts/build_roadmap_dashboard.py`（`_INTRO`） | 追記後の文面をセルフレビューし、既存の文体・分量に合わせる | 1–4 |
 | 6 | ✅ `make docs-serve` でページを実際に開き、ブラウザで「未完了のみ表示」ボタン・展開/折りたたみボタン・テーブルのページ送りを操作して確認する | ― | Proposal 14 件が「未完了のみ表示」クリック 1 回で全件見える状態になること、Implemented だけに絞ったテーブルビューが 50 件ずつページ送りされることを確認した(ブラウザが非表示状態だったため目視のスクリーンショットではなく `javascript_tool` 経由での DOM 状態確認) | 1–5 |
-| 7 | `make check` を実行し、フォーマット・lint・型チェック・テスト一式が通ることを確認する | ― | `make check` が緑になる | 1–6 |
+| 7 | ✅ `make check` を実行し、フォーマット・lint・型チェック・テスト一式が通ることを確認する | ― | `make check` が緑になる | 1–6 |
 
 ---
 
