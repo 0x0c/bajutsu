@@ -94,8 +94,8 @@ reimplemented in Rust — the Python copies stay in place as the conformance sui
 `topmost_at_point`, `redirect_candidates`, `raise_if_covered`, and `frame_center`. Together they
 cover selector resolution and the tap-occlusion check for `tap`, one of the actuation kinds BE-0408
 moves to the device. Each is pure, the property Motivation already establishes: an
-`Element`/`Selector` pair (or a list of them) goes in; a bool, an index, a point, or a raised error
-comes out.
+`Element`/`Selector` pair (or a list of them) goes in; a bool, an index or a list of indices, a
+point, or a raised error comes out.
 
 Two signatures change because of the FFI (foreign function interface) boundary itself, where
 Python's object identity has no equivalent. First, `find_all` returns `Vec<u32>` — indices into the
@@ -108,7 +108,28 @@ element and its own parallel handle from the list it built. Second, `topmost_at_
 the same reason: Python locates `target` inside `elements` by identity (`is`), specifically so two
 content-identical elements — a known XCUITest duplicate registration — resolve to the one the caller
 actually holds, not merely one that looks like it. An index preserves that distinction; a
-value-copied record cannot.
+value-copied record cannot. `redirect_candidates` also returns `Vec<u32>` rather than elements, for
+that same reason on the way out: its caller actuates on the descendant it picks, the same way
+`XcuitestDriver._tap_sole_reachable_descendant` looks each candidate up today as `handles[id(el)]` —
+an identity lookup a value-copied record would break just as a returned `find_all` element would.
+`topmost_at_point`'s `Element` return stays a copy: `raise_if_covered` only formats its identifier
+and frame into a message, so nothing downstream needs to trace it back to a platform handle.
+
+Selector pattern matching needs a named engine, not just a signature. `idMatches` runs Python's
+`fnmatch.fnmatchcase`; `labelMatches` runs `re.compile(...).search`
+([`_functions.py:112-122`](../../bajutsu/common/drivers/base/_functions.py)). The crate uses the
+[`regex`](https://docs.rs/regex) crate for `labelMatches`, and reimplements `fnmatch`'s own
+translation of a shell-glob pattern into a regular expression string for `idMatches` — the same
+approach Python's `fnmatch` module itself takes internally — compiling the result with that same
+`regex` crate, so the crate carries exactly one pattern engine rather than two. `regex` does not
+support two constructs Python's `re` does: lookaround (`(?=…)`, `(?!…)`) and backreferences. A
+`labelMatches` pattern using either compiles on the host and fails to compile in the crate — the
+same host/device disagreement this item exists to remove, relocated rather than closed. The crate
+therefore treats a pattern it cannot compile as a distinct, loud failure at first use — folded into
+the shared error enum below — rather than a silent non-match a caller cannot tell apart from "the
+element isn't there." A case in the generated corpus (see Verification) pins one such pattern, so a
+future change to either engine
+that reopens the gap fails the suite instead of surfacing as a flaky scenario.
 
 `gesture_anchor` is equally pure, but it stays out of this item's scope. BE-0408 moves `tap`, `type`,
 `swipe`, and `scroll` to the device — not the two-finger `pinch` / `rotate` gestures `gesture_anchor`
@@ -149,7 +170,11 @@ That matches what the Python code and the JSON wire format already use, so a sev
 later needs no new enum kept in step. [`ElementNotFound`](../../bajutsu/common/drivers/base/element_not_found.py),
 [`AmbiguousSelector`](../../bajutsu/common/drivers/base/ambiguous_selector.py), and
 [`ElementNotTappable`](../../bajutsu/common/drivers/base/element_not_tappable.py) become one UniFFI
-error enum with three variants. Each variant carries structured failure detail — the selector, the
+error enum with a fourth variant, `UnsupportedPattern`, added alongside them for the pattern-engine
+gap the previous section names — a `labelMatches` value the `regex` crate cannot compile, carrying
+the field name and the pattern itself. Python raises nothing equivalent today, since `re.compile`
+accepts every pattern this fourth variant exists for; a device executor is the only caller that can
+hit it. The other three variants carry structured failure detail — the selector, the
 candidate count, the covering element's identifier and frame — rather than a formatted message
 string. The host, not the device, renders that detail into the message text a run report shows
 today (`resolve_unique` and `raise_if_covered` in
@@ -170,7 +195,15 @@ attributes, and it treats any disagreement among the survivors as a resolution f
 distinct group. Only the frame-matching and grouping logic is shared, not that surrounding contract.
 Exposing the tolerance as a parameter lets `resolvableMatchingIndex` become a thin wrapper: its own
 recorded-attribute filter runs first, the shared function groups what remains, and its existing
-nil-on-disagreement check runs on the result.
+nil-on-disagreement check runs on the result. Two constraints follow from the tolerance itself. The
+shared function compares every candidate against every other, never each against one representative:
+a tolerance is not transitive, so an anchor-based scan could fold candidates a point on either side
+of a middle one into a single group even though the two extremes sit two points apart — collapsing a
+pair `resolvableMatchingIndex` refuses today, and making the verdict depend on the order candidates
+happen to arrive in. And the function returns groups of indices into the caller's own list, not
+groups of elements, for the same reason `find_all` does: the wrapper reads its `Int?` result straight
+off those indices, rather than re-deriving one with a second, hand-written frame comparison of its
+own.
 
 Android's derived-label fallback (`_derived_label` in
 [`bajutsu/common/drivers/adb/_functions.py`](../../bajutsu/common/drivers/adb/_functions.py), applied
@@ -193,7 +226,10 @@ targets `aarch64-apple-ios-sim` and `x86_64-apple-ios` for the Simulator, `aarch
 [BE-0238](../BE-0238-ios-device-cloud-execution/BE-0238-ios-device-cloud-execution.md)'s real-device
 targeting, and `aarch64-apple-darwin` so [`swift.yml`](../../.github/workflows/swift.yml)'s plain
 Apple Silicon macOS runner — no Simulator, `swift build --package-path BajutsuKit` and `swift test
---package-path BajutsuKit` — keeps building and testing `BajutsuRunner` the way it does today.
+--package-path BajutsuKit` — keeps building and testing `BajutsuRunner` the way it does today. No
+`x86_64-apple-darwin` slice is built, which narrows one host set: an Intel Mac keeps the Simulator
+slice it needs to run a scenario, but no longer builds or unit-tests the package natively, the way
+it does today. This item accepts that narrowing, since `swift.yml` already runs Apple Silicon only.
 `uniffi-bindgen` emits the Swift bindings and merges the four `cargo build` outputs into an
 `.xcframework` with three platform slices (the two Simulator triples merge into one universal
 Simulator slice), added to
@@ -222,15 +258,21 @@ That build file's own comment already says the server "stays dependency-light" s
 HTTP or JSON library, being a self-contained instrumentation. That comment states a preference
 against an unneeded dependency, not a ban on the native dependency this executor actually needs.
 
-**Verification.** BE-0114's conformance suite gains a fixture-runner path that calls the crate
-directly, not through a platform binding. A small Rust binary, built for the CI host's own
-architecture and never shipped with the wheel or the resident server, reads a fixture's `Element`
-list and `Selector` from JSON on standard input, and writes the matched indices, or the error
-variant and its structured detail, on standard output.
-The suite's existing fixtures then check three layers against one artifact: the crate's own Rust unit
-tests, this CLI-mediated fixture run, and — once BE-0409 and BE-0410 exist — the same fixtures run
-through each platform's own binding. A fixture failure on either platform binding then narrows at
-once to "the binding," rather than reopening whether the shared logic itself carries the defect.
+**Verification.** BE-0114's driver conformance suite exercises a `Driver` end to end — seed a screen,
+act, assert — so it carries no `Element`-list-plus-`Selector`-plus-expected-result corpus a CLI could
+read directly. That corpus already exists one level down, though:
+[`tests/test_drivers_base.py`](../../tests/test_drivers_base.py) unit-tests `_functions.py`'s
+functions directly, each case building the same `Element`/`Selector` inputs the crate now takes and
+asserting the same output. A small Rust binary — built for the CI host's own architecture, never
+shipped with the wheel or the resident server — reads a fixture's `Element` list and `Selector` from
+JSON on standard input, and writes the matched indices, or the error variant and its structured
+detail, on standard output. The JSON corpus that CLI reads is *generated from*
+`test_drivers_base.py`'s existing cases, not hand-duplicated alongside them, so the pytest cases stay
+the one source and the crate is checked against exactly what already backs the host's own behavior —
+not a second, independently maintained fixture set that could drift from it unnoticed. Once BE-0409
+and BE-0410 exist, the same corpus runs a third time, through each platform's own binding; a failure
+there narrows at once to "the binding," rather than reopening whether the shared logic itself carries
+the defect.
 
 ## Alternatives considered
 
@@ -275,13 +317,19 @@ once to "the binding," rather than reopening whether the shared logic itself car
 > (oldest first), linking the PRs.
 
 - [ ] Stand up the crate skeleton at `rust/selector-core/`, with `Element`, `Selector`, and `Trait`
-  mirrored as UniFFI records and the three selector errors as one UniFFI error enum.
+  mirrored as UniFFI records and the three selector errors plus `UnsupportedPattern` as one UniFFI
+  error enum.
+- [ ] Implement `idMatches` and `labelMatches` matching on top of the [`regex`](https://docs.rs/regex)
+  crate alone: reimplement `fnmatch`'s glob-to-regex translation for `idMatches`, compile
+  `labelMatches` directly, and return `UnsupportedPattern` for a pattern `regex` cannot compile.
 - [ ] Port the nine selector and geometry functions from
   [`bajutsu/common/drivers/base/_functions.py`](../../bajutsu/common/drivers/base/_functions.py),
-  changing `find_all` to return `Vec<u32>` and `resolve_unique` a `u32` (indices into the caller's
-  `elements`) in place of elements, `topmost_at_point` / `redirect_candidates` / `raise_if_covered`
-  to take a `target_index: u32` in place of an `Element`, and `_collapse_identical_duplicates` to
-  take a `frame_tolerance: f64`:
+  changing `find_all` and `redirect_candidates` to return `Vec<u32>`, `resolve_unique` a `u32`
+  (indices into the caller's `elements`) in place of elements, `topmost_at_point` /
+  `redirect_candidates` / `raise_if_covered` to take a `target_index: u32` in place of an `Element`,
+  and `_collapse_identical_duplicates` to take a `frame_tolerance: f64` and return groups of indices
+  — comparing every candidate against every other, not each against one representative, so a
+  non-zero tolerance stays as strict as the exact-match case about what counts as one group:
   - `matches`
   - `find_all`
   - `resolve_unique`
@@ -291,9 +339,10 @@ once to "the binding," rather than reopening whether the shared logic itself car
   - `redirect_candidates`
   - `raise_if_covered`
   - `frame_center`
-- [ ] Build the CLI conformance-runner binary and extend
-  [BE-0114](../BE-0114-driver-conformance-suite/BE-0114-driver-conformance-suite.md)'s fixture suite
-  to run against it directly.
+- [ ] Build the CLI conformance-runner binary, and a generator that turns
+  [`tests/test_drivers_base.py`](../../tests/test_drivers_base.py)'s existing cases into the JSON
+  corpus that binary reads, so the corpus stays derived from those cases rather than hand-duplicated
+  alongside them.
 - [ ] Wire `cargo` and `uniffi-bindgen` into the `BajutsuKit` Swift Package build, producing an
   `.xcframework` (three platform slices merged from four `cargo build` targets: Simulator, device,
   and macOS) binary target `BajutsuRunner` links against.
