@@ -9,7 +9,7 @@
 | 提案者 | [@0x0c](https://github.com/0x0c) |
 | 状態 | **実装済み** |
 | トラッキング Issue | [検索](https://github.com/bajutsu-e2e/bajutsu/issues?q=is%3Aissue+label%3Aroadmap-tracking+in%3Atitle+"BE-0411") |
-| 実装 PR | [#1940](https://github.com/bajutsu-e2e/bajutsu/pull/1940) |
+| 実装 PR | [#1940](https://github.com/bajutsu-e2e/bajutsu/pull/1940)（分割本体）、[#1946](https://github.com/bajutsu-e2e/bajutsu/pull/1946)（テスト側の分割を見送り） |
 | トピック | コードベース品質・技術的負債 |
 <!-- /BE-METADATA -->
 
@@ -382,8 +382,8 @@ schemaと`Driver`Protocolをポータブルな内側の層に保つcontractに�
   衝突は、作業ツリーを読むどの検査からも見えません。ディレクトリを作る道具自身が拒否するほかない
   のは、そのためです。
 
-- PR_PLACEHOLDER — 最後まで残っていたテスト側の分割を、本項目のもとでコードを
-  出さずに閉じました。分割を終えた状態を計測したところ、設計が残していた問いに答えが
+- [#1946](https://github.com/bajutsu-e2e/bajutsu/pull/1946) — 最後まで残っていた単位を閉じました。
+  テスト側の分割は、本項目のもとでコードを出しません。分割を終えた状態を計測したところ、設計が残していた問いに答えが
   出ました。分割済みパッケージと名前で対応する57本のテストファイルには、1,771件のケースが
   あります。そのうち61パーセントは、対象パッケージのクラスをまったく名指ししません。
   327クラスのうち、対応するテストファイルのケースに名前が現れるのは96クラスだけです。

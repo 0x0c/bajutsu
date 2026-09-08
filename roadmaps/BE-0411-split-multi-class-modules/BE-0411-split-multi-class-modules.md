@@ -9,7 +9,7 @@
 | Author | [@0x0c](https://github.com/0x0c) |
 | Status | **Implemented** |
 | Tracking issue | [Search](https://github.com/bajutsu-e2e/bajutsu/issues?q=is%3Aissue+label%3Aroadmap-tracking+in%3Atitle+"BE-0411") |
-| Implementing PR | [#1940](https://github.com/bajutsu-e2e/bajutsu/pull/1940) |
+| Implementing PR | [#1940](https://github.com/bajutsu-e2e/bajutsu/pull/1940) (the split), [#1946](https://github.com/bajutsu-e2e/bajutsu/pull/1946) (test-side split closed) |
 | Topic | Codebase quality & technical debt |
 <!-- /BE-METADATA -->
 
@@ -401,7 +401,7 @@ Log:
   A collision between a module's name and an ignore pattern hides from every local check.
   The refusal has to come from the tool that creates the directory.
 
-- PR_PLACEHOLDER — closes the item's last open unit.
+- [#1946](https://github.com/bajutsu-e2e/bajutsu/pull/1946) — closes the item's last open unit.
   The test-side split ships no code under this item. Measuring the finished split answered the
   question the design left open. 57 test files mirror a split package by name, and they hold
   1,771 cases. 61 percent of them name none of that package's classes. Of those packages' 327
