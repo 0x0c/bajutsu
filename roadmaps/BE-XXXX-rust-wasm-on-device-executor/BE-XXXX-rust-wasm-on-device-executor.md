@@ -64,7 +64,9 @@ BE-0408's stage 4 targets, reached without the intermediate stages.
 A later reader can check this item's central claim without new device hardware. Build the Rust crate
 this item defines for both the PyO3 target and the `wasm32-unknown-unknown` target from the same
 source, and confirm the two targets return identical results for the driver conformance suite's
-fixture set. Structural non-drift, not test coverage alone, is the property to verify.
+fixture set, continuously in CI rather than once. That single, continuously-checked crate — not a
+structural guarantee the shared source alone provides — is what replaces BE-0408's three separately
+maintained implementations.
 
 ## Detailed design
 
@@ -74,7 +76,12 @@ The host keeps exactly the three responsibilities BE-0408 already assigns it, un
 
 - Deciding pass/fail. The device returns raw evidence — a resolved element's attributes, an
   assertion's observed value — not a verdict, and the host recomputes `ok` from that evidence through
-  the same shared core (its PyO3 binding), so the device's own `ok` is never trusted directly.
+  the same shared core (its PyO3 binding), so the device's own `ok` is never trusted directly. Because
+  this item also moves scenario expansion onto the device, recomputing each *reported* step's verdict
+  is not enough on its own: the host expands the scenario locally too, through the same binding, and
+  requires the reported step sequence to match. A device-side control-flow bug — a wrong `if` branch, a
+  `for_each` that iterates zero times — would otherwise let every step the device does report recompute
+  to `ok=true`, so the run would go green with the skipped steps never mentioned.
 - Receiving evidence for the report. `manifest.json` and the HTML report are written from the same
   `StepOutcome` shape as today.
 - Interval evidence. Starting and stopping a video or device-log capture needs host-side OS process
@@ -107,12 +114,19 @@ source.
   calls an OS API directly; each platform supplies the crate's `Driver` trait as WASM host-function
   imports (tap, type, swipe, tree read, screenshot).
 
-Because the host's PyO3 binding and each device's WASM binary compile from the same crate, a selector
-change can no longer drift between the host and a device: the same compiled logic runs in both places.
-The driver conformance suite
-([BE-0114](../BE-0114-driver-conformance-suite/BE-0114-driver-conformance-suite.md)) still verifies the
-crate against the same fixtures as `FakeDriver` and the other backends, but no longer needs to detect
-drift between two independent device-side ports, since only one exists.
+Compiling both targets from the same crate does not by itself guarantee they return the same result.
+The PyO3 binding targets a native architecture and the WASM binary targets
+`wasm32-unknown-unknown`, and target-dependent differences — `usize` width (64-bit vs. 32-bit),
+floating-point rounding and stringification, `HashMap` iteration order — can still separate them
+wherever order affects a verdict, such as `resolve_unique`'s duplicate-collapsing step
+([`bajutsu/common/drivers/base/_functions.py:274`](../../bajutsu/common/drivers/base/_functions.py)).
+The crate confines any order-sensitive logic to a deterministic container (`BTreeMap`, for example) and
+the driver conformance suite
+([BE-0114](../BE-0114-driver-conformance-suite/BE-0114-driver-conformance-suite.md)) runs continuously
+in CI against both targets, checking that they return identical results for the same fixtures — the
+same fixtures it already uses to verify the crate against `FakeDriver` and the other backends. That
+cross-target check, not the shared source alone, is what keeps the two targets from drifting apart the
+way BE-0408's three independent implementations could.
 
 ### Host-side change
 
@@ -146,6 +160,15 @@ operation already serializes onto (BE-0323's non-reentrancy), and supplies `tap`
 Swift WASM runtime to embed — wasmtime's Swift bindings or the pure-Swift WasmKit — is an open
 feasibility question this item's first work unit answers before any other iOS work proceeds.
 
+That same `operations` queue is what `serialized(_:)` funnels every other `APIHandler` call through,
+via `DispatchQueue.main.sync`
+([`APIHandler.swift:51,354-366`](../../BajutsuKit/Sources/BajutsuRunner/APIHandler.swift)). A
+whole-scenario `POST /scenario` holds that queue for its entire duration, so routing
+`POST /scenario/cancel` or the interval-evidence start/stop signal through the same queue would leave
+each waiting behind the very call it exists to interrupt. Only `health` and `setInterruptionPolicy`
+bypass the queue today; the two new endpoints need the same bypass, stated explicitly rather than
+assumed.
+
 The Android resident UI Automator server embeds a JVM-hosted WASM runtime. Chicory, a pure-JVM
 interpreter that avoids a native-library signing step an instrumentation test target would otherwise
 need, is one candidate. The server supplies the same host functions backed by its existing
@@ -159,8 +182,9 @@ already specifies.
 
 Progress reaches the CLI and the Web UI through the streaming connection above; this item introduces no
 new transport. Cancellation adds a `POST /scenario/cancel` sibling endpoint, guarded by the same
-per-run authentication token every channel in this codebase already uses, polled by the crate's step
-loop at each step boundary — the same reaction granularity
+per-run authentication token every channel in this codebase already uses, and — on iOS — routed outside
+the serialized `operations` queue as described above, so a scenario already in progress does not block
+it. It is polled by the crate's step loop at each step boundary — the same reaction granularity
 [BE-0370](../BE-0370-graceful-run-cancel/BE-0370-graceful-run-cancel.md) already
 relies on, so a `SIGTERM` or the Web UI's stop button still produces `RunResult(ok=False,
 failure="cancelled")`. Backend-crash recovery is unchanged: a runner process dying mid-scenario still
@@ -172,10 +196,11 @@ BE-0407's `recovery.py`).
 
 - **Port independently to Swift and Kotlin, as BE-0408 through BE-0410 already propose.** The smaller
   initial implementation cost is real: nobody has to stand up a Rust toolchain or a WASM runtime on
-  either platform first. Rejected as this item's own approach, because the cost that alternative avoids
-  up front returns as a standing tax on every later change to selector-resolution semantics, paid in
-  two languages neither the host implementation nor the conformance suite alone can catch before a test
-  run does. This item spends a one-time toolchain cost to remove that recurring one.
+  either platform first. This item rejects that alternative because the cost it avoids up front
+  returns as a standing tax: every later change to selector-resolution semantics must be ported to
+  Swift and to Kotlin as well, and reading the host implementation alone never reveals a mistake in
+  either port — only a conformance-suite run does. This item spends a one-time toolchain cost to
+  remove that recurring one.
 - **Compile CPython itself to WASM (Pyodide or similar) instead of writing a new Rust core.** Rejected.
   A CPython WASM runtime runs tens of megabytes, too heavy to embed in an XCTest runner process or an
   Android instrumentation server, and CPython's global interpreter lock and threading model conflict
@@ -206,12 +231,14 @@ BE-0407's `recovery.py`).
   ([BE-0114](../BE-0114-driver-conformance-suite/BE-0114-driver-conformance-suite.md)).
 - [ ] Port the step loop, the alert-guard one-time retry, and evidence-rule firing into the crate,
   verified against a Rust-side fake driver.
-- [ ] Build the PyO3 binding and the new `Capability`, wiring the host's verdict-recomputation path
-  into `run_scenario` without changing behavior for any driver that does not declare the capability.
+- [ ] Build the PyO3 binding and the new `Capability`, wiring the host's verdict-recomputation path —
+  including the local re-expansion check against the device's reported step sequence — into
+  `run_scenario` without changing behavior for any driver that does not declare the capability.
 - [ ] Build the WASM target and wire it into the iOS `APIHandler`'s new `POST /scenario` endpoint,
   running one simple scenario end to end.
 - [ ] Wire newline-delimited-JSON progress streaming into the CLI live output and the `serve` log bus.
-- [ ] Add `POST /scenario/cancel` and verify it against
+- [ ] Add `POST /scenario/cancel`, routed outside the serialized `operations` queue so it reaches the
+  runner while a scenario is still in progress, and verify it against
   [BE-0370](../BE-0370-graceful-run-cancel/BE-0370-graceful-run-cancel.md)'s existing
   cancellation behavior.
 - [ ] Repeat the WASM integration for the Android resident UI Automator server.
