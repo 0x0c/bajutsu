@@ -123,8 +123,13 @@ which of the source Pydantic models' fields apply, mirroring `Exists`, `TextMatc
 `CountMatch` (`bajutsu/common/scenario/models/assertions/`) field-for-field, so a device-side
 implementation's parsing logic has a one-to-one source to check itself against. The seven
 remaining assertion kinds — `request`, `event`, `requestSequence`, `responseSchema`, `visual`,
-`clipboard`, `golden` — never resolve a selector against the element tree at all (they read
-captured network exchanges, or compare against a stored file), so none of them move here.
+`clipboard`, `golden` — all stay host-side. Most never resolve a selector against the element tree
+at all (they read captured network exchanges, or compare against a stored file). `visual` is the
+exception: `VisualMatch.element` and its `exclude` list's `SelectorRegion` entries do resolve a
+selector (`bajutsu/common/scenario/models/assertions/visual_match.py`,
+`selector_region.py`) — what keeps it host-side is that its verdict is a pixel comparison against
+a stored baseline image, which is not a machine-checkable judgment this protocol's selector
+contract has any reason to move, not an absence of selector resolution.
 
 ## Stage 4 — `POST /scenario`
 
@@ -134,6 +139,25 @@ individual step kind resolves on the device. `wait` and `assert` steps reuse thi
 `WaitRequest` / `AssertRequest` payloads unchanged. `type` reuses the existing standalone
 `TypeRequest` shape (`text` only) — a bundled `type` still targets whatever element is currently
 focused, the same semantic the standalone `/type` endpoint already has, so no redesign is needed.
+
+### What `pollBudgetMs` means for a bundled `wait` step
+
+Reusing `WaitRequest` unchanged means a bundled `wait` step's `payload` still carries a required
+`pollBudgetMs` — the schema does not distinguish standalone from bundled use. Its *meaning*
+changes, though. Stage 1's `pollBudgetMs` exists so the host can re-issue `POST /wait` in a bounded
+loop (see *Cancellation and the `pollBudgetMs` design* above); inside a `POST /scenario` call there
+is no per-step re-issue to bound — the "one call" already in flight is the whole bundle, not the
+individual step. A device that honored `pollBudgetMs` *inside* a bundle by returning a
+`status: timeout` for that one step and stopping there would need the host to reconstruct which
+steps remain and re-send them, a shape this document defines no schema for. A device that instead
+ignores `pollBudgetMs` for a bundled `wait` — blocking that one step out to its own `timeoutMs`,
+inside the still-open bundle call — delivers the one-round-trip-per-segment result this stage
+exists for. This document specifies the second reading: **inside a `POST /scenario` bundle,
+`pollBudgetMs` is present (the schema requires it) but not honored; a bundled `wait` step blocks
+until its condition holds or its own `timeoutMs` elapses, whichever comes first, within the single
+bundle call.** BE-0409 and BE-0410 must implement this same reading, not invent their own —
+inconsistent readings would make a bundle's actual latency behavior diverge silently between
+platforms, exactly the kind of drift this document exists to prevent.
 
 `tap` is the one kind that does *not* reuse its existing standalone shape. iOS's `TapRequest` takes
 a `handle` (or a raw `point`); Android's `/act` takes already-resolved identity fields

@@ -61,6 +61,11 @@ def test_selector_resolution_fixture(case: dict[str, Any]) -> None:
     elements = [_element(e) for e in case["elements"]]
     sel = cast(Selector, case["selector"])
 
+    if not ("findAll" in case or "resolveUnique" in case):
+        raise AssertionError(
+            f"{case['name']}: neither findAll nor resolveUnique is asserted — a vacuous case"
+        )
+
     if "findAll" in case:
         found = find_all(elements, sel)
         assert [e["identifier"] for e in found] == case["findAll"]["identifiers"]

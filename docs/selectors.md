@@ -214,7 +214,7 @@ section states rules a literal reading of the code above could miss. It also nam
 divergences a port must keep, not close.
 
 `tests/fixtures/be0408/` holds this contract in executable form.
-`selector_resolution.json` replays `find_all` and `resolve_unique` against 39 cases.
+`selector_resolution.json` replays `find_all` and `resolve_unique` against 42 cases.
 `android_derived_label.json` replays Android's label-derivation rule against 9 more.
 `tests/test_selector_fixtures.py` checks every case against this module's own functions. A change
 here that breaks a fixture fails the fast gate first, before it ever reaches a port.
@@ -244,6 +244,13 @@ containment is geometric: edge-inclusive, over a flat element list with no paren
 own frame equals its container's frame. An element that scopes to itself meets this test. Treat
 that outcome as expected, not as a bug to guard against.
 
+A `within` selector that itself matches nothing produces an empty scope list. The whole result is
+then empty too. This is never an unscoped pass-through, and never an error. `contains` never runs
+against zero scopes. `any()` over an empty sequence is false for every candidate. A port might read
+a missing container as "nothing to scope by, fall back to unscoped" instead. That port then
+resolves a selector the host fails on. That is the one-side-resolves, other-side-fails divergence
+this whole contract exists to rule out.
+
 ### The duplicate-collapse key
 
 `resolve_unique` first collapses identical-content candidates into one representative. One known
@@ -259,6 +266,14 @@ indistinguishably. The collapse key is:
 `nativeZ` stays out of the key on purpose: this field exists for diagnostics, not identity. Two
 candidates that agree on every other field still collapse. Their `nativeZ` values may differ by any
 amount.
+
+The collapse keeps the *first* candidate carrying a given key, in `find_all`'s own document order.
+It drops the rest. `index` then counts positions in that same order. A plain hash map has no
+defined iteration order — Swift's `Dictionary`, for one. A port reaching for one gets this wrong.
+It would pick a different survivor from run to run, on any screen where the collapse fires. That
+makes an `index`-addressed tap nondeterministic. This rule exists for that same screen. A port
+needs an insertion-ordered structure for the collapse. Another structure works too, as long as it
+preserves first-seen order explicitly.
 
 ### The `other`-trait drop, and where `index` counts from
 

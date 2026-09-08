@@ -144,6 +144,7 @@ components:
   schemas:
     ErrorReply:
       type: object
+      additionalProperties: false
       required: [status, message]
       properties:
         status:
@@ -153,6 +154,7 @@ components:
           type: string
     Selector:
       type: object
+      additionalProperties: false
       description: >-
         The wire form of `bajutsu/common/drivers/base/selector.py`'s `Selector` TypedDict. A
         device-side resolver implementing this document must resolve every field exactly as
@@ -197,13 +199,14 @@ components:
           type: integer
     Element:
       type: object
+      additionalProperties: false
       description: >-
         Identical in shape to the existing iOS `Element` schema
         (`BajutsuKit/Sources/BajutsuRunner/openapi.yaml`) — reused here rather than redefined, so a
         driver-side reader needs exactly one `Element` decoder regardless of which endpoint the
         reply came from. `nativeZ` is not carried: the existing `/elements` reply does not carry
         it either, it is diagnostic-only (BE-0355), and no selector or occlusion check reads it.
-      required: [traits, frame, handle]
+      required: [traits, frame]
       properties:
         traits:
           type: array
@@ -219,9 +222,13 @@ components:
         handle:
           type: string
           description: >-
-            An opaque per-response handle, in the same sense as the existing `/elements` reply's
-            handle — round-tripped by a later actuation so it acts on the exact element a prior
-            resolution named, never a silent re-resolution.
+            Optional and iOS-specific — Android's `Element` model
+            (`bajutsu/common/drivers/adb/_functions.py`'s `_to_element`) has no handle concept at
+            all, and nothing in this document's own new endpoints consumes one: the elements this
+            document returns serve only as `after` evidence, and the one bundled actuation
+            (`ScenarioTapRequest`) resolves a fresh `selector` instead of round-tripping a handle.
+            Where a future extension does need one, it belongs in that extension's own schema, not
+            as a silent obligation on every platform via this shared `Element`.
         identifier:
           type: string
         label:
@@ -232,6 +239,7 @@ components:
     # --- Stage 1: POST /wait ---
     WaitRequest:
       type: object
+      additionalProperties: false
       required: [mode, timeoutMs, pollBudgetMs]
       description: >-
         Mirrors `bajutsu/common/scenario/models/assertions/wait.py`'s `Wait` model. `mode` selects
@@ -272,6 +280,7 @@ components:
               required: [selector]
     WaitReply:
       type: object
+      additionalProperties: false
       required: [status, elements]
       properties:
         status:
@@ -297,6 +306,7 @@ components:
             that same branch.
     WaitTrace:
       type: object
+      additionalProperties: false
       required: [polls, elementsAtTimeout]
       properties:
         polls:
@@ -314,6 +324,7 @@ components:
     # --- Stage 3: POST /assert ---
     AssertRequest:
       type: object
+      additionalProperties: false
       required: [kind, selector]
       description: >-
         One screen-closed assertion kind, per `bajutsu/common/scenario/models/assertions/`'s
@@ -399,6 +410,7 @@ components:
                 - required: [atMost]
     AssertReply:
       type: object
+      additionalProperties: false
       required: [ok, elements]
       properties:
         ok:
@@ -412,6 +424,7 @@ components:
     # --- Stage 4: POST /scenario ---
     ScenarioRequest:
       type: object
+      additionalProperties: false
       required: [steps]
       properties:
         steps:
@@ -421,6 +434,7 @@ components:
             $ref: "#/components/schemas/ScenarioStep"
     ScenarioStep:
       type: object
+      additionalProperties: false
       required: [kind, payload]
       description: >-
         See `README.md`'s *Stage 4* section for which `kind`s bundle today (`tap`, `type`,
@@ -451,6 +465,7 @@ components:
             properties: { payload: { $ref: "#/components/schemas/AssertRequest" } }
     TypeRequest:
       type: object
+      additionalProperties: false
       required: [text]
       description: >-
         Identical in shape to the existing standalone iOS `/type` endpoint's `TypeRequest`
@@ -462,6 +477,7 @@ components:
           type: string
     ScenarioTapRequest:
       type: object
+      additionalProperties: false
       required: [selector]
       description: >-
         Deliberately not the existing standalone `TapRequest` shape (`handle` or raw `point`).
@@ -481,6 +497,7 @@ components:
           description: Press duration in seconds; clamped to at least 0. Absent means a plain tap.
     ScenarioReply:
       type: object
+      additionalProperties: false
       required: [results]
       properties:
         results:
@@ -489,13 +506,17 @@ components:
             $ref: "#/components/schemas/ScenarioStepResult"
     ScenarioStepResult:
       type: object
+      additionalProperties: false
       required: [status]
       properties:
         status:
           type: string
+          enum: [ok, stale, not-found, not-hittable, value-not-found, timeout, failed]
           description: >-
-            Each step's own existing status vocabulary — an `ActuationReply.status` value for
-            `tap` / `type`, `ok` / `timeout` for `wait`, `ok` / `failed` for `assert`.
+            The union of `ActuationReply.status`'s five values (`tap` / `type`), `ok` / `timeout`
+            (`wait`), and `ok` / `failed` (`assert`) — one closed vocabulary rather than each step
+            kind's own free string, so a hand-written Android encoder cannot silently diverge from
+            what Swift's generated model emits.
         elements:
           type: array
           items:

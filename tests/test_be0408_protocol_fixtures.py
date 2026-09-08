@@ -180,6 +180,21 @@ def test_element_omits_absent_optional_fields_rather_than_nulling_them() -> None
         validator.validate(with_null)
 
 
+def test_element_handle_is_optional_android_has_no_equivalent() -> None:
+    """Android's own `Element` model mints no handle; requiring one would be an XCUITest-only obligation."""
+    validator = _validator_for(_PROTOCOL_DOC, "Element")
+    validator.validate({"traits": ["button"], "frame": [0.0, 0.0, 1.0, 1.0]})
+
+
+def test_selector_rejects_an_unrecognized_field() -> None:
+    """A misspelled key (a plausible hand-written-org.json typo) must fail loudly, not widen silently."""
+    validator = _validator_for(_PROTOCOL_DOC, "Selector")
+    validator.validate({"labelMatches": "Save"})
+    with pytest.raises(jsonschema.ValidationError):
+        # a typo of labelMatches — the correctly-spelled field is simply absent, matching nothing
+        validator.validate({"labelmatches": "Save"})
+
+
 def test_scenario_step_tap_payload_uses_a_selector_not_a_handle() -> None:
     """`ScenarioTapRequest` deliberately diverges from the standalone `TapRequest` shape."""
     validator = _validator_for(_PROTOCOL_DOC, "ScenarioTapRequest")
