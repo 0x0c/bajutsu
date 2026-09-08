@@ -386,9 +386,8 @@ half alone; *Progress* below records the measurement behind dropping its `elemen
   the tracer — the step is what this item's target is stated in, and the emulator's own noise swamps
   a per-call cut): a `tap` step went from 3.46–5.67s to 2.32–4.57s, roughly a third off its median,
   and a `scroll` step from 5.99–6.02s to 5.97–8.24s, unchanged within that noise. The whole scenario
-  went from 25.3–28.1s to 19.2–26.7s.
-  Roughly a third off a tap, short of the 0.6–1.2s this item targets for Android — the rest of that
-  gap is the device-side executor's ([BE-0410](../BE-0410-step-latency-android-device-executor/BE-0410-step-latency-android-device-executor.md)).
+  went from 25.3–28.1s to 19.2–26.7s. That is short of the 0.6–1.2s this item targets for Android —
+  the rest of that gap is the device-side executor's ([BE-0410](../BE-0410-step-latency-android-device-executor/BE-0410-step-latency-android-device-executor.md)).
 - [x] Backfill reciprocal `Related` links between this item and the device-side protocol, iOS
   executor, and Android executor items, in both languages — done after the `roadmap-id` workflow
   allocated the four ids on `main`, since a new item may not cross-reference another new item by
