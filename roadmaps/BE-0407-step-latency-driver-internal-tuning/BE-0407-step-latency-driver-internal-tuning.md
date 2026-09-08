@@ -467,20 +467,22 @@ Log:
   `rawTree` capture's own accessor so a run that never takes it never pays. Verified on an API 34
   arm64 emulator across the eighteen scenarios the Android e2e lane runs, all passing; a `tap` step
   fell from 3.46–5.67s to 2.32–4.57s across three runs each side, with `scroll` unchanged within
-  the emulator's noise. Units 17, 20 and 24 were each implemented and reverted after measurement
-  found them slower than what they replace — see the Progress notes on all three.
-- [#1944](https://github.com/bajutsu-e2e/bajutsu/pull/1944) — Closed out units 8, 14 (`MAX_WARM_REUSES` half), 15, 17, 20, and 24 as decided against, rather
-  than left open, after a fresh investigation of each found no path to landing them safely: unit 8
-  cannot reconcile a coordinate tap's landing point with `isHittable`'s activation point because
-  XCUITest's public API exposes neither the resolved activation point nor a point-to-element hit
-  test; unit 15's paste alert cannot be dismissed mid-call because XCUITest's non-reentrancy
-  (BE-0323) forbids a concurrent dismissal from another thread while the blocked call holds the
-  main thread; unit 17's dump-skip has no known lighter-weight substitute for whatever keeps the
-  Android read mark advancing; units 14's reuse ceiling, 20, and 24 were already closed by data,
-  by unit 2, and by unit 16 respectively. Every Progress box is now checked — units landed as
-  designed stay plain, units closed by decision are struck through with the reason nested
-  beneath. Status moves to Implemented; the remaining gap toward this item's own latency targets
-  is the device-side executor tracked in BE-0408–BE-0410.
+  the emulator's noise. Units 17 and 24 were each implemented and reverted after measurement found
+  them slower than what they replace; unit 20 was never implemented — see the Progress notes on all
+  three.
+- [#1944](https://github.com/bajutsu-e2e/bajutsu/pull/1944) — Closed units 8, 14
+  (`MAX_WARM_REUSES` half), 15, 17, 20, and 24 as decided against, not left open. A fresh
+  investigation found no safe path for any of them. Unit 8 cannot reconcile a coordinate tap's
+  landing point with `isHittable`'s activation point. XCUITest exposes no public API for the
+  resolved activation point, and none for a point-to-element hit test. Unit 15's paste alert cannot
+  be dismissed mid-call. XCUITest's non-reentrancy (BE-0323) forbids a concurrent dismissal from
+  another thread. The blocked call holds the main thread throughout. Unit 17's dump-skip has no
+  known lighter-weight substitute for keeping the Android read mark advancing. Unit 14's reuse
+  ceiling was already closed by a lack of data. Unit 20 was already closed by unit 2. Unit 24 was already
+  closed by unit 16. Every Progress box is now checked. Units landed as designed stay plain. Units
+  closed by decision carry a strikethrough, with the reason nested beneath. Status moves to
+  Implemented. The remaining gap toward this item's own latency targets is the device-side
+  executor, tracked in BE-0408–BE-0410.
 
 ## References
 
