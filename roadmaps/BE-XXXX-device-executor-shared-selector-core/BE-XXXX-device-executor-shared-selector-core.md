@@ -1,0 +1,337 @@
+**English** · [日本語](BE-XXXX-device-executor-shared-selector-core-ja.md)
+
+# BE-XXXX — Share the on-device selector core between iOS and Android via Rust and UniFFI
+
+<!-- BE-METADATA -->
+| Field | Value |
+|---|---|
+| Proposal | [BE-XXXX](BE-XXXX-device-executor-shared-selector-core.md) |
+| Author | [@0x0c](https://github.com/0x0c) |
+| Status | **Proposal** |
+| Tracking issue | [Search](https://github.com/bajutsu-e2e/bajutsu/issues?q=is%3Aissue+label%3Aroadmap-tracking+in%3Atitle+"BE-XXXX") |
+| Topic | Platform support |
+| Related | [BE-0114](../BE-0114-driver-conformance-suite/BE-0114-driver-conformance-suite.md), [BE-0208](../BE-0208-android-emulator-e2e-ci/BE-0208-android-emulator-e2e-ci.md), [BE-0238](../BE-0238-ios-device-cloud-execution/BE-0238-ios-device-cloud-execution.md), [BE-0405](../BE-0405-android-identifiertool/BE-0405-android-identifiertool.md), [BE-0407](../BE-0407-step-latency-driver-internal-tuning/BE-0407-step-latency-driver-internal-tuning.md), [BE-0408](../BE-0408-step-latency-device-executor-protocol/BE-0408-step-latency-device-executor-protocol.md), [BE-0409](../BE-0409-step-latency-ios-device-executor/BE-0409-step-latency-ios-device-executor.md), [BE-0410](../BE-0410-step-latency-android-device-executor/BE-0410-step-latency-android-device-executor.md) |
+<!-- /BE-METADATA -->
+
+## Introduction
+
+[BE-0408](../BE-0408-step-latency-device-executor-protocol/BE-0408-step-latency-device-executor-protocol.md)
+defines a device-side step-execution protocol for iOS and Android. It states that Swift and Kotlin
+each need an independent copy of the host's selector-matching logic. It also states that the two
+copies must resolve every selector exactly the way the host's own code does. This item proposes
+writing that logic once, in Rust. Both platforms would call it through
+[UniFFI](https://mozilla.github.io/uniffi-rs/)-generated bindings, replacing a hand-written Swift
+port and a hand-written Kotlin port with two thin bindings around one compiled core.
+[BE-0409](../BE-0409-step-latency-ios-device-executor/BE-0409-step-latency-ios-device-executor.md)'s
+iOS executor and
+[BE-0410](../BE-0410-step-latency-android-device-executor/BE-0410-step-latency-android-device-executor.md)'s
+Android executor would each call the same crate, instead of each carrying its own copy of `matches`,
+`find_all`, and `resolve_unique`.
+
+## Motivation
+
+BE-0408's own design names the risk directly. The two device-side copies "must resolve every
+selector to the same element the host's copy would." They must also fail "the same way on an
+ambiguous match." BE-0409 and BE-0410 respond to that risk by ordering themselves: the iOS port
+lands first, so "a gap this item's port surfaces does not have to be independently rediscovered by
+both at once." That ordering lowers the cost of *rediscovering* a gap. It does not stop the two
+ports from disagreeing with each other in the first place. Neither item has started its `find_all` /
+`resolve_unique` port yet. BE-0409 waits on BE-0408, and BE-0410 waits on BE-0409. One related piece
+of Swift code already exists:
+`resolvableMatchingIndex` in
+[`BajutsuKit/Sources/BajutsuRunner/PositionPath.swift`](../../BajutsuKit/Sources/BajutsuRunner/PositionPath.swift).
+It is the runner's own twin of `_collapse_identical_duplicates`, kept in sync with the host today by
+a hand-written comment, not by shared code. Detailed design folds it into the shared crate too. Past
+that one function, no Swift or Kotlin selector code exists today. That makes now the point where one
+implementation costs less than two.
+
+The functions this item would move are already pure data transformations, not platform glue.
+`matches`, `find_all`, `resolve_unique`, and `_collapse_identical_duplicates` in
+[`bajutsu/common/drivers/base/_functions.py`](../../bajutsu/common/drivers/base/_functions.py) take
+an `Element` list and a `Selector`. Both are plain dictionaries of strings, lists, and tuples. Each
+function returns a bool, a filtered list, a single element, or a raised error. None of the four reads an
+accessibility tree, injects a tap, or opens a socket. Every platform-specific step happens outside
+them: on the Python driver today, and on both device executors once built. A function with no
+platform dependency has no reason to exist in three independently maintained copies.
+
+The risk of an independent port runs deeper than ordinary drift. `idMatches` runs Python's
+`fnmatch.fnmatchcase`. `labelMatches` runs Python's `re.compile(...).search`. An independent Swift
+port would reach for `NSRegularExpression` and Foundation's own glob handling. An independent Kotlin
+port would reach for `java.util.regex` and its own. Three engines would then decide what a scenario
+author's own pattern matches, each with its own rules for character classes, anchoring, and Unicode
+properties. A selector that passes on the host and fails on a device executor surfaces as a flaky
+scenario, not a loud error — the same is true of a selector that matches a different element there.
+A wrong match looks the same as a right one from the caller's side. A shared Rust engine collapses
+that count from three independent engines to two: Python's `re` and `fnmatch` stay the tested
+reference on the host, and the Rust core becomes the one other pattern engine either device executor
+runs.
+
+Once built, a later reader can check the result directly.
+[BE-0114](../BE-0114-driver-conformance-suite/BE-0114-driver-conformance-suite.md)'s driver
+conformance suite runs its fixture set against one compiled selector core. Today's plan would instead
+run those fixtures separately against a Swift port and a Kotlin port. Either port could pass the same
+fixtures while still disagreeing with the other on a case the suite does not cover. Adding a new
+selector rule — a new trait, a new fallback — becomes one Rust change both executors pick up on their
+next binary update. Today's plan needs two hand-written changes, kept in step by memory alone.
+
+## Detailed design
+
+**Implementation order.** This item extends the four-item sequence BE-0407 → BE-0408 → BE-0409 →
+BE-0410. BE-0408's own Progress checklist names a step this item replaces: "port `find_all` /
+`resolve_unique` selector semantics to a shared design document precise enough for two independent …
+implementations to agree on." This item ships a compiled crate instead of that document. It lands
+after BE-0408 settles the field-level selector contract — `within`, `idMatches`, the trait
+derivations — and before BE-0409 or BE-0410 write any platform-side matching code. Landing this item
+also removes the reason BE-0409 and BE-0410 order themselves against each other today: both would
+call the same already-verified crate, so neither needs the other's hand-written port to go first.
+Once this item's crate and its two bindings exist, BE-0409 and BE-0410 can proceed in either order,
+or in parallel.
+
+**What the crate reimplements, and what stays host-only.** Nine functions from
+[`bajutsu/common/drivers/base/_functions.py`](../../bajutsu/common/drivers/base/_functions.py) are
+reimplemented in Rust — the Python copies stay in place as the conformance suite's reference:
+`matches`, `find_all`, `resolve_unique`, `_collapse_identical_duplicates`, `contains`,
+`topmost_at_point`, `redirect_candidates`, `raise_if_covered`, and `frame_center`. Together they
+cover selector resolution and the tap-occlusion check for `tap`, one of the actuation kinds BE-0408
+moves to the device. Each is pure, the property Motivation already establishes: an
+`Element`/`Selector` pair (or a list of them) goes in; a bool, an index, a point, or a raised error
+comes out.
+
+Two signatures change because of the FFI (foreign function interface) boundary itself, where
+Python's object identity has no equivalent. First, `find_all` returns `Vec<u32>` — indices into the
+caller's `elements` list — instead of a list of elements, and `resolve_unique` returns a single
+`u32` index instead of an element. A UniFFI record crosses that boundary by value, so a returned
+element would be a copy with no traceable link back to the platform handle (an `XCUIElement`, an
+`AccessibilityNodeInfo`) the caller resolved it from; an index lets the caller look up both the
+element and its own parallel handle from the list it built. Second, `topmost_at_point`,
+`redirect_candidates`, and `raise_if_covered` take a `target_index: u32` in place of an element, for
+the same reason: Python locates `target` inside `elements` by identity (`is`), specifically so two
+content-identical elements — a known XCUITest duplicate registration — resolve to the one the caller
+actually holds, not merely one that looks like it. An index preserves that distinction; a
+value-copied record cannot.
+
+`gesture_anchor` is equally pure, but it stays out of this item's scope. BE-0408 moves `tap`, `type`,
+`swipe`, and `scroll` to the device — not the two-finger `pinch` / `rotate` gestures `gesture_anchor`
+computes an anchor for. Porting it now would build for a stage this item's own protocol has not
+reached.
+
+`deadline_ticks` and `wait_until` do not move either. Both implement the host's own polling loop
+around a single-shot check, and BE-0408's stage 1 has the device poll *internally* instead of
+exposing a poll primitive to the host. An on-device executor needs its own native, event-driven or
+timed loop around the shared match function — not a ported copy of the host's poll loop.
+`default_wait_for`, the single-shot check every backend's `wait_for` delegates to, needs no separate
+port for the same reason: it is `find_all(...).len() >= 1`, which each executor's own native loop
+expresses directly against the shared `find_all`. `id_candidates`, `validate_id_candidates`,
+`permission_capability`, and `native_z_from_json` also stay in Python (see Data model for
+`id_candidates`'s reason); the latter three because each serves scenario authoring or evidence
+parsing on the host, work no device executor performs.
+
+**Data model.** [`Element`](../../bajutsu/common/drivers/base/element.py) becomes a UniFFI
+dictionary record, field for field: `identifier`, `label`, and `value` as optional strings; `traits`
+as a string list; `frame` as a four-field `(x, y, w, h)` record; `nativeZ` as an optional double.
+[`Selector`](../../bajutsu/common/drivers/base/selector.py) needs more than a rename. `id` and
+`idMatches` each accept a single string or a list in Python (`str | list[str]`, BE-0221's
+OR-candidate form); UniFFI has no such union type, so both become `Option<Vec<String>>` at the
+record boundary — `None` when the field is absent, matching Python's own field-presence check
+(`"id" in sel`), not an empty list standing in for absence. Wrapping a single value into a
+one-element list is a one-line step trivial enough that
+each caller does it itself when building the record — which is why `id_candidates`, the Python
+helper that does the same wrapping today, stays host-only rather than moving into the crate. Within
+the crate, `matches` and `find_all` see only the already-normalized list. `within` becomes
+`Option<Box<Selector>>`, since a `Selector` can nest inside its own `within` field. `index` becomes
+`Option<i32>`, not `u32`: Python accepts a negative value there, counting from the end
+(`_functions.py:322-325`). A field's absence in Python's `total=False` dict becomes the same `None`
+on both sides.
+
+[`Trait`](../../bajutsu/common/drivers/base/trait.py)'s six string constants — `button`, `link`,
+`notEnabled`, `selected`, `other`, `secureTextField` — pass through as plain strings on both sides.
+That matches what the Python code and the JSON wire format already use, so a seventh constant added
+later needs no new enum kept in step. [`ElementNotFound`](../../bajutsu/common/drivers/base/element_not_found.py),
+[`AmbiguousSelector`](../../bajutsu/common/drivers/base/ambiguous_selector.py), and
+[`ElementNotTappable`](../../bajutsu/common/drivers/base/element_not_tappable.py) become one UniFFI
+error enum with three variants. Each variant carries structured failure detail — the selector, the
+candidate count, the covering element's identifier and frame — rather than a formatted message
+string. The host, not the device, renders that detail into the message text a run report shows
+today (`resolve_unique` and `raise_if_covered` in
+[`bajutsu/common/drivers/base/_functions.py`](../../bajutsu/common/drivers/base/_functions.py)); a
+Swift or Kotlin caller passes the variant back unformatted over
+the existing evidence path, so a step failing on a device executor reads exactly like the same step
+failing on the host does today.
+
+`_collapse_identical_duplicates` gains one parameter the host's own copy does not need: a
+`frame_tolerance: f64`, defaulting to zero, controlling how closely two candidates' frames must
+match to count as the same content. The host always calls it against one atomic snapshot, where a
+genuine duplicate reports identical frames exactly.
+[`PositionPath.swift`](../../BajutsuKit/Sources/BajutsuRunner/PositionPath.swift)'s
+`resolvableMatchingIndex` needs a point of slack instead: it re-resolves a recorded element handle
+through separate live calls, one frame read per candidate, made moments apart. It also does two
+things this function does not — it first filters candidates against the recorded handle's own
+attributes, and it treats any disagreement among the survivors as a resolution failure rather than a
+distinct group. Only the frame-matching and grouping logic is shared, not that surrounding contract.
+Exposing the tolerance as a parameter lets `resolvableMatchingIndex` become a thin wrapper: its own
+recorded-attribute filter runs first, the shared function groups what remains, and its existing
+nil-on-disagreement check runs on the result.
+
+Android's derived-label fallback (`_derived_label` in
+[`bajutsu/common/drivers/adb/_functions.py`](../../bajutsu/common/drivers/adb/_functions.py), applied
+inside `_to_element`) stays at its current place in the pipeline. It computes a label onto the
+`Element` *before*
+the shared matching code sees it — on the Python driver today, and inside
+`BajutsuAndroidUIAutomatorServer`'s Kotlin caller once BE-0410 lands. The shared crate needs no
+Android-specific branch for this: every caller normalizes its own platform's raw reading into a plain
+`Element` first, then calls the one shared core. This leaves one hand-written Kotlin port —
+`_derived_label` itself has no Rust counterpart — that must still agree with Python's. Its output is
+a single string with no further processing, and BE-0114's fixtures already cover it, so the residual
+risk is far smaller than porting the whole matching path independently was.
+
+**iOS: `BajutsuRunner`.** [`BajutsuKit/Package.swift`](../../BajutsuKit/Package.swift) already builds
+`BajutsuRunner` with a Swift Package Manager build plugin, `OpenAPIGenerator`, that generates Swift
+source at build time, on every host that builds the package. A `uniffi-bindgen`-generated Swift file
+is a second generated-source path alongside that one, differing in one respect: its native half is a
+prebuilt `.xcframework` artifact, not something the plugin compiles fresh each time. `cargo build`
+targets `aarch64-apple-ios-sim` and `x86_64-apple-ios` for the Simulator, `aarch64-apple-ios` for
+[BE-0238](../BE-0238-ios-device-cloud-execution/BE-0238-ios-device-cloud-execution.md)'s real-device
+targeting, and `aarch64-apple-darwin` so [`swift.yml`](../../.github/workflows/swift.yml)'s plain
+Apple Silicon macOS runner — no Simulator, `swift build --package-path BajutsuKit` and `swift test
+--package-path BajutsuKit` — keeps building and testing `BajutsuRunner` the way it does today.
+`uniffi-bindgen` emits the Swift bindings and merges the four `cargo build` outputs into an
+`.xcframework` with three platform slices (the two Simulator triples merge into one universal
+Simulator slice), added to
+`Package.swift` as a binary target `BajutsuRunner` depends on. `BajutsuRunner` is bajutsu's own
+bundled test runner. It reaches a developer's machine pre-built, through
+[BE-0292](../BE-0292-xcuitest-bundled-runner/BE-0292-xcuitest-bundled-runner.md)'s content-hash-keyed
+cache — never compiled inside a consuming project's own build. This build step runs inside
+bajutsu's own release pipeline, never inside an app under test's build: the same boundary that
+already keeps `BajutsuKit`, the in-app library target, free of it.
+
+**Android: `BajutsuAndroidUIAutomatorServer`.**
+[`BajutsuAndroidUIAutomatorServer/server/build.gradle.kts`](../../BajutsuAndroidUIAutomatorServer/server/build.gradle.kts)
+already depends on `androidx.test.uiautomator`, for the same instrumentation this executor extends.
+A native dependency in that module is a new *kind* of dependency, not a new tolerance for one — but
+it is a real change to the module's reach, not a neutral one. The instrumentation APK carries no
+native code today, so it installs on every application binary interface (ABI) a device offers,
+including the 32-bit `armeabi-v7a` and `x86` devices `minSdk = 26` still admits. `cargo-ndk`
+cross-compiles the crate for `arm64-v8a`, plus `x86_64` for the
+[BE-0208](../BE-0208-android-emulator-e2e-ci/BE-0208-android-emulator-e2e-ci.md) emulator lane —
+narrowing that set for the first time. A 32-bit device would no longer run the resident server. This
+item accepts that narrowing rather than building for all four ABIs: a 32-bit-only Android device is
+already outside what the Play Store has accepted from an app since 2019, so the resident server's
+own device coverage tracks what a real target app can ship to today. `cargo-ndk` produces `.so`
+files placed under `jniLibs`; `uniffi-bindgen` emits the Kotlin bindings the executor calls directly.
+That build file's own comment already says the server "stays dependency-light" since it carries no
+HTTP or JSON library, being a self-contained instrumentation. That comment states a preference
+against an unneeded dependency, not a ban on the native dependency this executor actually needs.
+
+**Verification.** BE-0114's conformance suite gains a fixture-runner path that calls the crate
+directly, not through a platform binding. A small Rust binary, built for the CI host's own
+architecture and never shipped with the wheel or the resident server, reads a fixture's `Element`
+list and `Selector` from JSON on standard input, and writes the matched indices, or the error
+variant and its structured detail, on standard output.
+The suite's existing fixtures then check three layers against one artifact: the crate's own Rust unit
+tests, this CLI-mediated fixture run, and — once BE-0409 and BE-0410 exist — the same fixtures run
+through each platform's own binding. A fixture failure on either platform binding then narrows at
+once to "the binding," rather than reopening whether the shared logic itself carries the defect.
+
+## Alternatives considered
+
+- **Keep BE-0408's current plan: a written design document, two independently written Swift and
+  Kotlin ports, checked only by the conformance suite.** Rejected as the sole safeguard. The risk
+  BE-0408 already names — two independent copies must agree on every case, including which candidate
+  an ambiguous match reports — stays live instead of a design removing it. Every future selector rule
+  would need two hand-written patches, kept in step by test failures discovered after the fact, not
+  prevented by construction.
+- **Extend the same Rust core to Python too, through PyO3, for one three-language
+  implementation.** Rejected. `bajutsu`'s pip package is pure Python today. It keeps its
+  base install free of the AI SDK and Playwright on purpose, as opt-in extras rather than base
+  dependencies
+  ([BE-0111](../BE-0111-ai-sdk-optional-dependency/BE-0111-ai-sdk-optional-dependency.md)). A native
+  extension in the base install would need a cross-platform wheel build for every `pip install
+  bajutsu`. A tool such as [maturin](https://github.com/PyO3/maturin) builds one. The iOS and Android
+  builds above stay inside bajutsu's own release pipeline alone. This build would run for every
+  install instead. Python's implementation is already the tested reference the conformance suite
+  checks the Rust core against; nothing in this item's motivation requires it to change.
+- **Extend the same Rust core to BajutsuKit's and BajutsuAndroid's in-app collectors (`BajutsuNet`,
+  `BajutsuZOrder`, the clipboard receiver) too.** Rejected. Those components' platform-hook
+  mechanisms share no portable logic beyond the shape of the JSON payload each POSTs to a
+  collector — `URLProtocol` swizzling on one side, an OkHttp `Interceptor` on the other; a loopback
+  HTTP server on one side, `AccessibilityNodeInfo` extra-data on the other. A shared Rust core there
+  would replace that thin, already-documented contract alone, while still needing a from-scratch
+  platform-specific implementation on each side. `BajutsuRunner` and `BajutsuAndroidUIAutomatorServer`
+  ship as bajutsu's own test infrastructure; these libraries instead ship inside the app under test.
+  [BE-0405](../BE-0405-android-identifiertool/BE-0405-android-identifiertool.md) already commits
+  `IdentifierTool` there to a dependency-free, minimal-footprint design — a design a bundled Rust
+  static library would work against, not with.
+- **Generate equivalent Swift and Kotlin source from one specification language, instead of compiling
+  one native library both platforms link.** Rejected. Two independently compiled, generated copies
+  can still diverge if a per-language code-generator backend carries its own bug — the same failure
+  mode this item exists to remove. This repository has no existing code-generator backend at this
+  level to build on. UniFFI, by contrast, is an existing, maintained tool built for this shape: one
+  Rust core, host-language bindings for each platform.
+
+## Progress
+
+> Keep this current as work proceeds. The checklist mirrors the MECE work breakdown in
+> *Detailed design* (one box per unit of work); the log records what changed and when
+> (oldest first), linking the PRs.
+
+- [ ] Stand up the crate skeleton at `rust/selector-core/`, with `Element`, `Selector`, and `Trait`
+  mirrored as UniFFI records and the three selector errors as one UniFFI error enum.
+- [ ] Port the nine selector and geometry functions from
+  [`bajutsu/common/drivers/base/_functions.py`](../../bajutsu/common/drivers/base/_functions.py),
+  changing `find_all` to return `Vec<u32>` and `resolve_unique` a `u32` (indices into the caller's
+  `elements`) in place of elements, `topmost_at_point` / `redirect_candidates` / `raise_if_covered`
+  to take a `target_index: u32` in place of an `Element`, and `_collapse_identical_duplicates` to
+  take a `frame_tolerance: f64`:
+  - `matches`
+  - `find_all`
+  - `resolve_unique`
+  - `_collapse_identical_duplicates`
+  - `contains`
+  - `topmost_at_point`
+  - `redirect_candidates`
+  - `raise_if_covered`
+  - `frame_center`
+- [ ] Build the CLI conformance-runner binary and extend
+  [BE-0114](../BE-0114-driver-conformance-suite/BE-0114-driver-conformance-suite.md)'s fixture suite
+  to run against it directly.
+- [ ] Wire `cargo` and `uniffi-bindgen` into the `BajutsuKit` Swift Package build, producing an
+  `.xcframework` (three platform slices merged from four `cargo build` targets: Simulator, device,
+  and macOS) binary target `BajutsuRunner` links against.
+  Narrow [`PositionPath.swift`](../../BajutsuKit/Sources/BajutsuRunner/PositionPath.swift)'s
+  `resolvableMatchingIndex` to a thin wrapper around the shared grouping function, and retire
+  `framesEqual`.
+- [ ] Wire `cargo-ndk` and `uniffi-bindgen` into `BajutsuAndroidUIAutomatorServer`'s Gradle build,
+  producing the Kotlin bindings and `arm64-v8a` / `x86_64` `jniLibs` its executor links against.
+- [ ] Update the hand-sync contract docstrings the shared functions retire: the "runner-side twin"
+  comment on `_collapse_identical_duplicates` in
+  [`bajutsu/common/drivers/base/_functions.py`](../../bajutsu/common/drivers/base/_functions.py),
+  and the matching comments on `resolvableMatchingIndex` and its `RecordedAttributes` in
+  [`PositionPath.swift`](../../BajutsuKit/Sources/BajutsuRunner/PositionPath.swift).
+- [ ] Add a Rust CI lane (`cargo test`, `cargo fmt --check`, `clippy`) for `rust/selector-core/`, and
+  decide whether `make check` invokes it directly or a separate workflow does.
+- [ ] Update BE-0408's Progress checklist, and BE-0409's / BE-0410's "port … to Swift / Kotlin"
+  steps, to call the compiled bindings instead — keeping BE-0410's derived-label port as its own
+  step, since `_derived_label` normalizes before the shared core runs. Drop the iOS-port-first
+  sequencing from BE-0409's Detailed design, and from BE-0410's Implementation order and Sequence
+  status lines. Repoint BE-0409's Sequence status line from BE-0408 to this item, and BE-0410's from
+  BE-0409 to this item, since both now depend on this item's crate rather than on the order between
+  themselves.
+- [ ] Once the `roadmap-id` workflow allocates this item's id on `main`, backfill a reciprocal
+  `Related` link into BE-0408, BE-0409, and BE-0410.
+
+## References
+
+[BE-0111 — AI SDK as an optional dependency](../BE-0111-ai-sdk-optional-dependency/BE-0111-ai-sdk-optional-dependency.md),
+[BE-0407 — Step-latency driver-internal tuning](../BE-0407-step-latency-driver-internal-tuning/BE-0407-step-latency-driver-internal-tuning.md),
+[BE-0114 — Driver conformance suite](../BE-0114-driver-conformance-suite/BE-0114-driver-conformance-suite.md),
+[BE-0208 — Android emulator e2e CI](../BE-0208-android-emulator-e2e-ci/BE-0208-android-emulator-e2e-ci.md),
+[BE-0238 — iOS device cloud execution](../BE-0238-ios-device-cloud-execution/BE-0238-ios-device-cloud-execution.md),
+[BE-0292 — XCUITest bundled runner](../BE-0292-xcuitest-bundled-runner/BE-0292-xcuitest-bundled-runner.md),
+[BE-0405 — Android IdentifierTool](../BE-0405-android-identifiertool/BE-0405-android-identifiertool.md),
+[BE-0408 — Step-latency device-executor protocol](../BE-0408-step-latency-device-executor-protocol/BE-0408-step-latency-device-executor-protocol.md),
+[BE-0409 — iOS on-device step executor](../BE-0409-step-latency-ios-device-executor/BE-0409-step-latency-ios-device-executor.md),
+[BE-0410 — Android on-device step executor](../BE-0410-step-latency-android-device-executor/BE-0410-step-latency-android-device-executor.md),
+[`bajutsu/common/drivers/base/_functions.py`](../../bajutsu/common/drivers/base/_functions.py),
+[`bajutsu/common/drivers/adb/_functions.py`](../../bajutsu/common/drivers/adb/_functions.py),
+[`BajutsuKit/Sources/BajutsuRunner/PositionPath.swift`](../../BajutsuKit/Sources/BajutsuRunner/PositionPath.swift),
+[UniFFI](https://mozilla.github.io/uniffi-rs/)
