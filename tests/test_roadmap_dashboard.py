@@ -223,6 +223,24 @@ def test_quickfilter_toggles_between_open_only_and_every_status() -> None:
     assert "quickfilter.setAttribute('data-state'" in script
 
 
+def test_expand_all_and_collapse_all_reuse_setcollapsed() -> None:
+    """The two bulk buttons call the same ``setCollapsed`` an individual heading click does.
+
+    So a later chip or search change still overrides the bulk action via ``apply()``'s own collapse
+    pass, exactly as it already overrides an individual heading click — no second notion of
+    "collapsed" to keep in sync. Matched loosely so a harmless reformat doesn't break the test.
+    """
+    script = brd.filter_script()
+    assert re.search(
+        r"""expandAllBtn\.addEventListener\(\s*['"]click['"]\s*,[\s\S]*?setCollapsed\(cat, false\)""",
+        script,
+    )
+    assert re.search(
+        r"""collapseAllBtn\.addEventListener\(\s*['"]click['"]\s*,[\s\S]*?setCollapsed\(cat, true\)""",
+        script,
+    )
+
+
 def test_every_card_carries_its_topic() -> None:
     """Each card exposes its Topic as ``data-topic`` so search can match it without scraping markup."""
     for item in _ITEMS:

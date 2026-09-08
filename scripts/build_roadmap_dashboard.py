@@ -913,6 +913,8 @@ _SCRIPT = """
   var groups=document.querySelectorAll('.be-group');
   var empty=document.querySelector('.be-empty');
   var quickfilter=document.querySelector('.be-quickfilter');
+  var expandAllBtn=document.querySelector('.be-expand-all');
+  var collapseAllBtn=document.querySelector('.be-collapse-all');
   // The buckets "Show open only" isolates: work that hasn't landed yet and is actively being
   // worked, as opposed to Deferred (parked on purpose) or Rejected (never coming back) — a
   // narrower set than _topic_progress's "outstanding" (Rejected only), chosen so a Deferred item
@@ -1025,6 +1027,21 @@ _SCRIPT = """
       if(e.key==='Enter'||e.key===' '){ e.preventDefault(); toggle(); }
     });
   });
+
+  // A one-click alternative to opening (or closing) every heading by hand. Reuses the same
+  // setCollapsed the individual headings call, so this never grows a second notion of "collapsed" —
+  // and the next chip or search change still overrides it via apply()'s own collapse pass, exactly
+  // as an individual heading click would be overridden today.
+  if(expandAllBtn){
+    expandAllBtn.addEventListener('click', function(){
+      cats.forEach(function(cat){ setCollapsed(cat, false); });
+    });
+  }
+  if(collapseAllBtn){
+    collapseAllBtn.addEventListener('click', function(){
+      cats.forEach(function(cat){ setCollapsed(cat, true); });
+    });
+  }
 
   // Table sort: clicking (or Enter/Space on) a header reorders the tbody rows by that column,
   // toggling ascending/descending on repeat clicks and marking the active column with aria-sort.
