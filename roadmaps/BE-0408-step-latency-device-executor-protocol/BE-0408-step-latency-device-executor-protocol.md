@@ -9,6 +9,7 @@
 | Author | [@0x0c](https://github.com/0x0c) |
 | Status | **Implemented** |
 | Tracking issue | [Search](https://github.com/bajutsu-e2e/bajutsu/issues?q=is%3Aissue+label%3Aroadmap-tracking+in%3Atitle+"BE-0408") |
+| Implementing PR | [#1949](https://github.com/bajutsu-e2e/bajutsu/pull/1949) |
 | Topic | Platform support |
 | Related | [BE-0114](../BE-0114-driver-conformance-suite/BE-0114-driver-conformance-suite.md), [BE-0407](../BE-0407-step-latency-driver-internal-tuning/BE-0407-step-latency-driver-internal-tuning.md), [BE-0409](../BE-0409-step-latency-ios-device-executor/BE-0409-step-latency-ios-device-executor.md), [BE-0410](../BE-0410-step-latency-android-device-executor/BE-0410-step-latency-android-device-executor.md) |
 <!-- /BE-METADATA -->
@@ -174,21 +175,38 @@ checked.
 - [x] Extend the driver conformance suite ([BE-0114](../BE-0114-driver-conformance-suite/BE-0114-driver-conformance-suite.md))
   with a fixture set a device-side resolver can be run against once one exists. Shipped as a
   sibling fixture set, [`tests/fixtures/be0408/`](../../tests/fixtures/be0408/), rather than inside
-  BE-0114's `DriverConformanceContract`: that contract requires a live `Driver`, which no
-  device-side resolver has yet, and selector resolution is already backend-agnostic (every backend
-  shares one `resolve_unique`), so running the same fixtures once per backend would add no
+  BE-0114's `DriverConformanceContract`. That contract requires a live `Driver`, which no
+  device-side resolver has yet. Selector resolution is already backend-agnostic — every backend
+  shares one `resolve_unique` — so running the same fixtures once per backend would add no
   information a per-backend harness could report differently. `tests/test_selector_fixtures.py`
   replays every case against the real implementation today, so the fixture set cannot itself drift
   from what it is meant to pin.
-- [x] Define the wire format for stages 2–4 (`settled`, screen-closed `assert`, `POST /scenario`),
-  informed by this document's own stage 1 design and BE-0409/BE-0410's own written proposals — not
-  by a real implementation's feedback, since BE-0409 cannot start until this item is complete and
-  therefore cannot yet have produced any. Shipped in the same OpenAPI document as stage 1 (`POST
+- [x] Define the wire format for stages 2–4 (`settled`, screen-closed `assert`, `POST /scenario`).
+  Base it on this document's own stage 1 design and BE-0409/BE-0410's own written proposals, not on
+  a real implementation's feedback. BE-0409 cannot start until this item is complete, so no such
+  feedback yet exists. Shipped in the same OpenAPI document as stage 1 (`POST
   /assert`, `POST /scenario`; `settled` folds into `POST /wait` as a fourth mode) — see
   `protocol/README.md`'s *Revision history* for how a later implementation's findings feed back
   into a dated revision of this document, rather than being a precondition for writing it once.
 - [x] Once the `roadmap-id` workflow allocates the four ids on `main`, backfill a reciprocal
   `Related` link with BE-0407, BE-0409, and BE-0410 (see the same box on BE-0407).
+
+Log:
+
+- [#1949](https://github.com/bajutsu-e2e/bajutsu/pull/1949) — completes all five units. Shipped the
+  language-neutral selector-resolution fixtures (`tests/fixtures/be0408/`) and their replay test
+  against `find_all` / `resolve_unique` / `parse_hierarchy`; the *Porting contract for a
+  device-side resolver* section in `docs/selectors.md`; a draft shared OpenAPI 3.1 protocol
+  document (`protocol/device-executor.openapi.yaml` + `protocol/README.md`) covering stages 1–4,
+  with Android brought into the same JSON contract as iOS (org.json now, an
+  `openapi-generator`-Kotlin-models recommendation for BE-0410 to evaluate) and a `pollBudgetMs`
+  polling design in place of single-call cancellation; and its own conformance fixtures and test
+  (`tests/fixtures/be0408/protocol/`, `tests/test_be0408_protocol_fixtures.py`). Fixed the stale
+  `bajutsu/common/drivers/base.py` / `drivers/adb.py` citations throughout (packaged per-class
+  since BE-0411) and a self-contradictory checklist item. A three-round self-review pass against
+  the CI review contract found and fixed 25 issues before the gate ran, mostly in the draft
+  OpenAPI schema's own structural rigor (untyped fields accepting `null`, unenforced "exactly one
+  of" rules, an unvalidated bundle payload).
 
 ## References
 

@@ -9,6 +9,7 @@
 | 提案者 | [@0x0c](https://github.com/0x0c) |
 | 状態 | **実装済み** |
 | トラッキング Issue | [検索](https://github.com/bajutsu-e2e/bajutsu/issues?q=is%3Aissue+label%3Aroadmap-tracking+in%3Atitle+"BE-0408") |
+| 実装 PR | [#1949](https://github.com/bajutsu-e2e/bajutsu/pull/1949) |
 | トピック | Platform support |
 | 関連 | [BE-0114](../BE-0114-driver-conformance-suite/BE-0114-driver-conformance-suite-ja.md)、[BE-0407](../BE-0407-step-latency-driver-internal-tuning/BE-0407-step-latency-driver-internal-tuning-ja.md)、[BE-0409](../BE-0409-step-latency-ios-device-executor/BE-0409-step-latency-ios-device-executor-ja.md)、[BE-0410](../BE-0410-step-latency-android-device-executor/BE-0410-step-latency-android-device-executor-ja.md) |
 <!-- /BE-METADATA -->
@@ -210,6 +211,29 @@ prime directive 1 が求める決定的な判定そのものです。端末側�
 - [x] `roadmap-id` ワークフローが `main` 上で 4 項目の ID を採番したら、BE-0407、
   BE-0409、BE-0410 との間で `関連` の相互リンクを補う（BE-0407 にある同じチェック
   項目を参照）。
+
+ログ：
+
+- [#1949](https://github.com/bajutsu-e2e/bajutsu/pull/1949) — 5つの単位すべてを完了しました。
+  言語中立なセレクタ解決フィクスチャ（`tests/fixtures/be0408/`）を出荷しました。
+  `find_all` / `resolve_unique` / `parse_hierarchy` への再生テストも出荷しました。
+  `docs/selectors.md` の「別言語（Swift・Kotlin）への移植契約」節も出荷しました。
+  ステージ1〜4を覆う、共有 OpenAPI 3.1 文書の草案
+  （`protocol/device-executor.openapi.yaml` ＋ `protocol/README.md`）も出荷しました。
+  Android を iOS と同じ JSON（JavaScript Object Notation）契約に含めました。現時点では
+  org.json を使い、
+  BE-0410 が評価すべき `openapi-generator` の Kotlin モデル生成を推奨として記録
+  しました。単一呼び出しでのキャンセルの代わりに、`pollBudgetMs` によるポーリング
+  設計を採用しました。この文書自身の適合性フィクスチャとテスト
+  （`tests/fixtures/be0408/protocol/`、`tests/test_be0408_protocol_fixtures.py`）
+  も出荷しました。陳腐化していた `bajutsu/common/drivers/base.py` /
+  `drivers/adb.py` への参照（BE-0411 でクラスごとにパッケージ化済み）を、全体に
+  わたって修正しました。自己矛盾していたチェックリスト項目も修正しました。
+  ゲートを走らせる前に、CI のレビュー契約に対して3ラウンドの自己レビューを
+  行いました。25件の指摘を見つけて修正しました。大半は草案 OpenAPI スキーマ
+  自身の構造的な厳密さに関するものでした。null を受け付けてしまうフィールド、
+  強制されていなかった「いずれか1つだけ」規則、検証されていなかった束ね
+  ペイロードなどです。
 
 ## 参考
 
