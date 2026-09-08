@@ -1,0 +1,393 @@
+{
+  "schema": 1,
+  "cases": [
+    {
+      "name": "resolve_by_id_unique",
+      "elements": [
+        { "identifier": "settings.open", "label": "設定", "traits": ["button"], "value": null, "frame": [0.0, 0.0, 10.0, 10.0] },
+        { "identifier": "settings.reindex", "label": "再生成", "traits": ["button"], "value": null, "frame": [0.0, 0.0, 10.0, 10.0] },
+        { "identifier": "result.row.1", "label": "A", "traits": ["cell"], "value": null, "frame": [0.0, 0.0, 10.0, 10.0] },
+        { "identifier": "result.row.2", "label": "B", "traits": ["cell"], "value": null, "frame": [0.0, 0.0, 10.0, 10.0] }
+      ],
+      "selector": { "id": "settings.open" },
+      "resolveUnique": { "outcome": "resolved", "identifier": "settings.open" }
+    },
+    {
+      "name": "not_found_raises",
+      "elements": [
+        { "identifier": "settings.open", "label": "設定", "traits": ["button"], "value": null, "frame": [0.0, 0.0, 10.0, 10.0] },
+        { "identifier": "settings.reindex", "label": "再生成", "traits": ["button"], "value": null, "frame": [0.0, 0.0, 10.0, 10.0] },
+        { "identifier": "result.row.1", "label": "A", "traits": ["cell"], "value": null, "frame": [0.0, 0.0, 10.0, 10.0] },
+        { "identifier": "result.row.2", "label": "B", "traits": ["cell"], "value": null, "frame": [0.0, 0.0, 10.0, 10.0] }
+      ],
+      "selector": { "id": "nope" },
+      "resolveUnique": { "outcome": "notFound", "reason": "noMatch" }
+    },
+    {
+      "name": "ambiguous_raises",
+      "note": "an ambiguous selector fails rather than acting on the first match (determinism core)",
+      "elements": [
+        { "identifier": "settings.open", "label": "設定", "traits": ["button"], "value": null, "frame": [0.0, 0.0, 10.0, 10.0] },
+        { "identifier": "settings.reindex", "label": "再生成", "traits": ["button"], "value": null, "frame": [0.0, 0.0, 10.0, 10.0] },
+        { "identifier": "result.row.1", "label": "A", "traits": ["cell"], "value": null, "frame": [0.0, 0.0, 10.0, 10.0] },
+        { "identifier": "result.row.2", "label": "B", "traits": ["cell"], "value": null, "frame": [0.0, 0.0, 10.0, 10.0] }
+      ],
+      "selector": { "idMatches": "result.row.*" },
+      "resolveUnique": { "outcome": "ambiguous" }
+    },
+    {
+      "name": "index_disambiguates",
+      "elements": [
+        { "identifier": "result.row.1", "label": "A", "traits": ["cell"], "value": null, "frame": [0.0, 0.0, 10.0, 10.0] },
+        { "identifier": "result.row.2", "label": "B", "traits": ["cell"], "value": null, "frame": [0.0, 0.0, 10.0, 10.0] }
+      ],
+      "selector": { "idMatches": "result.row.*", "index": 0 },
+      "resolveUnique": { "outcome": "resolved", "identifier": "result.row.1" }
+    },
+    {
+      "name": "index_negative_minus_one_is_the_last_match",
+      "note": "negative index counts from the end (Python semantics), deterministic on an ordered candidate list",
+      "elements": [
+        { "identifier": "result.row.1", "label": "A", "traits": ["cell"], "value": null, "frame": [0.0, 0.0, 10.0, 10.0] },
+        { "identifier": "result.row.2", "label": "B", "traits": ["cell"], "value": null, "frame": [0.0, 0.0, 10.0, 10.0] }
+      ],
+      "selector": { "idMatches": "result.row.*", "index": -1 },
+      "resolveUnique": { "outcome": "resolved", "identifier": "result.row.2" }
+    },
+    {
+      "name": "index_negative_minus_two_is_the_one_before_last",
+      "elements": [
+        { "identifier": "result.row.1", "label": "A", "traits": ["cell"], "value": null, "frame": [0.0, 0.0, 10.0, 10.0] },
+        { "identifier": "result.row.2", "label": "B", "traits": ["cell"], "value": null, "frame": [0.0, 0.0, 10.0, 10.0] }
+      ],
+      "selector": { "idMatches": "result.row.*", "index": -2 },
+      "resolveUnique": { "outcome": "resolved", "identifier": "result.row.1" }
+    },
+    {
+      "name": "index_out_of_range_positive",
+      "note": "two candidates: valid indices are 0..1 and -2..-1; 2 is at/over the count",
+      "elements": [
+        { "identifier": "result.row.1", "label": "A", "traits": ["cell"], "value": null, "frame": [0.0, 0.0, 10.0, 10.0] },
+        { "identifier": "result.row.2", "label": "B", "traits": ["cell"], "value": null, "frame": [0.0, 0.0, 10.0, 10.0] }
+      ],
+      "selector": { "idMatches": "result.row.*", "index": 2 },
+      "resolveUnique": { "outcome": "notFound", "reason": "outOfRange" }
+    },
+    {
+      "name": "index_out_of_range_negative",
+      "elements": [
+        { "identifier": "result.row.1", "label": "A", "traits": ["cell"], "value": null, "frame": [0.0, 0.0, 10.0, 10.0] },
+        { "identifier": "result.row.2", "label": "B", "traits": ["cell"], "value": null, "frame": [0.0, 0.0, 10.0, 10.0] }
+      ],
+      "selector": { "idMatches": "result.row.*", "index": -3 },
+      "resolveUnique": { "outcome": "notFound", "reason": "outOfRange" }
+    },
+    {
+      "name": "index_on_no_candidates_is_out_of_range",
+      "note": "an index against zero matches has no valid slot (0 is already ==len) — out of range, never an IndexError leaking from the raw list access",
+      "elements": [
+        { "identifier": "settings.open", "label": "設定", "traits": ["button"], "value": null, "frame": [0.0, 0.0, 10.0, 10.0] }
+      ],
+      "selector": { "id": "nope", "index": 0 },
+      "resolveUnique": { "outcome": "notFound", "reason": "outOfRange" }
+    },
+    {
+      "name": "count_via_find_all",
+      "elements": [
+        { "identifier": "result.row.1", "label": "A", "traits": ["cell"], "value": null, "frame": [0.0, 0.0, 10.0, 10.0] },
+        { "identifier": "result.row.2", "label": "B", "traits": ["cell"], "value": null, "frame": [0.0, 0.0, 10.0, 10.0] }
+      ],
+      "selector": { "idMatches": "result.row.*" },
+      "findAll": { "identifiers": ["result.row.1", "result.row.2"] }
+    },
+    {
+      "name": "traits_subset",
+      "elements": [
+        { "identifier": "settings.open", "label": "設定", "traits": ["button"], "value": null, "frame": [0.0, 0.0, 10.0, 10.0] },
+        { "identifier": "settings.reindex", "label": "再生成", "traits": ["button"], "value": null, "frame": [0.0, 0.0, 10.0, 10.0] },
+        { "identifier": "result.row.1", "label": "A", "traits": ["cell"], "value": null, "frame": [0.0, 0.0, 10.0, 10.0] }
+      ],
+      "selector": { "traits": ["button"] },
+      "findAll": { "identifiers": ["settings.open", "settings.reindex"] }
+    },
+    {
+      "name": "and_of_fields_matches",
+      "note": "all provided selector fields are AND-ed",
+      "elements": [
+        { "identifier": "settings.open", "label": "設定", "traits": ["button"], "value": null, "frame": [0.0, 0.0, 10.0, 10.0] },
+        { "identifier": "result.row.1", "label": "A", "traits": ["cell"], "value": null, "frame": [0.0, 0.0, 10.0, 10.0] }
+      ],
+      "selector": { "label": "設定", "traits": ["button"] },
+      "findAll": { "identifiers": ["settings.open"] }
+    },
+    {
+      "name": "and_of_fields_excludes_when_one_field_disagrees",
+      "elements": [
+        { "identifier": "settings.open", "label": "設定", "traits": ["button"], "value": null, "frame": [0.0, 0.0, 10.0, 10.0] },
+        { "identifier": "result.row.1", "label": "A", "traits": ["cell"], "value": null, "frame": [0.0, 0.0, 10.0, 10.0] }
+      ],
+      "selector": { "label": "設定", "traits": ["cell"] },
+      "findAll": { "identifiers": [] }
+    },
+    {
+      "name": "within_scopes_to_container_ambiguous_alone",
+      "note": "two same-id buttons, each inside a different section container — ambiguous without `within`",
+      "elements": [
+        { "identifier": "form.login", "label": "login", "traits": ["group"], "value": null, "frame": [0.0, 0.0, 100.0, 50.0] },
+        { "identifier": "form.signup", "label": "signup", "traits": ["group"], "value": null, "frame": [0.0, 60.0, 100.0, 50.0] },
+        { "identifier": "row.submit", "label": "Go", "traits": ["button"], "value": null, "frame": [10.0, 10.0, 30.0, 20.0] },
+        { "identifier": "row.submit", "label": "Go", "traits": ["button"], "value": null, "frame": [10.0, 70.0, 30.0, 20.0] }
+      ],
+      "selector": { "id": "row.submit" },
+      "resolveUnique": { "outcome": "ambiguous" }
+    },
+    {
+      "name": "within_scopes_to_login_container",
+      "note": "`within` is geometric containment (edge-inclusive), not a hierarchical parent pointer; the tree is flat",
+      "elements": [
+        { "identifier": "form.login", "label": "login", "traits": ["group"], "value": null, "frame": [0.0, 0.0, 100.0, 50.0] },
+        { "identifier": "form.signup", "label": "signup", "traits": ["group"], "value": null, "frame": [0.0, 60.0, 100.0, 50.0] },
+        { "identifier": "row.submit", "label": "Go", "traits": ["button"], "value": null, "frame": [10.0, 10.0, 30.0, 20.0] },
+        { "identifier": "row.submit", "label": "Go", "traits": ["button"], "value": null, "frame": [10.0, 70.0, 30.0, 20.0] }
+      ],
+      "selector": { "id": "row.submit", "within": { "id": "form.login" } },
+      "resolveUnique": { "outcome": "resolved", "identifier": "row.submit", "frame": [10.0, 10.0, 30.0, 20.0] }
+    },
+    {
+      "name": "within_scopes_to_signup_container",
+      "elements": [
+        { "identifier": "form.login", "label": "login", "traits": ["group"], "value": null, "frame": [0.0, 0.0, 100.0, 50.0] },
+        { "identifier": "form.signup", "label": "signup", "traits": ["group"], "value": null, "frame": [0.0, 60.0, 100.0, 50.0] },
+        { "identifier": "row.submit", "label": "Go", "traits": ["button"], "value": null, "frame": [10.0, 10.0, 30.0, 20.0] },
+        { "identifier": "row.submit", "label": "Go", "traits": ["button"], "value": null, "frame": [10.0, 70.0, 30.0, 20.0] }
+      ],
+      "selector": { "id": "row.submit", "within": { "id": "form.signup" } },
+      "resolveUnique": { "outcome": "resolved", "identifier": "row.submit", "frame": [10.0, 70.0, 30.0, 20.0] }
+    },
+    {
+      "name": "within_excludes_elements_outside_the_scope",
+      "elements": [
+        { "identifier": "box", "label": null, "traits": [], "value": null, "frame": [0.0, 0.0, 50.0, 50.0] },
+        { "identifier": "btn", "label": "out", "traits": ["button"], "value": null, "frame": [100.0, 100.0, 10.0, 10.0] }
+      ],
+      "selector": { "id": "btn", "within": { "id": "box" } },
+      "findAll": { "identifiers": [] }
+    },
+    {
+      "name": "within_nests",
+      "note": "within may nest; a candidate qualifies only when contained in every level of the chain",
+      "elements": [
+        { "identifier": "outer", "label": null, "traits": [], "value": null, "frame": [0.0, 0.0, 100.0, 100.0] },
+        { "identifier": "inner", "label": null, "traits": [], "value": null, "frame": [10.0, 10.0, 50.0, 50.0] },
+        { "identifier": "btn", "label": "go", "traits": ["button"], "value": null, "frame": [15.0, 15.0, 5.0, 5.0] }
+      ],
+      "selector": { "id": "btn", "within": { "id": "inner", "within": { "id": "outer" } } },
+      "resolveUnique": { "outcome": "resolved", "identifier": "btn" }
+    },
+    {
+      "name": "within_boundary_case_element_scopes_to_itself",
+      "note": "containment is edge-inclusive: a candidate's own frame equalling a container's frame still qualifies, so an element can be its own within scope",
+      "elements": [
+        { "identifier": "card", "label": null, "traits": ["group"], "value": null, "frame": [0.0, 0.0, 50.0, 50.0] }
+      ],
+      "selector": { "id": "card", "within": { "id": "card" } },
+      "resolveUnique": { "outcome": "resolved", "identifier": "card" }
+    },
+    {
+      "name": "label_matches_uses_regex",
+      "note": "labelMatches is re.search (unanchored substring/regex), distinct from idMatches's anchored glob",
+      "elements": [
+        { "identifier": "a", "label": "Settings Page", "traits": ["staticText"], "value": null, "frame": [0.0, 0.0, 10.0, 10.0] },
+        { "identifier": "b", "label": "Home Page", "traits": ["staticText"], "value": null, "frame": [0.0, 0.0, 10.0, 10.0] },
+        { "identifier": "c", "label": "About", "traits": ["staticText"], "value": null, "frame": [0.0, 0.0, 10.0, 10.0] }
+      ],
+      "selector": { "labelMatches": ".*Page$" },
+      "findAll": { "identifiers": ["a", "b"] }
+    },
+    {
+      "name": "id_list_matches_compose_form",
+      "note": "BE-0221: a shared scenario carries every platform's id form as an OR candidate list",
+      "elements": [
+        { "identifier": "stable.refresh", "label": "更新", "traits": ["button"], "value": null, "frame": [0.0, 0.0, 10.0, 10.0] }
+      ],
+      "selector": { "id": ["stable.refresh", "stable_refresh"] },
+      "resolveUnique": { "outcome": "resolved", "identifier": "stable.refresh" }
+    },
+    {
+      "name": "id_list_matches_views_form",
+      "elements": [
+        { "identifier": "stable_refresh", "label": "更新", "traits": ["button"], "value": null, "frame": [0.0, 0.0, 10.0, 10.0] }
+      ],
+      "selector": { "id": ["stable.refresh", "stable_refresh"] },
+      "resolveUnique": { "outcome": "resolved", "identifier": "stable_refresh" }
+    },
+    {
+      "name": "id_list_not_found_when_no_candidate_present",
+      "elements": [
+        { "identifier": "other", "label": null, "traits": [], "value": null, "frame": [0.0, 0.0, 10.0, 10.0] }
+      ],
+      "selector": { "id": ["stable.refresh", "stable_refresh"] },
+      "resolveUnique": { "outcome": "notFound", "reason": "noMatch" }
+    },
+    {
+      "name": "id_list_ambiguous_when_two_forms_on_one_screen",
+      "note": "an OR never masks a 2+ match — determinism is unchanged by BE-0221",
+      "elements": [
+        { "identifier": "stable.refresh", "label": "A", "traits": ["button"], "value": null, "frame": [0.0, 0.0, 10.0, 10.0] },
+        { "identifier": "stable_refresh", "label": "B", "traits": ["button"], "value": null, "frame": [0.0, 0.0, 10.0, 10.0] }
+      ],
+      "selector": { "id": ["stable.refresh", "stable_refresh"] },
+      "resolveUnique": { "outcome": "ambiguous" }
+    },
+    {
+      "name": "id_list_find_all_matches_in_elements_order",
+      "note": "find_all's result is in elements order, not the order the OR candidates were listed in",
+      "elements": [
+        { "identifier": "a", "label": null, "traits": [], "value": null, "frame": [0.0, 0.0, 10.0, 10.0] },
+        { "identifier": "b", "label": null, "traits": [], "value": null, "frame": [0.0, 0.0, 10.0, 10.0] },
+        { "identifier": "c", "label": null, "traits": [], "value": null, "frame": [0.0, 0.0, 10.0, 10.0] }
+      ],
+      "selector": { "id": ["c", "a"] },
+      "findAll": { "identifiers": ["a", "c"] }
+    },
+    {
+      "name": "id_matches_list_matches_compose_glob",
+      "elements": [
+        { "identifier": "stable.row.1", "label": null, "traits": [], "value": null, "frame": [0.0, 0.0, 10.0, 10.0] },
+        { "identifier": "stable.row.2", "label": null, "traits": [], "value": null, "frame": [0.0, 0.0, 10.0, 10.0] }
+      ],
+      "selector": { "idMatches": ["stable.row.*", "stable_row_*"] },
+      "findAll": { "identifiers": ["stable.row.1", "stable.row.2"] }
+    },
+    {
+      "name": "id_matches_list_matches_views_glob",
+      "elements": [
+        { "identifier": "stable_row_1", "label": null, "traits": [], "value": null, "frame": [0.0, 0.0, 10.0, 10.0] },
+        { "identifier": "stable_row_2", "label": null, "traits": [], "value": null, "frame": [0.0, 0.0, 10.0, 10.0] }
+      ],
+      "selector": { "idMatches": ["stable.row.*", "stable_row_*"] },
+      "findAll": { "identifiers": ["stable_row_1", "stable_row_2"] }
+    },
+    {
+      "name": "identical_duplicates_resolve_without_index",
+      "note": "a standard UIAlertController button sometimes registers twice, identically, in the XCUITest tree; nothing distinguishes the two, so they collapse to one before ambiguity is judged",
+      "elements": [
+        { "identifier": "alert.ok", "label": "OK", "traits": ["button"], "value": null, "frame": [201.0, 470.0, 134.0, 44.0] },
+        { "identifier": "alert.ok", "label": "OK", "traits": ["button"], "value": null, "frame": [201.0, 470.0, 134.0, 44.0] }
+      ],
+      "selector": { "id": "alert.ok" },
+      "resolveUnique": { "outcome": "resolved", "identifier": "alert.ok", "frame": [201.0, 470.0, 134.0, 44.0] }
+    },
+    {
+      "name": "duplicates_differing_in_frame_still_ambiguous",
+      "note": "a different frame is a genuine 2+ match, not the ghost duplicate collapsing targets",
+      "elements": [
+        { "identifier": "alert.ok", "label": "OK", "traits": ["button"], "value": null, "frame": [201.0, 470.0, 134.0, 44.0] },
+        { "identifier": "alert.ok", "label": "OK", "traits": ["button"], "value": null, "frame": [201.0, 300.0, 134.0, 44.0] }
+      ],
+      "selector": { "id": "alert.ok" },
+      "resolveUnique": { "outcome": "ambiguous" }
+    },
+    {
+      "name": "duplicates_with_differently_ordered_traits_still_collapse",
+      "note": "traits are compared as a set (issubset already treats it that way); a different report order is the same content",
+      "elements": [
+        { "identifier": "alert.ok", "label": "OK", "traits": ["button", "notEnabled"], "value": null, "frame": [201.0, 470.0, 134.0, 44.0] },
+        { "identifier": "alert.ok", "label": "OK", "traits": ["notEnabled", "button"], "value": null, "frame": [201.0, 470.0, 134.0, 44.0] }
+      ],
+      "selector": { "id": "alert.ok" },
+      "resolveUnique": { "outcome": "resolved", "identifier": "alert.ok" }
+    },
+    {
+      "name": "other_trait_duplicate_is_ignored_on_label_tie",
+      "note": "a generic wrapper (e.g. iOS's catch-all XCUIElementTypeOther) commonly repeats a real element's label; resolve_unique drops such other-trait ties before judging ambiguity",
+      "elements": [
+        { "identifier": "real.button", "label": "設定", "traits": ["button"], "value": null, "frame": [0.0, 0.0, 10.0, 10.0] },
+        { "identifier": "wrapper", "label": "設定", "traits": ["other"], "value": null, "frame": [0.0, 0.0, 10.0, 10.0] }
+      ],
+      "selector": { "label": "設定" },
+      "resolveUnique": { "outcome": "resolved", "identifier": "real.button" }
+    },
+    {
+      "name": "other_trait_duplicate_ignored_leaves_find_all_unfiltered",
+      "note": "the other-drop filtering is local to resolve_unique's ambiguity judgment; find_all (backs count/exists) still sees every match, other included",
+      "elements": [
+        { "identifier": "real.button", "label": "設定", "traits": ["button"], "value": null, "frame": [0.0, 0.0, 10.0, 10.0] },
+        { "identifier": "wrapper", "label": "設定", "traits": ["other"], "value": null, "frame": [0.0, 0.0, 10.0, 10.0] }
+      ],
+      "selector": { "label": "設定" },
+      "findAll": { "identifiers": ["real.button", "wrapper"] }
+    },
+    {
+      "name": "all_other_candidates_still_raise_ambiguous",
+      "note": "when every tied candidate is other, there is nothing non-other to fall back to — still a genuine ambiguity",
+      "elements": [
+        { "identifier": "a", "label": "重複", "traits": ["other"], "value": null, "frame": [0.0, 0.0, 10.0, 10.0] },
+        { "identifier": "b", "label": "重複", "traits": ["other"], "value": null, "frame": [0.0, 0.0, 10.0, 10.0] }
+      ],
+      "selector": { "label": "重複" },
+      "resolveUnique": { "outcome": "ambiguous" }
+    },
+    {
+      "name": "explicit_other_trait_selector_is_not_filtered",
+      "note": "a selector that explicitly asks for other elements (traits: [other]) opts back into judging them normally",
+      "elements": [
+        { "identifier": "a", "label": "重複", "traits": ["other"], "value": null, "frame": [0.0, 0.0, 10.0, 10.0] },
+        { "identifier": "b", "label": "重複", "traits": ["other"], "value": null, "frame": [0.0, 0.0, 10.0, 10.0] }
+      ],
+      "selector": { "label": "重複", "traits": ["other"] },
+      "resolveUnique": { "outcome": "ambiguous" }
+    },
+    {
+      "name": "index_counts_over_the_other_filtered_candidates_zero",
+      "note": "index counts the same, already other-filtered set the ambiguity judgment uses — not the raw find_all result, where a dropped other would shift later positions by one",
+      "elements": [
+        { "identifier": "a", "label": "設定", "traits": ["button"], "value": null, "frame": [0.0, 0.0, 10.0, 10.0] },
+        { "identifier": "b", "label": "設定", "traits": ["button"], "value": null, "frame": [0.0, 0.0, 10.0, 10.0] },
+        { "identifier": "wrapper", "label": "設定", "traits": ["other"], "value": null, "frame": [0.0, 0.0, 10.0, 10.0] }
+      ],
+      "selector": { "label": "設定", "index": 0 },
+      "resolveUnique": { "outcome": "resolved", "identifier": "a" }
+    },
+    {
+      "name": "index_counts_over_the_other_filtered_candidates_one",
+      "elements": [
+        { "identifier": "a", "label": "設定", "traits": ["button"], "value": null, "frame": [0.0, 0.0, 10.0, 10.0] },
+        { "identifier": "b", "label": "設定", "traits": ["button"], "value": null, "frame": [0.0, 0.0, 10.0, 10.0] },
+        { "identifier": "wrapper", "label": "設定", "traits": ["other"], "value": null, "frame": [0.0, 0.0, 10.0, 10.0] }
+      ],
+      "selector": { "label": "設定", "index": 1 },
+      "resolveUnique": { "outcome": "resolved", "identifier": "b" }
+    },
+    {
+      "name": "index_counts_over_the_other_filtered_candidates_out_of_range",
+      "note": "index 2 is out of range for the two-candidate other-filtered set, even though find_all's raw result has three elements",
+      "elements": [
+        { "identifier": "a", "label": "設定", "traits": ["button"], "value": null, "frame": [0.0, 0.0, 10.0, 10.0] },
+        { "identifier": "b", "label": "設定", "traits": ["button"], "value": null, "frame": [0.0, 0.0, 10.0, 10.0] },
+        { "identifier": "wrapper", "label": "設定", "traits": ["other"], "value": null, "frame": [0.0, 0.0, 10.0, 10.0] }
+      ],
+      "selector": { "label": "設定", "index": 2 },
+      "resolveUnique": { "outcome": "notFound", "reason": "outOfRange" }
+    },
+    {
+      "name": "explicit_other_trait_selector_disambiguates_by_index_zero",
+      "note": "traits: [other] opts the whole other-drop heuristic out, so index here counts the two matched other elements themselves",
+      "elements": [
+        { "identifier": "a", "label": "重複", "traits": ["other"], "value": null, "frame": [0.0, 0.0, 10.0, 10.0] },
+        { "identifier": "b", "label": "重複", "traits": ["other"], "value": null, "frame": [0.0, 0.0, 10.0, 10.0] }
+      ],
+      "selector": { "label": "重複", "traits": ["other"], "index": 0 },
+      "resolveUnique": { "outcome": "resolved", "identifier": "a" }
+    },
+    {
+      "name": "explicit_other_trait_selector_disambiguates_by_index_one",
+      "elements": [
+        { "identifier": "a", "label": "重複", "traits": ["other"], "value": null, "frame": [0.0, 0.0, 10.0, 10.0] },
+        { "identifier": "b", "label": "重複", "traits": ["other"], "value": null, "frame": [0.0, 0.0, 10.0, 10.0] }
+      ],
+      "selector": { "label": "重複", "traits": ["other"], "index": 1 },
+      "resolveUnique": { "outcome": "resolved", "identifier": "b" }
+    }
+  ]
+}

@@ -1,0 +1,21 @@
+{
+  "schema": 1,
+  "operation": "wait",
+  "request": {
+    "mode": "screenChanged",
+    "timeoutMs": 4000,
+    "pollBudgetMs": 1500
+  },
+  "response": {
+    "status": "ok",
+    "elements": [
+      {
+        "traits": ["staticText"],
+        "frame": [0.0, 0.0, 200.0, 40.0],
+        "handle": "h4",
+        "identifier": "screen.title",
+        "label": "Results"
+      }
+    ]
+  }
+}

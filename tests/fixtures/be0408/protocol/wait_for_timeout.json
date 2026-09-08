@@ -1,0 +1,18 @@
+{
+  "schema": 1,
+  "operation": "wait",
+  "request": {
+    "mode": "for",
+    "selector": { "id": "result.row.99" },
+    "timeoutMs": 5000,
+    "pollBudgetMs": 1500
+  },
+  "response": {
+    "status": "timeout",
+    "elements": [],
+    "trace": {
+      "polls": 14,
+      "elementsAtTimeout": 0
+    }
+  }
+}

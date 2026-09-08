@@ -7,7 +7,7 @@
 |---|---|
 | 提案 | [BE-0408](BE-0408-step-latency-device-executor-protocol-ja.md) |
 | 提案者 | [@0x0c](https://github.com/0x0c) |
-| 状態 | **提案** |
+| 状態 | **実装済み** |
 | トラッキング Issue | [検索](https://github.com/bajutsu-e2e/bajutsu/issues?q=is%3Aissue+label%3Aroadmap-tracking+in%3Atitle+"BE-0408") |
 | トピック | Platform support |
 | 関連 | [BE-0114](../BE-0114-driver-conformance-suite/BE-0114-driver-conformance-suite-ja.md)、[BE-0407](../BE-0407-step-latency-driver-internal-tuning/BE-0407-step-latency-driver-internal-tuning-ja.md)、[BE-0409](../BE-0409-step-latency-ios-device-executor/BE-0409-step-latency-ios-device-executor-ja.md)、[BE-0410](../BE-0410-step-latency-android-device-executor/BE-0410-step-latency-android-device-executor-ja.md) |
@@ -90,11 +90,11 @@ Python は、プロトコルの変更後も次の 3 つの役割をホスト側�
 
 ### 共有される契約としてのセレクタ意味論
 
-[`bajutsu/common/drivers/base.py`](../../bajutsu/common/drivers/base.py) の
+[`bajutsu/common/drivers/base/_functions.py`](../../bajutsu/common/drivers/base/_functions.py) の
 `find_all` と `resolve_unique` は、今日のセレクタの意味を定める唯一の定義です。
 `within`、`idMatches`、`labelMatches`、trait の派生、そして Android 側の
 derived-label フォールバック
-（[`drivers/adb.py:251-282`](../../bajutsu/common/drivers/adb.py)）です。端末側の
+（[`drivers/adb/_functions.py`](../../bajutsu/common/drivers/adb/_functions.py)）です。端末側の
 実行機は、この論理を Swift と Kotlin にそれぞれ独自に持つ必要があり、両者は
 どのセレクタについても、ホスト側の解決と同じ要素に解決しなければなりません。
 曖昧な一致で失敗する場合も同じ失敗の仕方をする必要があります。セレクタの一致は、
@@ -168,20 +168,45 @@ prime directive 1 が求める決定的な判定そのものです。端末側�
 > 作業分解（作業の単位ごとに 1 つ）に対応し、ログには変更内容と時期（古い順）を PR へのリンクと
 > ともに記録します。
 
-**順番の状態：BE-0407 の完了待ちです**（詳細設計の「実装の順番」を参照）。
-それまでは下のチェックリストに着手しないでください。
+**順番の状態：BE-0407 が完了しました**（[#1944](https://github.com/bajutsu-e2e/bajutsu/pull/1944)）。
+これにより、この項目のブロックが解除されました（詳細設計の「実装の順番」を参照）。
+下のチェックリストは、すべてチェック済みです。
 
-- [ ] 段階 1（`POST /wait`）の通信形式を書き、どちらのプラットフォーム項目も
-  着手する前に、両者の間で合意する。
-- [ ] `find_all` / `resolve_unique` のセレクタ意味論を、Swift と Kotlin という
-  独立した 2 つの実装が、曖昧な一致や trait の派生、Android の derived-label
-  フォールバックといった境界事例について合意できるだけの精度で、共有の設計文書に
-  移す。
-- [ ] driver conformance suite
+- [x] 段階 1（`POST /wait`）の通信形式を書き、どちらのプラットフォーム項目も
+  着手する前に、両者の間で合意する。文章だけでなく、1 本の OpenAPI 3.1 文書
+  （[`protocol/device-executor.openapi.yaml`](protocol/device-executor.openapi.yaml)、
+  設計の経緯は [`protocol/README.md`](protocol/README.md) に記載）として出荷しました。
+  `jsonschema` による検証テスト（`tests/test_be0408_protocol_fixtures.py`）で固定して
+  あります。将来 BE-0409 や BE-0410 のどちらかがこの共有スキーマから外れれば、高速
+  ゲートでそのまま失敗します。
+- [x] `find_all` / `resolve_unique` のセレクタ意味論を、Swift と Kotlin という独立
+  した 2 つの実装が境界事例について合意できるだけの精度で、共有の設計文書に移す。
+  境界事例とは、曖昧な一致や trait の派生、Android の derived-label フォールバック
+  などです。[`docs/ja/selectors.md`](../../docs/ja/selectors.md) に「別言語への
+  移植契約」という新しい節として出荷しました。英語版は
+  [`docs/selectors.md`](../../docs/selectors.md) です。ここに挙げた境界事例すべてに
+  加え、移植先が意図的に揃えてはならない Swift 側の挙動も 2 つ明記しています。
+  `PositionPath` の frame の許容誤差と、トレイトの順序つき比較です。
+- [x] driver conformance suite
   （[BE-0114](../BE-0114-driver-conformance-suite/BE-0114-driver-conformance-suite-ja.md)）
   を、端末側のリゾルバができた時点でそれに対して実行できるフィクスチャ集合で拡張する。
-- [ ] 段階 2〜4（`settled`、画面に閉じた `assert`、`POST /scenario`）の通信形式を、
-  段階 1 とプラットフォーム項目の実装から得られる知見をもとに定義する。
+  出荷先は BE-0114 の `DriverConformanceContract` の拡張ではありません。その隣に置く
+  独立したフィクスチャ集合、
+  [`tests/fixtures/be0408/`](../../tests/fixtures/be0408/) です。この契約は生きた
+  `Driver` を要求します。端末側のリゾルバはまだ存在しません。セレクタ解決はすでに
+  バックエンド非依存です。全バックエンドが単一の `resolve_unique` を共有しています。
+  バックエンドごとに同じフィクスチャを回しても、得られる情報は増えません。
+  `tests/test_selector_fixtures.py` が今日、全ケースを実装本体へ照合しています。
+  フィクスチャ集合自体が固定したい対象からずれることはありません。
+- [x] 段階 2〜4（`settled`、画面に閉じた `assert`、`POST /scenario`）の通信形式を、
+  段階 1 とプラットフォーム項目の実装から得られる知見をもとに定義する。実際の定義の
+  もとにしたのは、この文書自身の段階 1 の設計と、BE-0409・BE-0410 それぞれの提案
+  文書です。実装からの知見ではありません。BE-0409 はこの項目が完了するまで着手でき
+  ません。実装からの知見自体が、まだ存在しないためです。出荷先は段階 1 と同じ
+  OpenAPI 文書です。`POST /assert` と `POST /scenario` として出荷しました。`settled`
+  は `POST /wait` の 4 つ目の mode に畳み込みました。実装からの学びをこの文書へどう
+  反映するかは、`protocol/README.md` の「改訂履歴」に記しています。一度書いたきりで
+  固定するものではありません。
 - [x] `roadmap-id` ワークフローが `main` 上で 4 項目の ID を採番したら、BE-0407、
   BE-0409、BE-0410 との間で `関連` の相互リンクを補う（BE-0407 にある同じチェック
   項目を参照）。
@@ -191,5 +216,7 @@ prime directive 1 が求める決定的な判定そのものです。端末側�
 [BE-0105 — XCUITest の要素取得を単一スナップショット化する](../BE-0105-xcuitest-single-snapshot-query/BE-0105-xcuitest-single-snapshot-query-ja.md)、
 [BE-0114 — backend 非依存の挙動を検査する driver conformance suite](../BE-0114-driver-conformance-suite/BE-0114-driver-conformance-suite-ja.md)、
 [BE-0310 — アクセシビリティの画面遷移通知による readiness 判定の精度向上](../BE-0310-ios-accessibility-screen-change-readiness/BE-0310-ios-accessibility-screen-change-readiness-ja.md)、
-[`bajutsu/common/drivers/base.py`](../../bajutsu/common/drivers/base.py)、
-[`bajutsu/common/drivers/adb.py`](../../bajutsu/common/drivers/adb.py)
+[`bajutsu/common/drivers/base/_functions.py`](../../bajutsu/common/drivers/base/_functions.py)、
+[`bajutsu/common/drivers/adb/_functions.py`](../../bajutsu/common/drivers/adb/_functions.py)、
+[`protocol/device-executor.openapi.yaml`](protocol/device-executor.openapi.yaml)、
+[`docs/ja/selectors.md`](../../docs/ja/selectors.md)

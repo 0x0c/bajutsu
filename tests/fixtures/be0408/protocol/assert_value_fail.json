@@ -1,0 +1,21 @@
+{
+  "schema": 1,
+  "operation": "assert",
+  "request": {
+    "kind": "value",
+    "selector": { "id": "auth.status" },
+    "equals": "signed-in"
+  },
+  "response": {
+    "ok": false,
+    "elements": [
+      {
+        "traits": ["staticText"],
+        "frame": [0.0, 0.0, 120.0, 20.0],
+        "handle": "h7",
+        "identifier": "auth.status",
+        "value": "signed-out"
+      }
+    ]
+  }
+}

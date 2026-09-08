@@ -1,0 +1,68 @@
+{
+  "schema": 1,
+  "cases": [
+    {
+      "name": "text_wins_outright_no_derivation",
+      "note": "text is the visible label; derivation never runs when the node carries its own text",
+      "xml": "<hierarchy><node class=\"android.widget.Button\" text=\"Log\" clickable=\"true\" bounds=\"[0,0][100,50]\" /></hierarchy>",
+      "targetFrame": [0.0, 0.0, 100.0, 50.0],
+      "expectedLabel": "Log"
+    },
+    {
+      "name": "content_desc_wins_when_text_absent",
+      "note": "content-desc is the fallback for an element carrying only a content description (an icon-only control)",
+      "xml": "<hierarchy><node class=\"android.widget.ImageButton\" content-desc=\"Search\" clickable=\"true\" bounds=\"[0,0][50,50]\" /></hierarchy>",
+      "targetFrame": [0.0, 0.0, 50.0, 50.0],
+      "expectedLabel": "Search"
+    },
+    {
+      "name": "non_clickable_container_does_not_derive_a_label",
+      "note": "label derivation is scoped to clickable (interactive) nodes: a plain layout container with a text child stays label-less, so the tree is not flooded with synthetic container labels",
+      "xml": "<hierarchy><node class=\"android.view.View\" text=\"\" clickable=\"false\" bounds=\"[0,0][100,100]\"><node class=\"android.widget.TextView\" text=\"Inside\" clickable=\"false\" bounds=\"[0,0][50,50]\" /></node></hierarchy>",
+      "targetFrame": [0.0, 0.0, 100.0, 100.0],
+      "expectedLabel": null
+    },
+    {
+      "name": "derives_from_single_non_clickable_descendant",
+      "note": "a Compose NavigationBarItem dumps as a clickable node with no own text/content-desc; its visible caption lives in a child TextView",
+      "xml": "<hierarchy><node class=\"android.view.View\" text=\"\" clickable=\"true\" bounds=\"[0,2120][200,2340]\"><node class=\"android.widget.TextView\" text=\"Log\" clickable=\"false\" bounds=\"[10,2250][90,2300]\" /></node></hierarchy>",
+      "targetFrame": [0.0, 2120.0, 200.0, 220.0],
+      "expectedLabel": "Log"
+    },
+    {
+      "name": "skips_nested_clickable_subtree",
+      "note": "a clickable descendant is its own control (its own button + derived label), so its text is not folded into the outer control's label",
+      "xml": "<hierarchy rotation=\"0\"><node class=\"android.view.View\" text=\"\" clickable=\"true\" bounds=\"[0,2120][200,2340]\"><node class=\"android.widget.TextView\" text=\"Log\" clickable=\"false\" bounds=\"[10,2250][90,2300]\" /><node class=\"android.view.View\" text=\"\" clickable=\"true\" bounds=\"[100,2130][190,2180]\"><node class=\"android.widget.TextView\" text=\"9\" clickable=\"false\" bounds=\"[110,2130][180,2180]\" /></node></node></hierarchy>",
+      "targetFrame": [0.0, 2120.0, 200.0, 220.0],
+      "expectedLabel": "Log"
+    },
+    {
+      "name": "skips_nested_clickable_subtree_badge_derives_its_own_label",
+      "note": "the same tree as the case above: the nested badge derives its own label from its own descendant, independent of the outer control",
+      "xml": "<hierarchy rotation=\"0\"><node class=\"android.view.View\" text=\"\" clickable=\"true\" bounds=\"[0,2120][200,2340]\"><node class=\"android.widget.TextView\" text=\"Log\" clickable=\"false\" bounds=\"[10,2250][90,2300]\" /><node class=\"android.view.View\" text=\"\" clickable=\"true\" bounds=\"[100,2130][190,2180]\"><node class=\"android.widget.TextView\" text=\"9\" clickable=\"false\" bounds=\"[110,2130][180,2180]\" /></node></node></hierarchy>",
+      "targetFrame": [100.0, 2130.0, 90.0, 50.0],
+      "expectedLabel": "9"
+    },
+    {
+      "name": "derives_from_multiple_descendants_joined_in_document_order",
+      "note": "collect() is depth-first pre-order; a non-clickable child with text still has its own children explored too",
+      "xml": "<hierarchy><node class=\"android.view.View\" text=\"\" clickable=\"true\" bounds=\"[0,0][200,100]\"><node class=\"android.widget.TextView\" text=\"Icon\" clickable=\"false\" bounds=\"[0,0][100,50]\"><node class=\"android.widget.TextView\" text=\"Caption\" clickable=\"false\" bounds=\"[0,50][100,100]\" /></node></node></hierarchy>",
+      "targetFrame": [0.0, 0.0, 200.0, 100.0],
+      "expectedLabel": "Icon Caption"
+    },
+    {
+      "name": "no_text_anywhere_derives_none",
+      "note": "an empty parts list joins to the empty string, which the `or None` in _derived_label degrades to an honest absence",
+      "xml": "<hierarchy><node class=\"android.view.View\" text=\"\" clickable=\"true\" bounds=\"[0,0][100,50]\"><node class=\"android.widget.View\" text=\"\" clickable=\"false\" bounds=\"[0,0][50,50]\" /></node></hierarchy>",
+      "targetFrame": [0.0, 0.0, 100.0, 50.0],
+      "expectedLabel": null
+    },
+    {
+      "name": "descendant_content_desc_is_never_folded_into_the_join",
+      "note": "content-desc is this driver's value channel (SPEC §2.1 mirrors assertion state into it); a descendant carrying only content-desc contributes nothing to the derived label, even though content-desc alone would win outright at the node's own level (see content_desc_wins_when_text_absent)",
+      "xml": "<hierarchy><node class=\"android.view.View\" text=\"\" clickable=\"true\" bounds=\"[0,0][100,50]\"><node class=\"android.widget.ImageView\" content-desc=\"decorative icon\" clickable=\"false\" bounds=\"[0,0][50,50]\" /></node></hierarchy>",
+      "targetFrame": [0.0, 0.0, 100.0, 50.0],
+      "expectedLabel": null
+    }
+  ]
+}

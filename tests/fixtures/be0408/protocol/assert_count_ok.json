@@ -1,0 +1,28 @@
+{
+  "schema": 1,
+  "operation": "assert",
+  "request": {
+    "kind": "count",
+    "selector": { "idMatches": "result.row.*" },
+    "atLeast": 2
+  },
+  "response": {
+    "ok": true,
+    "elements": [
+      {
+        "traits": ["cell"],
+        "frame": [0.0, 0.0, 300.0, 44.0],
+        "handle": "h8",
+        "identifier": "result.row.1",
+        "label": "A"
+      },
+      {
+        "traits": ["cell"],
+        "frame": [0.0, 44.0, 300.0, 44.0],
+        "handle": "h9",
+        "identifier": "result.row.2",
+        "label": "B"
+      }
+    ]
+  }
+}

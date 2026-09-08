@@ -4,7 +4,7 @@
 
 > 「どの要素を操作または検証するか」をどう指定し、どう一意に確定するかを説明します。Bajutsu の決定性はこのモジュールに集約されています。すべての実行系（orchestrator / drivers / assertions）がここに依存します。
 >
-> 実装: `bajutsu/common/drivers/base.py`。
+> 実装: `bajutsu/common/drivers/base/_functions.py`。
 
 関連: [concepts の決定性原則](concepts.md#3-決定性ファースト4-つの具体策) · [scenarios の DSL](scenarios.md#アサーション-dsl) · [drivers](drivers.md)
 
@@ -60,7 +60,7 @@ class Element(TypedDict):
 ### オーサリング表現と実行時表現
 
 - シナリオ YAML 側の[セレクタ](glossary.md#シナリオのオーサリング)は `scenario/models/selector.py` の `Selector`（pydantic、`idMatches` 等の alias を持つ）です。
-- 解決に渡るのは `common/drivers/base.py` の `Selector`（TypedDict）です。
+- 解決に渡るのは `common/drivers/base/selector.py` の `Selector`（TypedDict）です。
 - 変換は `Selector.as_selector()` で行います（`None` を除いて TypedDict 化）。
 
 ## 解決セマンティクス
@@ -94,7 +94,7 @@ class Element(TypedDict):
 > **トレードオフ**：iOS では `other` が、このドライバが名前を付けていない実在のコントロールも含みます。`checkBox`、`radioButton`、`popUpButton`、`stepper`、`datePicker` などは、汎用ラッパーと同じく `typeName` の `default:` 節に落ちます（`BajutsuKit/Runner/Sources/XcuitestElementProvider.swift`）。そうしたコントロールが、同じ label を持つ分類済みの兄弟要素と衝突すると、`AmbiguousSelector` を送出せず分類済みの側を黙って残します。影響するのは同一セレクタでの衝突だけであり、分類済みの兄弟要素がなく単独で解決される未分類コントロールには影響しません。`UIDatePicker` は、この隙間が実質的な損失にならない例です。`other` のコンテナの下にあるホイールはそれぞれ `pickerWheel` に分類されるため、[`setPickerValue`](scenarios.md#setpickervalue) はホイールを直接指定できます。日付ピッカーの値を設定するために、親要素の分類を埋める必要はありません。
 
 ```python
-# common/drivers/base.py（抜粋）
+# common/drivers/base/_functions.py（抜粋）
 def resolve_unique(elements, sel):
     candidates = _collapse_identical_duplicates(find_all(elements, sel))
     if len(candidates) > 1 and "other" not in sel.get("traits", []):
@@ -137,9 +137,116 @@ adb（Android）、playwright（web）、fake ドライバは semantic tap を�
 
 `id` は各バックエンドが自分自身のアクセシビリティ id から取得します。XCUITest は `accessibilityIdentifier`、adb は `resource-id`（パッケージ接頭辞を除去）、web は `data-testid` です。いずれも `Element.identifier` に正規化されるため、`id` セレクタは正規化形に対して直接解決できます。
 
+## 別言語（Swift・Kotlin）への移植契約
+
+[BE-0408](../../roadmaps/BE-0408-step-latency-device-executor-protocol/BE-0408-step-latency-device-executor-protocol-ja.md)
+は `find_all` と `resolve_unique` を Swift と Kotlin へ移植します。デバイス側の実行器は、これにより
+ホストへ往復せずセレクタを解決できます。2つの移植先は、このモジュールの Python 実装が選ぶのと同じ
+要素へ解決しなければなりません。曖昧な一致に対しても、同じように失敗しなければなりません。本節は、
+コードを読むだけでは見落としうる規則をまとめます。移植先が保つべき、閉じてはならない相違も2つ挙げ
+ます。
+
+`tests/fixtures/be0408/` は、この契約を機械的に検証できる形で保持します。`selector_resolution.json` は
+`find_all` と `resolve_unique` を39件のケースで再生します。`android_derived_label.json` は Android
+のラベル導出規則を9件のケースで再生します。`tests/test_selector_fixtures.py` が、各ケースをこの
+モジュール自身の関数へ照合します。この照合が壊れる変更は、移植先へ届く前に高速ゲートで失敗します。
+
+### 2つの異なるマッチングエンジン
+
+`idMatches` と `labelMatches` は、マッチングエンジンを共有しません。`idMatches` は
+`fnmatch.fnmatchcase` を使います。大文字と小文字を区別する、完全アンカーの glob です。
+`labelMatches` は `re.search` を使います。アンカーなしの正規表現です。glob ライブラリの既定の
+アンカー方式は、正規表現エンジンの既定と異なることが多いです。移植の際は、各フィールドの
+エンジンが Python と同じアンカー方式になっているかを確認してください。`idMatches` は完全
+アンカー、`labelMatches` はアンカーなしです。
+
+### フィールドが存在することと、値が非 null であることは別
+
+シナリオ側の `Selector` モデルは、解決へ渡す前にすべての `None` フィールドを落とします。これを
+行うのは `as_selector()` で、`bajutsu/common/scenario/models/selector.py` に定義されています。
+ワイヤー形式でフィールドが欠けていることは、常に「指定されていない」ことを意味します。「空として
+指定された」ことは意味しません。移植先は、セレクタのフィールドへ明示的な null を渡されたとき、
+それを「存在するが空」の条件として扱ってはなりません。
+
+### `find_all` は例外を送出せず、要素は文書順で返る
+
+`find_all` に曖昧性の概念はありません。一致したすべての要素を、入力リストと同じ順で返します。
+`within` は、その結果をコンテナの frame の内側にある要素へ絞り込みます。この包含関係は幾何的
+です。辺を含み、親ポインタを持たないフラットな要素リストの上で判定します。`within` セレクタは、
+何段でもネストできます。境界の場合として、候補自身の frame がコンテナの frame と一致するケース
+も包含に含まれます。自分自身をスコープする要素はこの判定を満たします。バグとして扱わず、想定内の
+挙動として扱ってください。
+
+### 重複を1件へ畳む鍵
+
+`resolve_unique` は候補を数える前に、内容が同一の候補を1件の代表へ畳みます。ある既知の XCUITest
+の癖がこの畳み込みを動機づけています。標準のアラートボタンが、見分けのつかない状態で二重登録
+されることがあるためです。畳み込みの鍵は次のとおりです。
+
+- `identifier`
+- `label`
+- トレイトの**集合**（順序は問いません）
+- `value`
+- frame の完全一致
+
+`nativeZ` は意図的にこの鍵から外れています。この項目は診断専用で、識別には使いません。他の
+すべてのフィールドが一致する2件の候補は、`nativeZ` の値がどれだけ離れていても畳まれます。
+
+### `other` トレイトの除外と、`index` が数える対象
+
+`resolve_unique` は、曖昧性を判定する前に `other` トレイトを持つ候補をすべて除外します。この
+除外には2つの例外があります。セレクタ自身が `other` を対象にしている場合、または残る候補が
+すべて `other` の場合です。`index` はその後、除外後の集合の中で位置を数えます。生の `find_all`
+の結果を数えるのではありません。除外された `other` の候補は、後続の位置を1つもずらしてはなり
+ません。候補数がゼロに対する `index` は、「範囲外」であり「一致なし」ではありません。移植先の
+独自のエラー分類も、この2種類を区別する必要があります。Python のメッセージ本文は日本語で、実装
+固有です。移植先が必要とするのは分類だけで、その文言までは要りません。
+
+### Android のラベル導出規則
+
+`text` や `content-desc` を持たない、クリック可能な Android のノードは、自分の子孫からラベルを
+導出します。結合は深さ優先の行きがけ順で進みます。これは `_derived_label` で、
+`bajutsu/common/drivers/adb/_functions.py` に定義されています。ネストしたクリック可能な子孫は、
+部分木ごとまるごとスキップされます。その子孫は、それ自身が1つの独立したコントロールだからです。
+自分のラベルを自分で持ちます。その子孫のテキストは、親のラベルへ折り込まれません。クリック不可の
+コンテナは、ラベルを一切導出しません。導出が働くのはクリック可能なノードだけです。
+
+**結合が取り込むのは子孫の `text` だけです。`content-desc` は取り込みません。**
+`content-desc` はこのドライバ自身の値チャネルです。ショーケースアプリはアサーションの状態を
+ここへ映します。ラベルへの結合に含めると、その値が漏れだしかねません。`text` を持たず
+`content-desc` だけを持つ子孫は、結合に何も寄与しません。
+`android_derived_label.json` の `descendant_content_desc_is_never_folded_into_the_join` が
+これを固定しています。`content-desc` も取り込む移植は、端末へ届く前にこのケースで失敗します。
+
+この規則はセレクタ解決より1段手前で働きます。セレクタが後で照合する `Element` そのものを
+組み立てる段階だからです。デバイス側の Android 実行器の側も、自分のアクセシビリティ読み取り
+から同じラベルへ到達しなければなりません。ホストの `/source` 読み取りが到達するのと同じ
+ラベルです。そうでなければ、ラベルに基づくセレクタが、実行の片側では解決し、もう片側では
+失敗しかねません。
+
+### 移植先が保つべき、閉じてはならない2つの相違
+
+既存の Swift の挙動のうち2つは、意図的にこのモジュールと異なります。新しい移植先は、どちらも
+Python 側の挙動へ揃えてはなりません。
+
+`PositionPath.framesEqual` は、frame の4つの値それぞれに1ポイント分の遊びを許します。
+`BajutsuKit/Sources/BajutsuRunner/PositionPath.swift` にあります。このモジュール自身の重複
+畳み込みの鍵は、代わりに frame を完全一致で比較します。2つの frame が測るタイミングは異なり
+ます。重複畳み込みの frame は、1回のアトミックなスナップショットから得られます。そのため、
+そこでは完全一致こそが正しい判定です。`PositionPath` の frame は、候補ごとに独自のライブな
+再取得から得られます。そこでの遊びは、再取得が持ち込みうる計測ノイズを吸収します。2つの鍵が
+比較するフィールドは揃えてください。両者の間の遊びの有無までは揃えないでください。
+
+`PositionPath.attributesMatch` は `traits` を順序付き配列として比較します。このモジュール自身
+の `matches` は、代わりに `traits` を集合として扱います。この2つは別の問いに答えています。
+`PositionPath` が問うのは、特定の、すでに記録済みの要素がまだ同じ要素かどうかです。自分の
+トレイトを常に一定の順序で報告するデバイスなら、その順序まで比較しても安全です。一方、新規の
+`resolve_unique` の呼び出しには、比較すべき記録済みの順序がそもそもありません。だからこそ、
+このフィールドを意味どおりの集合として扱います。
+
 ## アサーション評価
 
-実装: `bajutsu/assertions/`（`evaluate.py`。BE-0250 で単一モジュールから分割）。`evaluate(elements, assertions) -> list[AssertionResult]` が各アサーションを評価し、`passed(results)` が AND を取ります。**評価は総関数**で、解決失敗（not-found / ambiguous）も例外でなく「失敗した `AssertionResult`」として返します（そのままレポートに載ります）。
+実装: `bajutsu/common/assertions/evaluate/_functions.py`。BE-0250 で単一モジュールから分割し、BE-0411 でクラスごとにパッケージ化しました。`evaluate(elements, assertions) -> list[AssertionResult]` が各アサーションを評価し、`passed(results)` が AND を取ります。**評価は総関数**で、解決失敗（not-found / ambiguous）も例外でなく「失敗した `AssertionResult`」として返します（そのままレポートに載ります）。
 
 ```python
 @dataclass(frozen=True)

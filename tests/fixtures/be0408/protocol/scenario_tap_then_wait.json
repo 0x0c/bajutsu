@@ -1,0 +1,60 @@
+{
+  "schema": 1,
+  "operation": "scenario",
+  "request": {
+    "steps": [
+      {
+        "kind": "tap",
+        "payload": { "selector": { "id": "settings.open" } }
+      },
+      {
+        "kind": "wait",
+        "payload": {
+          "mode": "for",
+          "selector": { "id": "settings.reindex" },
+          "timeoutMs": 4000,
+          "pollBudgetMs": 1500
+        }
+      },
+      {
+        "kind": "assert",
+        "payload": {
+          "kind": "exists",
+          "selector": { "id": "settings.reindex" },
+          "negate": false
+        }
+      }
+    ]
+  },
+  "response": {
+    "results": [
+      {
+        "status": "ok"
+      },
+      {
+        "status": "ok",
+        "elements": [
+          {
+            "traits": ["button"],
+            "frame": [0.0, 40.0, 200.0, 40.0],
+            "handle": "h10",
+            "identifier": "settings.reindex",
+            "label": "再生成"
+          }
+        ]
+      },
+      {
+        "status": "ok",
+        "elements": [
+          {
+            "traits": ["button"],
+            "frame": [0.0, 40.0, 200.0, 40.0],
+            "handle": "h11",
+            "identifier": "settings.reindex",
+            "label": "再生成"
+          }
+        ]
+      }
+    ]
+  }
+}
