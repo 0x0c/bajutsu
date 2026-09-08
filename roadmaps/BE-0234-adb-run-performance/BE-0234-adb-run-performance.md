@@ -9,7 +9,7 @@
 | Author | [@0x0c](https://github.com/0x0c) |
 | Status | **Implemented** |
 | Tracking issue | [Search](https://github.com/bajutsu-e2e/bajutsu/issues?q=is%3Aissue+label%3Aroadmap-tracking+in%3Atitle+"BE-0234") |
-| Implementing PR | [#987](https://github.com/bajutsu-e2e/bajutsu/pull/987) |
+| Implementing PR | [#987](https://github.com/bajutsu-e2e/bajutsu/pull/987), [#1944](https://github.com/bajutsu-e2e/bajutsu/pull/1944) (closes the last unit by decision) |
 | Topic | Platform support |
 | Related | [BE-0007](../BE-0007-android-backend/BE-0007-android-backend.md), [BE-0210](../BE-0210-android-actuation-fidelity/BE-0210-android-actuation-fidelity.md), [BE-0223](../BE-0223-adb-tab-bar-navigation/BE-0223-adb-tab-bar-navigation.md), [BE-0233](../BE-0233-adb-clipboard-fidelity/BE-0233-adb-clipboard-fidelity.md) |
 <!-- /BE-METADATA -->
@@ -203,9 +203,11 @@ with before/after per-step timings recorded on device.
   one-off reads (`screen_size_from_elements(driver.query())` in the shared gesture / alert / crawl
   handlers) each read a tree that is *not* already in hand at the call site, so folding them needs a
   driver-level last-read cache — deferred with the resident-server work below.
-- [ ] **Carved out to a follow-up item** — replace per-dump startup with a resident UI Automator
-  server, `uiautomator dump` kept as fallback. Needs a device to verify and a packaged
-  instrumentation, so it does not fit this item's fast-gate change.
+- [x] ~~Replace per-dump startup with a resident UI Automator server, `uiautomator dump` kept as
+  fallback.~~
+  - Carved out to a follow-up item: needs a device to verify and a packaged instrumentation, so it
+    does not fit this item's fast-gate change. Landed as
+    [BE-0245](../BE-0245-adb-resident-uiautomator-server/BE-0245-adb-resident-uiautomator-server.md).
 - [x] Guard the win with a read-count assertion on the fast gate (`tests/orchestrator/test_read_count.py`
   for the runner reductions, `tests/test_adb.py` for the adb `_settle` reads); a wall-clock timing
   gate stays out of scope (environment-dependent, would be flaky).

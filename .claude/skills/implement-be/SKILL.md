@@ -282,7 +282,15 @@ The implementing PR is what ships the item, so record its new state in this same
 set depends on whether your change completes the item's work breakdown**, because most items ship in
 several units across several PRs — BE-0365, BE-0339, and BE-0381 each did:
 
-- **Every `Progress` box is now ticked** — set `Status` to **Implemented**.
+- **Every `Progress` box is now ticked** — set `Status` to **Implemented**. A unit that closes
+  without shipping code under this item still counts as ticked. This covers a unit you investigated
+  and decided against pursuing. It also covers a unit carved out to a follow-up item that delivers
+  it. Name that follow-up item in the nested reason. Strike through its own description, and nest
+  the reason underneath as a sub-bullet. Do this instead of leaving it open with `Status` stuck at
+  **In progress**. The convention and two worked examples,
+  [BE-0407](../../../roadmaps/BE-0407-step-latency-driver-internal-tuning/BE-0407-step-latency-driver-internal-tuning.md)
+  and [BE-0234](../../../roadmaps/BE-0234-adb-run-performance/BE-0234-adb-run-performance.md), are in
+  [`docs/ai-development.md`](../../../docs/ai-development.md#roadmap-items-be-ids-strict).
 - **Units remain unticked** — leave `Status` at **In progress** (promote it from `Proposal` to that
   if it was still a proposal). Announcing `Implemented` while units 4 and 5 are open misreports the
   item on the [roadmap dashboard](https://bajutsu-e2e.github.io/bajutsu/api/roadmap.html), which
