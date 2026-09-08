@@ -7,7 +7,7 @@
 |---|---|
 | Proposal | [BE-0411](BE-0411-split-multi-class-modules.md) |
 | Author | [@0x0c](https://github.com/0x0c) |
-| Status | **In progress** |
+| Status | **Implemented** |
 | Tracking issue | [Search](https://github.com/bajutsu-e2e/bajutsu/issues?q=is%3Aissue+label%3Aroadmap-tracking+in%3Atitle+"BE-0411") |
 | Implementing PR | [#1940](https://github.com/bajutsu-e2e/bajutsu/pull/1940) |
 | Topic | Codebase quality & technical debt |
@@ -297,7 +297,24 @@ file. Batch 7's commit also updates the `ignore_imports` entry in `pyproject.tom
 - [x] Regenerate `coverage-floors.json` with `make coverage-floors`. Confirm the diff touches
       nothing but file paths.
 - [x] Confirm `make check` passes with every batch landed.
-- [ ] Split each test file that mirrors a split source file, one test module per class.
+- [x] ~~Split each test file that mirrors a split source file, one test module per class.~~
+  - Measured against the finished split, then decided against. 57 test files mirror a split
+    package by name, and they hold 1,771 cases. 61 percent of those cases name none of that
+    package's classes. 30 percent name one class. 10 percent name two or more. Of the 327
+    classes in those packages, 96 turn up by name in a case in their mirror file. In 41 of the
+    57 files, under half the cases resolve to a single class. A per-class split thus has no
+    class to file six cases in ten under. It would leave an empty test module for seven classes
+    in ten. The cause is the one rule 2 already names on the source side. These files group
+    their cases around a module's functions. The split keeps those functions together in
+    `_functions.py`. Other cases group around end-to-end behavior that runs through a public
+    entry point. Splitting per class would re-partition the suite along a boundary its cases do
+    not follow. It would not mirror the source, which is what this unit asked for.
+  - The navigability cost this item exists to remove is real on the test side too.
+    `tests/test_adb.py` runs to 2,730 lines and `tests/test_xcuitest.py` to 2,395. The boundary
+    that would divide them is subject matter, not class. Drawing it needs a design of its own.
+    That design must settle where each subject ends and whether a size ceiling enforces the
+    result. It must also keep the unique filenames pytest's `prepend` import mode requires.
+    That is a roadmap item of its own rather than a unit of this one, and none exists yet.
 
 Log:
 
@@ -383,6 +400,16 @@ Log:
   The script also refuses a package path Git already ignores, before it writes anything.
   A collision between a module's name and an ignore pattern hides from every local check.
   The refusal has to come from the tool that creates the directory.
+
+- PR_PLACEHOLDER — closes the item's last open unit.
+  The test-side split ships no code under this item. Measuring the finished split answered the
+  question the design left open. 57 test files mirror a split package by name, and they hold
+  1,771 cases. 61 percent of them name none of that package's classes. Of those packages' 327
+  classes, 96 turn up by name in a case in their mirror file. The suite groups its cases around
+  a module's functions and around end-to-end behavior. Rule 2 preserves the first of those
+  groupings on the source side, so the split did not create it. A per-class split would have
+  invented an owner for six cases in ten. It would have left an empty module for seven classes
+  in ten. Every other unit having landed, the item is `Implemented`.
 
 ## References
 
