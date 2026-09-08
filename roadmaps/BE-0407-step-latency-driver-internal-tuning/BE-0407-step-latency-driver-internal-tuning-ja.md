@@ -9,7 +9,7 @@
 | 提案者 | [@0x0c](https://github.com/0x0c) |
 | 状態 | **実装済み** |
 | トラッキング Issue | [検索](https://github.com/bajutsu-e2e/bajutsu/issues?q=is%3Aissue+label%3Aroadmap-tracking+in%3Atitle+"BE-0407") |
-| 実装 PR | [#1897](https://github.com/bajutsu-e2e/bajutsu/pull/1897)（グループ 1、作業単位 1、3〜5）、[#1912](https://github.com/bajutsu-e2e/bajutsu/pull/1912)（グループ 1 の作業単位 6、グループ 2 の作業単位 7、9、10、11、12、13、そして 14 の半分）、[#1925](https://github.com/bajutsu-e2e/bajutsu/pull/1925)（グループ 1 の作業単位 2。グループ 1 の完了）、[#1938](https://github.com/bajutsu-e2e/bajutsu/pull/1938)（グループ 3 の作業単位 16、18、19、21、22、23） |
+| 実装 PR | [#1897](https://github.com/bajutsu-e2e/bajutsu/pull/1897)（グループ 1、作業単位 1、3〜5）、[#1912](https://github.com/bajutsu-e2e/bajutsu/pull/1912)（グループ 1 の作業単位 6、グループ 2 の作業単位 7、9、10、11、12、13、そして 14 の半分）、[#1925](https://github.com/bajutsu-e2e/bajutsu/pull/1925)（グループ 1 の作業単位 2。グループ 1 の完了）、[#1938](https://github.com/bajutsu-e2e/bajutsu/pull/1938)（グループ 3 の作業単位 16、18、19、21、22、23）、[#1944](https://github.com/bajutsu-e2e/bajutsu/pull/1944)（作業単位 8、14 の半分、15、17、20、24 を判断によって閉じ、項目を完了） |
 | トピック | Platform support |
 | 関連 | [BE-0105](../BE-0105-xcuitest-single-snapshot-query/BE-0105-xcuitest-single-snapshot-query-ja.md)、[BE-0114](../BE-0114-driver-conformance-suite/BE-0114-driver-conformance-suite-ja.md)、[BE-0234](../BE-0234-adb-run-performance/BE-0234-adb-run-performance-ja.md)、[BE-0259](../BE-0259-assert-query-snapshot-reuse/BE-0259-assert-query-snapshot-reuse-ja.md)、[BE-0310](../BE-0310-ios-accessibility-screen-change-readiness/BE-0310-ios-accessibility-screen-change-readiness-ja.md)、[BE-0341](../BE-0341-pre-action-evidence-capture/BE-0341-pre-action-evidence-capture-ja.md)、[BE-0396](../BE-0396-ios-sfsafariviewcontroller-tree/BE-0396-ios-sfsafariviewcontroller-tree-ja.md)、[BE-0408](../BE-0408-step-latency-device-executor-protocol/BE-0408-step-latency-device-executor-protocol-ja.md)、[BE-0409](../BE-0409-step-latency-ios-device-executor/BE-0409-step-latency-ios-device-executor-ja.md)、[BE-0410](../BE-0410-step-latency-android-device-executor/BE-0410-step-latency-android-device-executor-ja.md) |
 <!-- /BE-METADATA -->
@@ -526,7 +526,7 @@ driver conformance suite
   下がり、`scroll` はエミュレータのばらつきの範囲内で変わりません。作業単位 17、20、24 はいずれも
   実装したうえで、置き換える対象より遅いことが計測でわかったため取り下げました。3 つとも進捗の
   該当項目に理由を記しています。
-- 作業単位 8、14（`MAX_WARM_REUSES` の半分）、15、17、20、24 を、未決のまま残すのでは
+- [#1944](https://github.com/bajutsu-e2e/bajutsu/pull/1944) — 作業単位 8、14（`MAX_WARM_REUSES` の半分）、15、17、20、24 を、未決のまま残すのでは
   なく、対応しないと判断して閉じました。それぞれをあらためて調査した結果、安全に着地
   させる道が見つからなかったためです。作業単位 8 は、座標タップの着地点と `isHittable`
   のヒットポイントを整合させられません。XCUITest の公開 API が、解決済みのヒット
