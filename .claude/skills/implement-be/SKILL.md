@@ -42,9 +42,9 @@ current, invoking it through the Agent tool with `model: "haiku"` passed explici
 call does not inherit that skill's own frontmatter model. Check in at minimum after step 1 (the item's overview
 is now known), step 5 (the plan is confirmed), **once per unit of the step 5 plan as you finish
 it** — step 6 is one checkpoint for the whole step only when that plan came out as a single unit;
-see step 6 below, including handing over the plan's unit titles on the first of those checkpoints so
-`be-progress-tracker` can expand step 6 into one Progress line per unit — step 7 (the review pass
-comes back clean), step 9 (the gate is green), step 10 (the PR is open), and each step 12
+see step 6 below, including handing over the plan's full unit-title list on every one of those
+checkpoints so `be-progress-tracker` can expand step 6 into one Progress line per unit — step 7 (the
+review pass comes back clean), step 9 (the gate is green), step 10 (the PR is open), and each step 12
 follow-up iteration. Every checkpoint hands over the item's own repo-relative roadmap path
 (`roadmaps/BE-NNNN-<slug>/BE-NNNN-<slug>.md`) once that id is allocated and the file exists on
 `main` — true from step 1 on for a standalone run of this workflow, since it only ever targets an
@@ -256,13 +256,15 @@ Build to the Detailed design, matching the codebase's grain:
 unit at a time, not one checkpoint for the whole step.** This is the granularity the plan exists
 to set up: as soon as a unit's files are written (tests included, if that unit's test is part of
 it), dispatch the tracker with that unit's one-sentence work-log line before moving to the next
-unit. **On the first of these checkpoints**, also hand over the full ordered list of unit titles
+unit. **On every one of these checkpoints**, also hand over the full ordered list of unit titles
 from the step 5 plan, verbatim — that is what lets the tracker replace step 6's single Progress line
 with one line per unit, so the page shows which unit is done, which is in progress, and which are
-still ahead, instead of one generic "Implement" line for the whole step. Treat skipping this the
-same as skipping a step-boundary checkpoint elsewhere in this skill — never blocking, but not
-optional either; only an item whose plan came out as a single unit collapses back to one checkpoint
-for the step.
+still ahead, instead of one generic "Implement" line for the whole step. Handing it over every time,
+not just once, costs nothing — it's the same list you already have — and keeps the expansion
+self-healing: a skipped or failed early checkpoint just shifts which call performs it, instead of
+losing it for the rest of the step. Treat skipping this the same as skipping a step-boundary
+checkpoint elsewhere in this skill — never blocking, but not optional either; only an item whose
+plan came out as a single unit collapses back to one checkpoint for the step.
 
 ### 7. Review and refine the diff
 

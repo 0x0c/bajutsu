@@ -33,9 +33,10 @@ workflow hands it, at each checkpoint:
 - the handle of the page an earlier checkpoint already created for this id, when there is one, so
   this call updates that page instead of starting a second one;
 - when a step's own plan has been broken into more than one unit (e.g. `implement-be`'s step 5
-  plan) — the full ordered list of unit titles, copied verbatim from the plan, on the first
-  checkpoint for that step; and, on every unit-level checkpoint after that, which one unit just
-  finished or is now in progress.
+  plan) — the full ordered list of unit titles, copied verbatim from the plan, on *every*
+  unit-level checkpoint for that step, not just the first (a skipped or failed early checkpoint
+  must not cost the expansion permanently), plus which one unit this particular checkpoint reports
+  as done or in progress.
 
 A calling workflow decides for itself which of its own steps are worth a checkpoint — typically the
 same boundaries that already warrant a user-facing update (a branch created, a plan confirmed, code
@@ -105,10 +106,12 @@ Field rules, all mandatory:
   plan is confirmed — replaces that single step line with one line per unit, dot-numbered `{n}.{u}`
   in the plan's own order (`6.1`, `6.2`, `6.3`, …), each using the same three shapes above with the
   unit's own title copied verbatim from the plan in place of `{title}`. This stays a flat list — no
-  nesting, no unit count, no line beyond one per unit. The expansion happens once, on the checkpoint
-  that first hands over the unit list, and never collapses back to a single line, even after every
-  unit is done. A step whose plan comes out as a single unit keeps its plain `{n}. {title}` line, as
-  does any step with no plan to expand from.
+  nesting, no unit count, no line beyond one per unit. Since the unit list arrives on every
+  unit-level checkpoint for that step, expand on whichever call is the first to actually reach this
+  skill while that step's line is still unexpanded — a skipped, failed, or unreadable earlier
+  checkpoint only shifts which call performs the expansion, never loses it. Once expanded, never
+  collapse back to a single line, even after every unit is done. A step whose plan comes out as a
+  single unit keeps its plain `{n}. {title}` line, as does any step with no plan to expand from.
 - **Work log** — newest entry first (prepend, don't append at the bottom). One `<li>` per
   checkpoint, each shaped exactly `<li><time>{timestamp}</time>{one sentence}.</li>` — a single
   sentence, past tense, ending in a period, no line breaks inside it. Never rewrite or delete a
@@ -125,9 +128,14 @@ Field rules, all mandatory:
   classes and Work log entries forward verbatim, advancing Progress and prepending exactly one new
   Work log `<li>` above them. Rebuilding the page from this call's input alone would silently drop
   every earlier entry — that is the one failure this step exists to prevent. **The one exception is
-  the step-expansion call** — when this checkpoint is the first to hand over a step's multi-unit
-  plan, replace that one step's existing single `<li>` with the per-unit `<li>`s described above,
-  all `pending` except the unit this call reports; every other Progress line and every Work log
+  the step-expansion call** — a unit-level checkpoint hands over the step's full unit list every
+  time, not only once, so expand on whichever call is the first to actually find that step's
+  Progress line still a single line: replace it with the per-unit `<li>`s described above, all
+  `pending` except the unit this call reports. That holds even when an earlier checkpoint was
+  skipped, failed, or the page had to be re-seeded after a failed read — the unit list arrives again
+  on this call regardless, so the expansion never depends on any one specific checkpoint landing.
+  Once expanded, treat the step like any other Progress entry — carry its per-unit `<li>`s forward
+  and advance only the one unit this call reports; every other Progress line and every Work log
   entry still carries forward untouched. When the existing page
   can't be read, say so as a Work log line — for example
   `<li><time>{timestamp}</time>Could not read the existing page; entries before this point may be missing.</li>`
