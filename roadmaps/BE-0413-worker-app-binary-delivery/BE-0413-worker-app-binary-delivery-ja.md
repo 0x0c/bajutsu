@@ -1,14 +1,14 @@
-[English](BE-XXXX-worker-app-binary-delivery.md) · **日本語**
+[English](BE-0413-worker-app-binary-delivery.md) · **日本語**
 
-# BE-XXXX — アップロードされたアプリバイナリを、ジョブを実行する Worker へ届ける
+# BE-0413 — アップロードされたアプリバイナリを、ジョブを実行する Worker へ届ける
 
 <!-- BE-METADATA -->
 | 項目 | 値 |
 |---|---|
-| 提案 | [BE-XXXX](BE-XXXX-worker-app-binary-delivery-ja.md) |
+| 提案 | [BE-0413](BE-0413-worker-app-binary-delivery-ja.md) |
 | 提案者 | [@paihu](https://github.com/paihu) |
 | 状態 | **実装済み** |
-| トラッキング Issue | [検索](https://github.com/bajutsu-e2e/bajutsu/issues?q=is%3Aissue+label%3Aroadmap-tracking+in%3Atitle+"BE-XXXX") |
+| トラッキング Issue | [検索](https://github.com/bajutsu-e2e/bajutsu/issues?q=is%3Aissue+label%3Aroadmap-tracking+in%3Atitle+"BE-0413") |
 | 実装 PR | [#1933](https://github.com/bajutsu-e2e/bajutsu/pull/1933) |
 | トピック | Web UI のホスティング |
 <!-- /BE-METADATA -->

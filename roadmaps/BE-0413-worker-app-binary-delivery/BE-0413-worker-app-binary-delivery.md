@@ -1,14 +1,14 @@
-**English** · [日本語](BE-XXXX-worker-app-binary-delivery-ja.md)
+**English** · [日本語](BE-0413-worker-app-binary-delivery-ja.md)
 
-# BE-XXXX — Deliver an uploaded app binary to the worker that runs the job
+# BE-0413 — Deliver an uploaded app binary to the worker that runs the job
 
 <!-- BE-METADATA -->
 | Field | Value |
 |---|---|
-| Proposal | [BE-XXXX](BE-XXXX-worker-app-binary-delivery.md) |
+| Proposal | [BE-0413](BE-0413-worker-app-binary-delivery.md) |
 | Author | [@paihu](https://github.com/paihu) |
 | Status | **Implemented** |
-| Tracking issue | [Search](https://github.com/bajutsu-e2e/bajutsu/issues?q=is%3Aissue+label%3Aroadmap-tracking+in%3Atitle+"BE-XXXX") |
+| Tracking issue | [Search](https://github.com/bajutsu-e2e/bajutsu/issues?q=is%3Aissue+label%3Aroadmap-tracking+in%3Atitle+"BE-0413") |
 | Implementing PR | [#1933](https://github.com/bajutsu-e2e/bajutsu/pull/1933) |
 | Topic | Hosting the web UI |
 <!-- /BE-METADATA -->
