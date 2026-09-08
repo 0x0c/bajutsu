@@ -313,10 +313,10 @@ half alone; *Progress* below records the measurement behind dropping its `elemen
 - [x] Group 2, unit 14 — half shipped. Skipping reinstall when the app bundle's digest is
   unchanged landed, scoped to `reinstall: overwrite` (never `clean`, whose uninstall-then-install
   is a deliberate data wipe the digest check must not skip). ~~Raising
-  `BAJUTSU_XCUITEST_MAX_WARM_REUSES` above 3~~
-  - Not pursued: that default is BE-0291's own empirical finding for when the resident runner
-    starts crashing, and nothing in this pass measured a device that tolerates more reuses to
-    justify moving it. Not pursued further within this item.
+  `BAJUTSU_XCUITEST_MAX_WARM_REUSES` above 3 did not.~~
+  - Not pursued further within this item: that default is BE-0291's own empirical finding for
+    when the resident runner starts crashing, and nothing in this pass measured a device that
+    tolerates more reuses to justify moving it.
 - [x] ~~Group 2, unit 15 — type text via `simctl pbcopy` and a paste keystroke.~~
   - Attempted, then reverted after an on-device run of `text_editing.yaml`:
     `app.typeKey("v", modifierFlags: .command)` triggers iOS's cross-app "Allow Paste" consent
