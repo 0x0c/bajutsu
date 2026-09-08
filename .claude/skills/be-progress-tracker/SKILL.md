@@ -31,7 +31,11 @@ workflow hands it, at each checkpoint:
 - the roadmap item's own repo-relative path (`roadmaps/BE-NNNN-<slug>/BE-NNNN-<slug>.md`), once it
   exists — omitted before allocation, since the file (and its slug) don't exist yet;
 - the handle of the page an earlier checkpoint already created for this id, when there is one, so
-  this call updates that page instead of starting a second one.
+  this call updates that page instead of starting a second one;
+- when a step's own plan has been broken into more than one unit (e.g. `implement-be`'s step 5
+  plan) — the full ordered list of unit titles, copied verbatim from the plan, on the first
+  checkpoint for that step; and, on every unit-level checkpoint after that, which one unit just
+  finished or is now in progress.
 
 A calling workflow decides for itself which of its own steps are worth a checkpoint — typically the
 same boundaries that already warrant a user-facing update (a branch created, a plan confirmed, code
@@ -97,9 +101,14 @@ Field rules, all mandatory:
   - done: `<li class="done"><span class="mark">✓</span> {n}. {title}</li>`
   - in progress: `<li class="active"><span class="mark">▶</span> {n}. {title} — in progress</li>`
   - pending: `<li class="pending"><span class="mark">○</span> {n}. {title}</li>`
-- **A checkpoint that reports a *unit within* a step** — `implement-be`'s step 6 checks in once
-  per plan unit — leaves that step's line at `active` / `— in progress` and records the unit in the
-  Work log alone. Never add a sub-list, a unit count, or any extra Progress line for it.
+- **A step whose plan comes out as more than one unit** — `implement-be`'s step 6, once step 5's
+  plan is confirmed — replaces that single step line with one line per unit, dot-numbered `{n}.{u}`
+  in the plan's own order (`6.1`, `6.2`, `6.3`, …), each using the same three shapes above with the
+  unit's own title copied verbatim from the plan in place of `{title}`. This stays a flat list — no
+  nesting, no unit count, no line beyond one per unit. The expansion happens once, on the checkpoint
+  that first hands over the unit list, and never collapses back to a single line, even after every
+  unit is done. A step whose plan comes out as a single unit keeps its plain `{n}. {title}` line, as
+  does any step with no plan to expand from.
 - **Work log** — newest entry first (prepend, don't append at the bottom). One `<li>` per
   checkpoint, each shaped exactly `<li><time>{timestamp}</time>{one sentence}.</li>` — a single
   sentence, past tense, ending in a period, no line breaks inside it. Never rewrite or delete a
@@ -115,7 +124,11 @@ Field rules, all mandatory:
   the existing page first (`Artifact({action: "read", url})`) and carry its Progress `<li>`
   classes and Work log entries forward verbatim, advancing Progress and prepending exactly one new
   Work log `<li>` above them. Rebuilding the page from this call's input alone would silently drop
-  every earlier entry — that is the one failure this step exists to prevent. When the existing page
+  every earlier entry — that is the one failure this step exists to prevent. **The one exception is
+  the step-expansion call** — when this checkpoint is the first to hand over a step's multi-unit
+  plan, replace that one step's existing single `<li>` with the per-unit `<li>`s described above,
+  all `pending` except the unit this call reports; every other Progress line and every Work log
+  entry still carries forward untouched. When the existing page
   can't be read, say so as a Work log line — for example
   `<li><time>{timestamp}</time>Could not read the existing page; entries before this point may be missing.</li>`
   — rather than quietly starting a fresh log.
