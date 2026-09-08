@@ -15,7 +15,7 @@
 
 ## Introduction
 
-A companion proposal defines a device-side step-execution protocol — what moves from the host to the
+[BE-0408](../BE-0408-step-latency-device-executor-protocol/BE-0408-step-latency-device-executor-protocol.md) defines a device-side step-execution protocol — what moves from the host to the
 device, what stays on the host, and the selector-semantics contract both platforms share — as the
 route to Bajutsu's 250–500 millisecond per-step target, past what host-side driver tuning alone can
 reach. This item is the iOS half of that protocol's implementation: a step executor that runs inside
@@ -34,18 +34,20 @@ and each attribute read pays, since the runner already has the accessibility tre
 The estimate this item should be checked against once built: a tap step at roughly 35 milliseconds
 for a single `app.snapshot()`, 100–200 milliseconds for a coordinate-based tap, and 35–70
 milliseconds for the settle judgment — around 200–350 milliseconds total, with the screenshot moved
-off the critical path. A later reader can confirm this the same way the driver-internal-tuning
-companion item's measurements were taken: trace a real tap step against this executor and compare the
-result to today's iOS baseline of 0.95–1.07 seconds.
+off the critical path. A later reader can confirm this the same way [BE-0407](../BE-0407-step-latency-driver-internal-tuning/BE-0407-step-latency-driver-internal-tuning.md)'s driver-internal-tuning
+measurements were taken: trace a real tap step against this executor and compare the result to
+today's iOS baseline of 0.95–1.07 seconds.
 
 ## Detailed design
 
 **Implementation order.** This item is the third of four related items in a strict order: the
-driver-internal-tuning item, the device-side protocol item, then this item, then the Android executor
-item. **Work on this item must not begin until the device-side protocol item is complete** — this
+driver-internal-tuning item ([BE-0407](../BE-0407-step-latency-driver-internal-tuning/BE-0407-step-latency-driver-internal-tuning.md)),
+the device-side protocol (BE-0408), then this item, then the Android executor
+([BE-0410](../BE-0410-step-latency-android-device-executor/BE-0410-step-latency-android-device-executor.md)).
+**Work on this item must not begin until BE-0408 is complete** — this
 item implements that item's protocol and selector-semantics contract, and starting against a
 still-changing design would need rework whenever that design changed under it. Once this item ships,
-the Android executor item must not begin until this item is complete either: sequencing the two
+BE-0410 must not begin until this item is complete either: sequencing the two
 platform executors lets the selector-semantics port (`resolve_unique` to Swift here, to Kotlin there)
 happen once, in this item, before it is repeated for the other platform, so a gap this item's port
 surfaces does not have to be independently rediscovered by both at once.
@@ -68,18 +70,18 @@ reasons:
 ### The executor
 
 Built as an addition to the existing `APIHandler` HTTP server, adding a `POST /scenario` endpoint that
-takes a step sequence (per the companion protocol item's stage 4). The executor does four things
+takes a step sequence (per BE-0408's stage 4). The executor does four things
 natively:
 
 1. **Resolve selectors from a single `app.snapshot()`.** The host's `resolve_unique` selector logic
    (`bajutsu/common/drivers/base.py`) is ported to Swift and run inside the runner, against the same
    snapshot instead of a fresh per-attribute read.
 2. **Tap by coordinate at the resolved element's frame center**, re-reading its attributes only when
-   staleness is suspected — the same posture the companion driver-internal-tuning item takes for the
+   staleness is suspected — the same posture BE-0407 takes for the
    same technique, generalized here to every tap this executor performs. The coordinate-tap approach
    itself is not new:
    [BE-0396](../BE-0396-ios-sfsafariviewcontroller-tree/BE-0396-ios-sfsafariviewcontroller-tree.md)
-   already takes it for Safari content. Needs review before landing, for the same reason the companion
+   already takes it for Safari content. Needs review before landing, for the same reason BE-0407
    item flags it: a coordinate tap trades one kind of correctness risk (a moved element) for latency,
    so the staleness fallback has to be right — see the Alternatives considered section below.
 3. **Evaluate condition waits with a `snapshot()` loop at a 30–40 millisecond cadence**, entirely
@@ -104,8 +106,8 @@ practice, not a change made preemptively.
 ## Alternatives considered
 
 - **Keep resolving element attributes per-read instead of moving to a single-snapshot resolution
-  inside the runner.** Rejected: this is exactly the redundant-read pattern the companion
-  driver-internal-tuning item already targets at the host level; building a new executor that
+  inside the runner.** Rejected: this is exactly the redundant-read pattern BE-0407 already
+  targets at the host level; building a new executor that
   reproduces the same pattern on-device would forfeit most of this item's own motivation.
 - **Route the executor's selector resolution through the host instead of porting it to Swift.**
   Rejected: routing back to the host for selector resolution reintroduces the exact round trip this
@@ -130,7 +132,7 @@ practice, not a change made preemptively.
 > *Detailed design* (one box per unit of work); the log records what changed and when
 > (oldest first), linking the PRs.
 
-**Sequence status: blocked on the device-side protocol item's completion** (see *Implementation
+**Sequence status: blocked on BE-0408's completion** (see *Implementation
 order* in *Detailed design*). Do not start the checklist below before then.
 
 - [ ] Port `resolve_unique` selector semantics to Swift, verified against the driver conformance suite
@@ -149,8 +151,7 @@ order* in *Detailed design*). Do not start the checklist below before then.
 - [ ] If the tap-synthesis floor remains material after the above, evaluate disabling
   `waitForQuiescenceIncludingAnimationsIdle:` as a follow-up.
 - [x] Once the `roadmap-id` workflow allocates the four ids on `main`, backfill a reciprocal
-  `Related` link with the driver-internal-tuning, device-side protocol, and Android executor items
-  (see the same box on the driver-internal-tuning item).
+  `Related` link with BE-0407, BE-0408, and BE-0410 (see the same box on BE-0407).
 
 ## References
 

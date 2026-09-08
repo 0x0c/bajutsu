@@ -617,7 +617,40 @@ def test_make_resident_defaults_on_when_the_server_apks_are_built(
     monkeypatch.delenv("BAJUTSU_ADB_RESIDENT", raising=False)
     monkeypatch.setattr(adb_resident, "server_apks_built", lambda *a: True)
     env = AndroidEnvironment("adb", "emulator-5554", adb_run=_resolve_activity_run([]))
-    assert isinstance(env._make_resident(), adb_resident.ResidentServer)
+    server = env._make_resident()
+    assert isinstance(server, adb_resident.ResidentServer)
+
+
+def test_the_resident_server_is_wired_to_the_runs_own_install_record(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # BE-0407 unit 22 only saves anything because the record outlives the lease: the environment owns
+    # it and every lease's server shares it. Dropping the keyword here would leave the unit dead in
+    # production with every test still green, since the server's own tests pass their own dict.
+    monkeypatch.delenv("BAJUTSU_ADB_RESIDENT", raising=False)
+    monkeypatch.setattr(
+        "bajutsu.common.backend_cli.adb_resident.server_apks_built", lambda *a: True
+    )
+    env = AndroidEnvironment("adb", "emulator-5554", adb_run=_resolve_activity_run([]))
+    first = env._make_resident()
+    second = env._make_resident()
+    assert first._installed is env._installed_resident_apks  # type: ignore[union-attr]
+    assert second._installed is first._installed  # type: ignore[union-attr]
+
+
+def test_the_targets_native_z_choice_reaches_the_resident_server(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # BE-0407 unit 18's whole point is that the walk is asked for. The ask starts at the target's
+    # config and has to survive the trip to the server, or a target that opted in silently reads
+    # nothing while every other target keeps paying for the walk.
+    monkeypatch.delenv("BAJUTSU_ADB_RESIDENT", raising=False)
+    monkeypatch.setattr(
+        "bajutsu.common.backend_cli.adb_resident.server_apks_built", lambda *a: True
+    )
+    env = AndroidEnvironment("adb", "emulator-5554", adb_run=_resolve_activity_run([]))
+    assert env._make_resident(native_z=True)._native_z is True  # type: ignore[union-attr]
+    assert env._make_resident()._native_z is False  # type: ignore[union-attr]
 
 
 def test_make_resident_env_off_opts_out_even_when_built(

@@ -13,14 +13,16 @@ fall back to `uiautomator dump` rather than reading a failed channel as an empty
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import http.client
 import logging
 import math
+import select
 import subprocess
 import time
 import urllib.parse
 import xml.etree.ElementTree as ET
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
@@ -44,7 +46,7 @@ logger = logging.getLogger("bajutsu.adb.resident")
 # The response header the resident server stamps `GET /source` with: the device-clock time
 # (`SystemClock.uptimeMillis`) of the most recent accessibility event it had observed (BE-0332 Unit 3).
 # Carried in a header so the XML body stays byte-identical to `uiautomator dump`'s, keeping
-# `parse_hierarchy` and `narrow_to_active_window` unchanged.
+# `parse_hierarchy` and `narrowed_root` unchanged.
 _READ_MARK_HEADER = "X-Bajutsu-Read-Mark"
 
 # The response header carrying each opted-in view's own `View.getZ()` (BE-0355 Unit 3), in the same
@@ -75,14 +77,18 @@ _NO_ENDPOINT_STATUS = 404
 _SYSTEM_DECOR_PACKAGES = frozenset({"com.android.systemui"})
 
 
-def narrow_to_active_window(xml: str) -> str:
-    """Drop system-decor windows from a `dumpWindowHierarchy` tree so it matches the active-window dump.
+def narrowed_root(xml: str) -> tuple[ET.Element | None, bool]:
+    """Parse `xml` once and drop its system-decor windows; the tree, and whether any were dropped.
 
     `dumpWindowHierarchy` emits one top-level `<node>` per window; `uiautomator dump` scopes to the
     active window. Removing the SystemUI status/navigation-bar windows reconciles the two so
     `parse_hierarchy` produces identical Elements. A tree with no system window (the active-window dump
-    itself) passes through unchanged, and unparseable input is returned as-is so the driver's existing
-    empty-tree handling still applies.
+    itself) comes back untouched with False, and unparseable input yields `(None, False)` so the
+    driver's existing empty-tree handling still applies.
+
+    The tree, not a string: the parse this had to do to strip a window is the same parse the driver
+    would otherwise repeat on the string it produced, so handing the tree over is what removes the
+    host's second pass over every read (BE-0407 unit 23).
 
     Scope: this drops only SystemUI decor. The Android e2e lane (BE-0208) exercises the resident path
     across the showcase scenarios, including one that raises the IME (`search`); the `permission`
@@ -93,17 +99,150 @@ def narrow_to_active_window(xml: str) -> str:
     """
     root = slice_hierarchy_root(xml)
     if root is None:
-        return xml
+        return None, False
     decor = [window for window in root if window.get("package") in _SYSTEM_DECOR_PACKAGES]
-    if not decor:
-        return xml
     for window in decor:
         root.remove(window)
-    return ET.tostring(root, encoding="unicode")
+    return root, bool(decor)
+
+
+# How long a kept-alive connection may sit unused before it is reconnected rather than reused
+# (BE-0407 unit 21). The resident server's own idle ceiling is `SO_TIMEOUT_MS` (5 s), and `_is_stale`
+# below narrows but cannot close the race against it — so this stays comfortably inside that ceiling,
+# leaving a connection old enough for the staleness check to matter never old enough for the server's
+# own timer to have plausibly fired between that check and the send. The same reasoning, and margin, as
+# the XCUITest channel's `_KEEPALIVE_IDLE_RECONNECT_SECONDS`.
+_KEEPALIVE_IDLE_RECONNECT_S = 2.0
+
+
+def _is_stale(conn: http.client.HTTPConnection) -> bool:
+    """Whether `conn` is unfit to carry another request — the peer closed it, or bytes are waiting.
+
+    A zero-timeout `select` answers that *before* any byte of the next request is sent, so the
+    ordinary idle close reconnects cleanly instead of surfacing as a half-sent request whose
+    delivery is ambiguous — the distinction `act` cannot afford to guess through, since a re-sent
+    gesture is a second touch.
+    """
+    sock = conn.sock
+    if sock is None:
+        return True
+    try:
+        readable, _, _ = select.select([sock], [], [], 0)
+        # Readable at all, not just readable-and-closed. On a correctly drained idle connection
+        # there is nothing to read, so bytes waiting *before* a request goes out mean the two ends
+        # disagree about where the last reply ended — and reusing the socket would let the next
+        # `getresponse()` parse those bytes as this request's answer.
+        return bool(readable)
+    except (OSError, ValueError):
+        # `ValueError` is the already-closed socket: its descriptor is -1, which `select` refuses
+        # outright rather than reporting as unreadable. Either way the answer is the same one this
+        # guard exists to give — reconnect, because writing onto a socket whose state cannot be
+        # established is exactly the ambiguity a gesture must not be sent through.
+        return True
+
+
+@dataclass
+class Keepalive:
+    """One HTTP connection to the resident server, reused across a lease's calls (BE-0407 unit 21).
+
+    Every read, clock probe and gesture used to pay its own TCP handshake — 30-150 ms each, against a
+    channel a scenario touches several times per step. The server keeps its end open to match. Held by
+    the lease's `ResidentServer` rather than by a module global, so two lanes driving two devices never
+    share a socket, and passed explicitly to the functions below so a caller that wants a one-shot
+    connection (a test, a probe) simply omits it.
+
+    Safe to reuse serially because the driver issues these calls one at a time, on its own thread; the
+    one call that does run on a worker — the overlapped screenshot (BE-0407 unit 2) — goes through
+    `adb exec-out screencap` and never reaches here.
+    """
+
+    conn: http.client.HTTPConnection | None = None
+    last_success_at: float | None = None
+
+    def connection(self, host_port: int, timeout: float) -> http.client.HTTPConnection:
+        """A connection ready to carry one request: the kept one when it is still good, else a new one."""
+        conn = self.conn
+        idle_too_long = (
+            conn is not None
+            and self.last_success_at is not None
+            and time.monotonic() - self.last_success_at > _KEEPALIVE_IDLE_RECONNECT_S
+        )
+        if conn is not None and (idle_too_long or _is_stale(conn)):
+            self.discard()
+            conn = None
+        if conn is not None and conn.sock is None:
+            # Nothing to reuse after all; a fresh one below rather than a call on a dead handle.
+            self.discard()
+            conn = None
+        if conn is None:
+            conn = http.client.HTTPConnection("127.0.0.1", host_port, timeout=timeout)
+            # Split from the send: a connect that fails has delivered nothing, which is what lets a
+            # caller tell "never left the host" from "may already have been acted on".
+            conn.connect()
+            self.conn = conn
+        else:
+            # A reused connection would otherwise keep whatever timeout its last call set — a read
+            # must not inherit an actuation's longer window, nor an actuation a read's shorter one.
+            conn.sock.settimeout(timeout)
+        return conn
+
+    def succeeded(self) -> None:
+        """Mark the exchange complete, so the next call measures its idle gap from here."""
+        self.last_success_at = time.monotonic()
+
+    def discard(self) -> None:
+        """Drop the connection; the next call opens a fresh one. Never reuse one a failure touched."""
+        conn, self.conn = self.conn, None
+        if conn is not None:
+            with contextlib.suppress(OSError):
+                conn.close()
+
+
+@contextlib.contextmanager
+def _channel(
+    host_port: int, keepalive: Keepalive | None, timeout: float
+) -> Iterator[http.client.HTTPConnection]:
+    """The connection one call should use, kept or one-shot, retired correctly either way.
+
+    A `keepalive` is retired on any exception and kept on a clean return — including a return down a
+    branch that read a non-200 and chose not to raise, which is a complete exchange leaving the
+    connection perfectly good (`fetch_clock`'s non-200 and `act`'s `409`). Without one, the
+    connection is closed on the way out exactly as it was before this unit.
+
+    Getting the connection can itself fail, and that failure is converted here rather than left to
+    each caller. Before the connection was kept, `HTTPConnection` connected lazily inside
+    `request()`, so a refused connect surfaced inside the caller's own `try` and became an
+    `AdbResidentError`; connecting eagerly moved it outside. `act` is the caller that noticed — a
+    raw `OSError` escaped it, escaped `_device_act`'s three-exception catch, and failed the step
+    on the one fault class that is provably safe to fall back from, since nothing had been sent.
+    """
+    if keepalive is None:
+        conn = http.client.HTTPConnection("127.0.0.1", host_port, timeout=timeout)
+        try:
+            yield conn
+        finally:
+            conn.close()
+        return
+    try:
+        conn = keepalive.connection(host_port, timeout)
+    except (OSError, http.client.HTTPException) as exc:
+        keepalive.discard()
+        raise AdbResidentError(f"resident channel unreachable on port {host_port}: {exc}") from exc
+    try:
+        yield conn
+    except BaseException:
+        keepalive.discard()
+        raise
+    keepalive.succeeded()
 
 
 def fetch_source(
-    host_port: int, since: float | None = None, *, timeout: float = 5.0
+    host_port: int,
+    since: float | None = None,
+    *,
+    timeout: float = 5.0,
+    native_z: bool = False,
+    keepalive: Keepalive | None = None,
 ) -> HierarchyRead:
     """GET the resident server's current hierarchy over the forwarded loopback host port.
 
@@ -117,35 +256,48 @@ def fetch_source(
             the request as `?since=`, and the resident server blocks until an accessibility event
             postdates it before dumping once — collapsing the host's re-poll into one round trip. None
             (a read with no gesture pending) requests the current hierarchy with no wait.
+        native_z: Ask the device to measure each opted-in view's own `View.getZ()` (BE-0355). Off by
+            default because the walk that answers it covers every node on every read and returns
+            nothing at all for an app that opted no view in (BE-0407 unit 18); a target turns it on
+            in its own config.
+        keepalive: The lease's reused connection, when there is one.
 
     Raises:
         AdbResidentError: the channel could not be reached or did not answer 200 — an infrastructure
             failure the driver catches to fall back to `uiautomator dump`, never a test outcome.
     """
-    conn = http.client.HTTPConnection("127.0.0.1", host_port, timeout=timeout)
-    path = "/source" if since is None else f"/source?since={since}"
+    query = {} if since is None else {"since": since}
+    if native_z:
+        query["nativeZ"] = 1
+    path = "/source" + (f"?{urllib.parse.urlencode(query)}" if query else "")
     try:
-        conn.request("GET", path)
-        resp = conn.getresponse()
-        body = resp.read()
-        if resp.status != 200:
-            raise AdbResidentError(f"resident server returned HTTP {resp.status}")
-        # An absent or malformed mark here degrades the driver's barrier to its wall-clock budget
-        # rather than failing the read: the mark only ever tightens the wait.
-        mark = _parse_mark(resp.getheader(_READ_MARK_HEADER))
-        native_z = _parse_native_z(resp.getheader(_NATIVE_Z_HEADER))
-        # A truncated/garbled body (a mid-write device server) must degrade to the dump fallback, not
-        # escape past the driver's AdbResidentError-only catch — whether it surfaces as a
-        # UnicodeDecodeError (garbled bytes) or an http.client.HTTPException (IncompleteRead from a
-        # short body, BadStatusLine/UnknownProtocol from a malformed status line).
-        return HierarchyRead(body.decode("utf-8"), mark, native_z=native_z)
+        with _channel(host_port, keepalive, timeout) as conn:
+            conn.request("GET", path)
+            resp = conn.getresponse()
+            body = resp.read()
+            if resp.status != 200:
+                raise AdbResidentError(f"resident server returned HTTP {resp.status}")
+            # An absent or malformed mark here degrades the driver's barrier to its wall-clock budget
+            # rather than failing the read: the mark only ever tightens the wait.
+            mark = _parse_mark(resp.getheader(_READ_MARK_HEADER))
+            measured_z = _parse_native_z(resp.getheader(_NATIVE_Z_HEADER))
+            # A truncated/garbled body (a mid-write device server) must degrade to the dump fallback,
+            # not escape past the driver's AdbResidentError-only catch — whether it surfaces as a
+            # UnicodeDecodeError (garbled bytes) or an http.client.HTTPException (IncompleteRead from
+            # a short body, BadStatusLine/UnknownProtocol from a malformed status line).
+            return HierarchyRead(body.decode("utf-8"), mark, native_z=measured_z)
     except (OSError, UnicodeDecodeError, http.client.HTTPException) as exc:
         raise AdbResidentError(f"resident channel unreachable on port {host_port}: {exc}") from exc
-    finally:
-        conn.close()
 
 
-def act(host_port: int, request: ActRequest, *, timeout: float = 10.0) -> ActOutcome:
+def act(
+    host_port: int,
+    request: ActRequest,
+    *,
+    timeout: float = 10.0,
+    keepalive: Keepalive | None = None,
+    want_tree: bool = True,
+) -> ActOutcome:
     """Ask the resident server to perform one gesture on an element the host already resolved.
 
     The element crosses as its four accessibility fields plus its ordinal among the nodes sharing them,
@@ -158,7 +310,10 @@ def act(host_port: int, request: ActRequest, *, timeout: float = 10.0) -> ActOut
         there, so the host must re-resolve rather than let a coordinate be guessed — and, when the
         gesture landed, whether an accessibility event postdated it before the server replied
         (`_ACT_PUBLISH_HEADER`). A server that never sends that header reports no confirmation, which
-        is what leaves the driver's read-lag barrier armed exactly as it was.
+        is what leaves the driver's read-lag barrier armed exactly as it was. A confirmed gesture also
+        carries the tree the device dumped after that publish (`read`), which is the host's next read
+        already answered (BE-0407 unit 19) — unless `want_tree` is False, which tells the device not
+        to take that dump at all.
 
     Raises:
         AdbResidentError: the channel could not be reached, or answered anything else — including the
@@ -166,6 +321,7 @@ def act(host_port: int, request: ActRequest, *, timeout: float = 10.0) -> ActOut
             actuators, so a device that cannot serve this is never worse off than before.
     """
     fields = {
+        "tree": "1" if want_tree else "0",
         "kind": request.kind,
         "index": str(request.index),
         "count": str(request.count),
@@ -174,14 +330,13 @@ def act(host_port: int, request: ActRequest, *, timeout: float = 10.0) -> ActOut
         "text": request.identity[2],
         "cls": request.identity[3],
     }
-    if request.since is not None:
-        fields["since"] = str(request.since)
     if request.duration_ms is not None:
         fields["durationMs"] = str(request.duration_ms)
+    if request.since is not None:
+        fields["since"] = str(request.since)
     # A longer timeout than a read: the server honors the `since` mark and settles before it injects,
     # and a press-and-hold then holds for its own duration on top of that.
-    conn = http.client.HTTPConnection("127.0.0.1", host_port, timeout=timeout)
-    try:
+    with _channel(host_port, keepalive, timeout) as conn:
         try:
             conn.request("POST", "/act?" + urllib.parse.urlencode(fields))
         except (OSError, http.client.HTTPException) as exc:
@@ -192,13 +347,14 @@ def act(host_port: int, request: ActRequest, *, timeout: float = 10.0) -> ActOut
             ) from exc
         try:
             resp = conn.getresponse()
-            body = resp.read().decode("utf-8", "replace").strip()
+            raw = resp.read()
         except (OSError, http.client.HTTPException) as exc:
             # The request went out, and the device injects before it answers, so the gesture may
             # already have happened. Re-actuating on the coordinate path would be a second touch.
             raise AdbActUncertain(
                 f"resident actuation was sent but its reply was lost on port {host_port}: {exc}"
             ) from exc
+        body = raw.decode("utf-8", "replace").strip()
         if resp.status == _STALE_STATUS:
             logger.debug("resident actuation reported the target moved: %s", body)
             return ActOutcome(acted=False, published_mark=None)
@@ -210,10 +366,55 @@ def act(host_port: int, request: ActRequest, *, timeout: float = 10.0) -> ActOut
         # device could not confirm" — the barrier stays armed — rather than failing a gesture that
         # actually landed.
         return ActOutcome(
-            acted=True, published_mark=_parse_mark(resp.getheader(_ACT_PUBLISH_HEADER))
+            acted=True,
+            published_mark=_parse_mark(resp.getheader(_ACT_PUBLISH_HEADER)),
+            read=_act_read(resp, raw),
         )
-    finally:
-        conn.close()
+
+
+def _act_read(resp: http.client.HTTPResponse, raw: bytes) -> HierarchyRead | None:
+    """The caught-up tree a confirmed gesture's reply carries, or None when it carries none.
+
+    The read mark is what distinguishes the two bodies this endpoint can answer: a bare `ok` from an
+    unconfirmed gesture, and the post-publish dump from a confirmed one (BE-0407 unit 19). Keyed off
+    the header rather than the content type because that is the same signal the driver already trusts
+    to decide the tree is not stale — a body with no mark is one the driver could not have used
+    anyway. An older server sends neither, so it needs no version negotiation.
+
+    A body that will not decode or will not narrow yields None rather than raising: the gesture itself
+    landed, and losing this optimisation only costs the read it would have saved. It is still said out
+    loud once per process, because it is the same mid-write-server symptom `fetch_source` tears the
+    channel down over — at debug only, a server garbling every reply would present as an unexplained
+    slowdown and nothing else.
+    """
+    mark = _parse_mark(resp.getheader(_READ_MARK_HEADER))
+    if mark is None:
+        return None
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        _warn_once("resident actuation returned an undecodable tree; reading again instead")
+        return None
+    root, narrowed = narrowed_root(text)
+    if root is None:
+        _warn_once("resident actuation returned an unparseable tree; reading again instead")
+        return None
+    return HierarchyRead(text, mark, root=root, narrowed=narrowed)
+
+
+# Which one-shot warnings this process has already given. A garbled reply repeats on every gesture,
+# so the first is the diagnosis and the rest are noise. Per process rather than per lease — unlike
+# `AdbDriver`'s own `_mark_warned` / `_clock_warned` / `_act_warned`, which are per driver — because
+# what this reports is a property of the device server's build, not of one lease: a server that
+# garbles a reply garbles it for every lease it serves, and repeating the diagnosis per lease of a
+# long `serve` session would say nothing new.
+_warned: set[str] = set()
+
+
+def _warn_once(message: str) -> None:
+    if message not in _warned:
+        _warned.add(message)
+        logger.warning(message)
 
 
 def _parse_mark(raw: str | None) -> float | None:
@@ -258,7 +459,9 @@ def _parse_native_z(raw: str | None) -> dict[str, float]:
     return found
 
 
-def fetch_clock(host_port: int, *, timeout: float = 5.0) -> float | None:
+def fetch_clock(
+    host_port: int, *, timeout: float = 5.0, keepalive: Keepalive | None = None
+) -> float | None:
     """GET the resident server's current device clock (`SystemClock.uptimeMillis`), or None.
 
     Read just before a gesture (BE-0332 Unit 3) so a later read must postdate it, on the device's own
@@ -266,18 +469,19 @@ def fetch_clock(host_port: int, *, timeout: float = 5.0) -> float | None:
     is an optimisation over the wall-clock budget, so a clock hiccup slows the barrier at worst, never
     fails a read or accepts a stale one.
     """
-    conn = http.client.HTTPConnection("127.0.0.1", host_port, timeout=timeout)
     try:
-        conn.request("GET", "/clock")
-        resp = conn.getresponse()
-        body = resp.read()
-        if resp.status != 200:
-            return None
-        return float(body.decode("utf-8").strip())
-    except (OSError, ValueError, UnicodeDecodeError, http.client.HTTPException):
+        with _channel(host_port, keepalive, timeout) as conn:
+            conn.request("GET", "/clock")
+            resp = conn.getresponse()
+            body = resp.read()
+            if resp.status != 200:
+                return None
+            return float(body.decode("utf-8").strip())
+    # `AdbResidentError` included since `_channel` converts a failed connect into one: this probe is
+    # documented never to raise, and `_capture_mark` relies on that — a clock hiccup must slow the
+    # barrier, never fail the gesture that was about to take a mark.
+    except (OSError, ValueError, UnicodeDecodeError, http.client.HTTPException, AdbResidentError):
         return None
-    finally:
-        conn.close()
 
 
 class _Process(Protocol):
@@ -293,6 +497,9 @@ class _Process(Protocol):
 
 
 Spawn = Callable[[list[str]], _Process]
+# The three per-port calls a lease makes, as the shapes a test can substitute. They take the port and
+# nothing else the caller has to know about: whichever connection carries them, and whether the read
+# asks for `nativeZ`, are bound by `ResidentServer` when it builds its own defaults.
 Fetch = Callable[[int, float | None], HierarchyRead]
 ClockProbe = Callable[[int], float | None]
 ActProbe = Callable[[int, ActRequest], ActOutcome]
@@ -324,6 +531,19 @@ _TEST_APK = (
     _REPO_ROOT / "BajutsuAndroidUIAutomatorServer/server/build/outputs/apk/androidTest/debug"
     "/server-debug-androidTest.apk"
 )
+
+
+def _apk_digest(path: Path) -> str:
+    """A content digest of one APK, naming the exact bytes a device would be given.
+
+    Read in chunks rather than whole: an instrumentation APK runs to a megabyte, and nothing here
+    needs it in memory.
+    """
+    digest = hashlib.sha256()
+    with path.open("rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def server_apks_built(server_apk: Path = _SERVER_APK, test_apk: Path = _TEST_APK) -> bool:
@@ -362,20 +582,51 @@ class ResidentServer:
         *,
         run: adb.RunFn = adb.real_run,
         spawn: Spawn = _default_spawn,
-        fetch: Fetch = fetch_source,
-        clock: ClockProbe = fetch_clock,
-        act_probe: ActProbe = act,
+        fetch: Fetch | None = None,
+        clock: ClockProbe | None = None,
+        act_probe: ActProbe | None = None,
         server_apk: Path = _SERVER_APK,
         test_apk: Path = _TEST_APK,
+        installed: dict[str, tuple[str, str]] | None = None,
+        native_z: bool = False,
     ) -> None:
         self._serial = adb.checked_serial(serial)
         self._run = run
         self._spawn = spawn
-        self._fetch = fetch
-        self._clock = clock
-        self._act = act_probe
+        # One connection for the lease, shared by all three calls below (BE-0407 unit 21). Built here
+        # rather than in `start`, so a `stop`-then-`start` on the same server reuses the record and a
+        # test that substitutes a call gets no socket at all.
+        self._keepalive = Keepalive()
+        # Whether this target asked for the `nativeZ` reading (BE-0407 unit 18). Kept, not just
+        # closed over, because `start` consults it again to decide whether a gesture's own tree can
+        # stand in for a read — a seeded tree carries no `nativeZ` header.
+        self._native_z = native_z
+        # Defaulted here rather than in the signature because the real implementations need two
+        # things only this object knows — its connection, and whether this target asked for
+        # `nativeZ` — while a substituted call takes the bare `(port, …)` shape and neither.
+        self._fetch = fetch or (
+            lambda port, since: fetch_source(
+                port, since, native_z=native_z, keepalive=self._keepalive
+            )
+        )
+        self._clock = clock or (lambda port: fetch_clock(port, keepalive=self._keepalive))
+        # `tree=0` when this target asked for `nativeZ`: the reply cannot carry that reading, so a
+        # tree seeded from it would report every element's position as absent — indistinguishable
+        # from an app that opted no view in, the one confusion BE-0355 works hardest to avoid. Said
+        # on the *request* rather than dropped from the reply, so the device does not build and ship
+        # a settled dump the host will discard, which would make unit 19 a per-gesture regression on
+        # exactly the targets unit 18 exists for.
+        self._act = act_probe or (
+            lambda port, request: act(
+                port, request, keepalive=self._keepalive, want_tree=not native_z
+            )
+        )
         self._server_apk = server_apk
         self._test_apk = test_apk
+        # Which APK pair this run already put on which device (BE-0407 unit 22). Owned by the caller
+        # because a `ResidentServer` lives for one lease while the pair survives the whole run; None
+        # (the default) keeps the reinstall-every-lease behavior every other caller had.
+        self._installed = installed
         self._proc: _Process | None = None
         self._host_port: int | None = None
 
@@ -386,15 +637,7 @@ class ResidentServer:
                 "`make -C BajutsuAndroidUIAutomatorServer build`"
             )
         try:
-            # Clear both first. A device carrying an older pair fails `install -r` outright when the
-            # signing key differs, and where it succeeds it can leave the instrumentation and the
-            # server disagreeing about which endpoints exist — a `/act` that 404s against a server
-            # that has one, which is the confusing half of this channel's failure modes.
-            for package in (adb.RESIDENT_TEST_PACKAGE, adb.RESIDENT_SERVER_PACKAGE):
-                with contextlib.suppress(subprocess.CalledProcessError, OSError):
-                    self._run(adb.uninstall_cmd(self._serial, package))
-            self._run(adb.install_cmd(self._serial, str(self._server_apk)))
-            self._run(adb.install_cmd(self._serial, str(self._test_apk)))
+            self._install_apks()
             self._proc = self._spawn(adb.instrument_cmd(self._serial))
             self._host_port = _parse_forward_port(self._run(adb.forward_cmd(self._serial)))
         except (subprocess.CalledProcessError, OSError, AdbResidentError) as exc:
@@ -412,12 +655,14 @@ class ResidentServer:
         def fetch(since: float | None) -> HierarchyRead:
             try:
                 read = self._fetch(port, since)
-                narrowed = narrow_to_active_window(read.text)
-                # Only when narrowing actually changed something: an active-window dump with no system
-                # decor to strip passes through unchanged, and carrying an identical `raw` alongside
-                # `text` would make every `rawTree` capture write two copies of the same body.
-                raw = read.text if narrowed != read.text else None
-                return HierarchyRead(narrowed, read.mark, raw=raw, native_z=read.native_z)
+                # The device's reply travels on as `text`, untouched; what the driver parses is the
+                # tree narrowing already built from it. `narrowed` is what tells a `rawTree` capture
+                # the two differ — an active-window dump with no system decor to strip would otherwise
+                # have it write two copies of the same body.
+                root, narrowed = narrowed_root(read.text)
+                return HierarchyRead(
+                    read.text, read.mark, native_z=read.native_z, root=root, narrowed=narrowed
+                )
             except AdbResidentError:
                 # Stop the resident server before the driver degrades to `uiautomator dump`. A read
                 # fault is usually a wedged-but-alive instrumentation — a read that outran the socket
@@ -447,8 +692,77 @@ class ResidentServer:
 
         return ResidentChannel(fetch, clock, act_on_device)
 
+    def _install_apks(self) -> None:
+        """Put this run's resident-server pair on the device, unless it is already the pair there.
+
+        The install is the dominant cost of starting a lease — an uninstall of both packages followed
+        by two `install -r` calls, ~6-12 s on a cold emulator — and every lease after the first put
+        the very same bytes back (BE-0407 unit 22). Skipping it needs two things to hold together:
+        that *this run* installed this exact pair on this serial (the digests, which pin the signing
+        key too, since identical bytes cannot be signed differently), and that both packages are
+        still on the device. The second is checked rather than assumed, so a package removed out of
+        band brings the install back rather than leaving the lease to fail on a missing endpoint.
+        What it does not see is a package *replaced* out of band — another checkout's
+        `gradlew installDebug`, say — which `pm path` reports as present, so the skip would take it
+        with the wrong build. Contrived enough to leave uncovered, but not covered.
+        """
+        wanted = (_apk_digest(self._server_apk), _apk_digest(self._test_apk))
+        if (
+            self._installed is not None
+            and self._installed.get(self._serial) == wanted
+            and self._packages_installed()
+        ):
+            logger.debug("resident APKs already installed on %s; skipping reinstall", self._serial)
+            return
+        # Clear both first. A device carrying an older pair fails `install -r` outright when the
+        # signing key differs, and where it succeeds it can leave the instrumentation and the
+        # server disagreeing about which endpoints exist — a `/act` that 404s against a server
+        # that has one, which is the confusing half of this channel's failure modes.
+        if self._installed is not None:
+            # Dropped before the uninstall, not after the install: a failure anywhere below must not
+            # leave a record claiming a pair is installed when the device no longer carries it.
+            self._installed.pop(self._serial, None)
+        for package in (adb.RESIDENT_TEST_PACKAGE, adb.RESIDENT_SERVER_PACKAGE):
+            with contextlib.suppress(subprocess.CalledProcessError, OSError):
+                self._run(adb.uninstall_cmd(self._serial, package))
+        self._run(adb.install_cmd(self._serial, str(self._server_apk)))
+        self._run(adb.install_cmd(self._serial, str(self._test_apk)))
+        if self._installed is not None:
+            self._installed[self._serial] = wanted
+
+    def _packages_installed(self) -> bool:
+        """Whether the device still carries both resident packages; False on any doubt.
+
+        One `pm path` per package — tens of milliseconds against the seconds the skip saves. A fault
+        reads as "not installed", so an unanswerable device reinstalls rather than starting a server
+        that may not be there.
+        """
+        try:
+            for package in (adb.RESIDENT_SERVER_PACKAGE, adb.RESIDENT_TEST_PACKAGE):
+                # The `package:` prefix `pm path` actually emits, not merely non-empty output: an
+                # adb error line or a `pm` diagnostic would otherwise read as "installed" and skip
+                # an install the device needs, leaving the lease to fail on a missing endpoint.
+                if not self._run(adb.package_path_cmd(self._serial, package)).startswith(
+                    "package:"
+                ):
+                    logger.debug(
+                        "resident package %s not reported installed on %s", package, self._serial
+                    )
+                    return False
+        except (subprocess.CalledProcessError, OSError) as exc:
+            # Said out loud, because the consequence is silent: a device that cannot answer this
+            # reinstalls both APKs on every lease, losing the seconds unit 22 exists to save.
+            logger.debug(
+                "could not ask %s about its packages (%s); reinstalling", self._serial, exc
+            )
+            return False
+        return True
+
     def stop(self) -> None:
         """Kill the instrumentation and remove the forward; safe to call on a partial start."""
+        # Before the forward goes away, so the kept connection is closed rather than left pointing at
+        # a port `adb forward --remove` is about to retire (BE-0407 unit 21).
+        self._keepalive.discard()
         if self._proc is not None:
             with contextlib.suppress(OSError):
                 self._proc.terminate()

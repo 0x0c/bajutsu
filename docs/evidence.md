@@ -81,6 +81,14 @@ A `capture:` token is `<kind>[.<modifier>]` ([scenarios](scenarios.md#capture-to
 > `topmost_at_point` falls back to — would read as authoritative while being wrong on exactly the
 > layouts an investigator opens the evidence for, such as an Android view whose `elevation` lifts it
 > above a sibling declared after it.
+>
+> **On Android the target must also ask for it, with `nativeZ: true` under its `targets.<name>`
+> entry.** The reading comes from a walk the resident server performs over every node on every screen
+> read, and that walk costs 20-100 milliseconds whether or not the app opted a single view in
+> ([BE-0407](../roadmaps/BE-0407-step-latency-driver-internal-tuning/BE-0407-step-latency-driver-internal-tuning.md)
+> unit 18). An app that calls `BajutsuZOrder.report(view)` and does not set the flag reads `null`,
+> the same honest absence every other unreported case gives. iOS needs no such flag: its responder
+> answers only when the app links BajutsuKit, so a target that did not opt in pays nothing to ask.
 
 > `rawTree` writes `hierarchy.raw<suffix>` — the device's/runner's own reply, untouched by any of
 > bajutsu's processing: adb's `uiautomator dump`/resident XML (`.xml`), or XCUITest's undecoded

@@ -22,7 +22,11 @@ import pytest
 
 from bajutsu.common.backend_cli.adb_resident import _parse_native_z
 from bajutsu.common.drivers import base
-from bajutsu.common.drivers.adb import parse_hierarchy, parse_hierarchy_with_identities
+from bajutsu.common.drivers.adb import (
+    elements_with_identities,
+    parse_hierarchy,
+    slice_hierarchy_root,
+)
 from bajutsu.common.drivers.dom import parse_dom
 from bajutsu.common.drivers.fake import FakeDriver
 from bajutsu.common.drivers.xcuitest import XcuitestDriver, _Reply
@@ -408,7 +412,7 @@ _TWO_ROWS = (
 
 def test_adb_matches_a_measured_position_onto_the_node_it_names() -> None:
     native_z = {"0,50,100,100|android.widget.Button|com.example|0": 8.0}
-    els, _ = parse_hierarchy_with_identities(_TWO_ROWS, native_z)
+    els, _ = elements_with_identities(slice_hierarchy_root(_TWO_ROWS), native_z)
     assert [el["nativeZ"] for el in els] == [None, 8.0]
 
 
@@ -423,12 +427,12 @@ def test_adb_tells_two_identical_rows_apart_by_their_occurrence() -> None:
         "</hierarchy>"
     )
     key = "0,0,10,10|android.widget.TextView|com.example"
-    els, _ = parse_hierarchy_with_identities(twins, {f"{key}|1": 4.0})
+    els, _ = elements_with_identities(slice_hierarchy_root(twins), {f"{key}|1": 4.0})
     assert [el["nativeZ"] for el in els] == [None, 4.0]
 
 
 def test_adb_reports_no_position_when_the_device_measured_none() -> None:
-    els, _ = parse_hierarchy_with_identities(_TWO_ROWS, {})
+    els, _ = elements_with_identities(slice_hierarchy_root(_TWO_ROWS), {})
     assert [el["nativeZ"] for el in els] == [None, None]
 
 

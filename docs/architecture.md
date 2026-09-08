@@ -654,7 +654,11 @@ Android; on iOS it rests on the fast suite's bookkeeping proof alone.
   injects narrows the wait further still: the server watches its own accessibility event stream for
   the injection to publish and reports that event back, so a confirmed gesture arms no barrier at all,
   while one the device could not confirm arms it exactly as a coordinate injection does (BE-0339
-  Unit 5). Each step is non-inertial (a bounded
+  Unit 5). A confirmed gesture also carries the tree the device dumped once that publish had landed,
+  so the read the driver would otherwise open its next settle with is already answered
+  ([BE-0407](../roadmaps/BE-0407-step-latency-driver-internal-tuning/BE-0407-step-latency-driver-internal-tuning.md) unit 19): the driver adopts that tree
+  only after re-checking that its own mark postdates the gesture, so one mislabelled header cannot
+  seed a pre-gesture screen. Each step is non-inertial (a bounded
   advance with no fling), realized per backend behind `Driver.scroll` and a `ViewportProvider` (web,
   fake report the true viewport directly; a native backend's on-screen-only tree already is one) —
   closing the BE-0210 asymmetry

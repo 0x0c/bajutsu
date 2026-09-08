@@ -590,6 +590,15 @@ def uninstall_cmd(serial: str, package: str) -> list[str]:
     return _adb(serial, "uninstall", package)
 
 
+def package_path_cmd(serial: str, package: str) -> list[str]:
+    """Ask where a package's APK sits on the device; empty output means it is not installed.
+
+    `pm path` rather than `pm list packages`, because it names one package directly instead of
+    filtering a list the device has to build.
+    """
+    return _adb(serial, "shell", "pm", "path", package)
+
+
 # --- resident UI Automator server (BE-0245) ---
 
 # The resident server's fixed loopback port on the device (matches

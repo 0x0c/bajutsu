@@ -65,10 +65,18 @@ class HierarchyRead:
     on the `uiautomator dump` fallback, which carries no such stamp; there the wall-clock budget stands
     in, exactly as before this unit.
 
-    `raw` is the body exactly as the resident server answered it, before `narrow_to_active_window`
-    strips SystemUI decor windows — `text` is what that narrowing produced. None when the caller applies
-    no such transform, so a `rawTree` capture (`RawSourceProvider`) has both halves to diff a mismatch
-    against: the device's own dump, and bajutsu's own processing of it.
+    `text` is the body exactly as the device answered it, untouched by bajutsu's own processing, so a
+    `rawTree` capture (`RawSourceProvider`) can tell a device dump that already looked wrong from one
+    bajutsu changed.
+
+    `root` is that same body parsed once, with the SystemUI decor windows already stripped — the tree
+    the caller should consume. Carrying the parsed tree rather than a re-serialized string is what
+    keeps the host from parsing every read twice (BE-0407 unit 23): narrowing had to parse to strip a
+    window, and the parser then parsed the string it produced. None on the dump fallback and on a
+    body that would not parse, where the caller falls back to slicing `text` itself. `narrowed` says
+    whether stripping actually removed a window, so the `rawTree` capture knows whether the parsed
+    tree is worth serializing beside the reply — and, being the only consumer, pays that serialization
+    only when it is actually taken.
 
     `native_z` maps each opted-in view's content key to its own `View.getZ()` (BE-0355 Unit 3), keyed
     the way it is because the device measures those values in a second walk whose node sequence does
@@ -78,8 +86,9 @@ class HierarchyRead:
 
     text: str
     mark: float | None = None
-    raw: str | None = None
     native_z: dict[str, float] = field(default_factory=dict)
+    root: ET.Element | None = None
+    narrowed: bool = False
 
 
 # Takes the mark a read must postdate (BE-0332 Unit 4): the resident server blocks until an
@@ -113,7 +122,12 @@ class ActRequest:
     identity: NodeIdentity
     index: int  # the element's ordinal among the nodes sharing `identity`, in document order
     count: int  # how many such nodes the host saw — the device refuses if its own count differs
-    since: float | None  # the device-clock mark the read behind the gesture must postdate
+    # The mark the device's *own* pre-injection bounds read must postdate: the previous gesture's
+    # actuation mark, so those bounds describe a screen that gesture has already reached. None when
+    # no gesture is still outstanding — which, since `_device_act` settles first, is the common case.
+    # Never the clock as of building this request: no event can postdate that on a settled screen, so
+    # the device would spend its whole postdate budget on every gesture (BE-0407 unit 16).
+    since: float | None
     duration_ms: int | None  # press-and-hold length, for "longPress"
 
 
@@ -134,6 +148,13 @@ class ActOutcome:
 
     acted: bool  # False is the `stale` reply: the identity no longer names the same nodes there
     published_mark: float | None  # the device-clock time of an event postdating the injection
+    # The tree the device dumped after that publish, when it confirmed one (BE-0407 unit 19). Carried
+    # only alongside a confirmation, because that confirmation is exactly what makes it safe: an
+    # event postdates the injection, so this dump cannot describe the pre-gesture screen. None
+    # None otherwise: an unconfirmed gesture, an older server, and a target that asked for `nativeZ`
+    # (whose reading this reply cannot carry, so the driver reads for itself rather than report every
+    # element's position as absent).
+    read: HierarchyRead | None = None
 
 
 # Perform one gesture on the device, against an element the host already resolved. `acted` is False when
@@ -362,7 +383,7 @@ def _native_z_key(node: ET.Element, occurrence: int) -> str:
     window while the body spans every window — and cannot key them by identity either, since the
     four accessibility fields `_identity` uses are deliberately not unique. Both sides walk the same
     accessibility tree depth-first, so the occurrence count agrees, *scoped to the active window*:
-    `narrow_to_active_window` drops SystemUI's own windows from the body before this key is computed,
+    `narrowed_root` drops SystemUI's own windows from the tree before this key is computed,
     but not a second window of the app under test itself (a dialog over its own main window). Two
     opted-in nodes sharing bounds, class, and package across the app's own windows would shift each
     other's occurrence count and could match onto the wrong one — narrower than the false-authority
@@ -383,7 +404,7 @@ def _elements_from_nodes(
 ) -> list[base.Element]:
     """`_to_element` over every node, warning once for the parse if any `bounds` was malformed.
 
-    The one place both `parse_hierarchy` and `parse_hierarchy_with_identities` build their `Element`
+    The one place both `parse_hierarchy` and `elements_with_identities` build their `Element`
     list, so the malformed-bounds tally and its warning are counted and logged once, not duplicated at
     each call site — and the one place a device-measured `nativeZ` is matched onto the node it belongs
     to (BE-0355).
@@ -402,15 +423,17 @@ def _elements_from_nodes(
     return els
 
 
-def parse_hierarchy_with_identities(
-    text: str, native_z: Mapping[str, float] | None = None
+def elements_with_identities(
+    root: ET.Element | None, native_z: Mapping[str, float] | None = None
 ) -> tuple[list[base.Element], list[NodeIdentity]]:
-    """`parse_hierarchy`, plus each element's device-addressable identity, index-aligned.
+    """Every `<node>` under `root` as an Element, plus its device-addressable identity, index-aligned.
 
     Both lists walk the same `<node>` sequence in document order, so element *i* is named by identity
     *i*. Produced together rather than by two passes so the alignment cannot drift.
+
+    Takes an already-parsed tree rather than text because the resident channel has one by the time it
+    calls here — it had to parse to strip the SystemUI decor windows (BE-0407 unit 23).
     """
-    root = slice_hierarchy_root(text)
     if root is None:
         return [], []
     nodes = list(root.iter("node"))
@@ -573,10 +596,17 @@ class AdbDriver(CoordinateTreeDriver):
         # what the device needs. Rebuilt on every read; a stale key simply misses and degrades.
         self._identities: dict[int, NodeIdentity] = {}
         self._last_tree: list[base.Element] = []
-        # The raw dump text behind `_last_tree` (`RawSourceProvider`, the `rawTree` capture kind) — set
-        # on every `_read_source()` call, alongside whatever narrowing the resident channel applied.
-        # None until the first read.
-        self._raw_source: base.RawSource | None = None
+        # The raw dump text behind `_last_tree` (`RawSourceProvider`, the `rawTree` capture kind), and
+        # the narrowed tree bajutsu actually parsed when narrowing changed something — both set on
+        # every `_read_source()` call, and turned into a `RawSource` only by `last_raw_source()`, so a
+        # run that never takes the capture never serializes the tree back (BE-0407 unit 23). None
+        # until the first read.
+        self._raw_reply: str | None = None
+        self._parsed_root: ET.Element | None = None
+        # The caught-up tree a confirmed gesture's own reply carried (BE-0407 unit 19), waiting for
+        # the next `query()` to consume it in place of a read. None whenever there is none — before
+        # the first gesture, after that read, and after anything that moves the screen since.
+        self._seeded_tree: list[base.Element] | None = None
         # What this driver actually actuated, drained per step by the run loop. Android is the one
         # backend with two actuation channels, so the record's `via` is what tells a reader whether a
         # gesture went device-side (`identity`) or fell back to a host coordinate (`coordinate`).
@@ -609,6 +639,8 @@ class AdbDriver(CoordinateTreeDriver):
         # Latches the first mark-less resident read (see `_read_source`), so a channel that serves
         # hierarchies without the read-mark header says so once rather than degrading invisibly.
         self._mark_warned = False
+        # Ditto for a `/act` reply whose two marks contradict each other (see `_seed_from_act`).
+        self._seed_mark_warned = False
         # Lazily resolved once for the sendevent double-tap path (BE-0208): whether adbd is root and
         # which node is the touchscreen. `_touch_probed` distinguishes "not yet looked" from "looked,
         # found nothing" so a device with no touchscreen is not re-probed on every double-tap.
@@ -656,6 +688,11 @@ class AdbDriver(CoordinateTreeDriver):
         self._tree_current = False
         self._read_ordered = False
         self._settled_key = None
+        # A tree a gesture's own reply carried (BE-0407 unit 19) describes the screen as of that
+        # gesture, so anything that moves the screen afterwards retires it for the same reason it
+        # retires `_settled_key`. `_device_act` seeds it *after* calling here, which is the only
+        # ordering that leaves it alive.
+        self._seeded_tree = None
 
     def _act(self, args: list[str]) -> str:
         """Issue an adb command that changes the screen, marking the cached projection stale.
@@ -676,10 +713,89 @@ class AdbDriver(CoordinateTreeDriver):
         self.invalidate_settled_cache()
         return self._run(args)
 
+    def query(self) -> list[base.Element]:
+        """A settled tree read, answered from a gesture's own reply when it carried one.
+
+        The device dumps the caught-up tree into the `/act` reply of a gesture whose publish it
+        confirmed (BE-0407 unit 19), so the read the host would take next has already happened — a
+        whole round trip, measured at 400-600 ms on this backend. It is consumed once and then gone:
+        the *next* read after that is a genuine one, and any actuation in between retires it through
+        `invalidate_settled_cache`.
+
+        Safe precisely because of what the confirmation says: an accessibility event postdates the
+        injection, so this tree cannot be the pre-gesture screen. Where the device could not confirm,
+        it sends no tree and nothing is seeded — the driver reads for itself and arms the barrier, as
+        it always did.
+        """
+        seeded, self._seeded_tree = self._seeded_tree, None
+        if seeded is not None:
+            return seeded
+        return super().query()
+
+    def _seed_from_act(self, read: HierarchyRead | None, mark: float | None) -> None:
+        """Adopt the caught-up tree a confirmed gesture's reply carried, as if a read had returned it.
+
+        Everything `_describe` does for a read of its own, minus the round trip: the identity map the
+        next gesture counts peers against, the raw-dump record the `rawTree` capture reads, and the
+        stable-key bookkeeping `_record_tree` keeps.
+
+        What it deliberately does *not* set is `_settled_key`. The device's own settle is bounded by
+        a read count (`SETTLE_DUMPS`), and on expiry it returns the last, still-tearing dump with
+        nothing on the wire to say so — so treating it as proof of rest would let `_settle` take its
+        fast path and perform no confirming read at all, on a screen that may still be animating.
+        That is the same trap `_advance_catchup` refuses when a barrier closes on a device mark, and
+        the one `_SETTLE_DEADLINE_S` is wall-clock rather than count-based to avoid. The round trip
+        is still saved: `_settle`'s poll consumes the seed as its first read instead of skipping the
+        poll.
+
+        The mark is re-checked here rather than taken on trust: the reply already had to carry a
+        publish confirmation to get this far, and requiring the tree's own mark to postdate the
+        gesture too means a server that mislabelled one header cannot seed a pre-gesture screen.
+
+        A degenerate tree is refused for a different reason. `_read_settled_tree`'s transient-empty
+        retry rides out the mid-transition dump this device is known to produce, and a seeded tree
+        reaches `query()` without passing through it — so a sparse reply would be handed to a
+        selector that the retry would have saved. Refusing it costs the round trip this unit saves
+        and nothing else: the driver simply reads, with the retry, as it did before.
+        """
+        if read is None or read.mark is None:
+            return  # the ordinary absence: an older server, or a gesture it could not confirm
+        if mark is not None and read.mark <= mark:
+            # Not ordinary at all: the reply confirmed a publish *and* carried a tree whose own mark
+            # does not postdate the gesture, so the server's two marks disagree. Silence would leave
+            # this guard indistinguishable from dead code while it fired on every gesture of a lease.
+            if not self._seed_mark_warned:
+                self._seed_mark_warned = True
+                logger.warning(
+                    "resident actuation confirmed a publish but its tree's read mark (%.0f) does "
+                    "not postdate the gesture (%.0f); reading instead of seeding",
+                    read.mark,
+                    mark,
+                )
+            return
+        root = read.root if read.root is not None else slice_hierarchy_root(read.text)
+        # `read.native_z`, not `self._native_z`: the reply's own measurements belong to the reply's
+        # own tree, and this runs before the driver adopts them.
+        els, identities = elements_with_identities(root, read.native_z)
+        # `not els` as well as the transient test, which needs a richer tree to have been seen
+        # first: an empty seed would answer a selector with nothing at all, and the read it
+        # replaced would have retried.
+        if not els or self._is_transient_empty(els):
+            logger.debug("device reply carried a degenerate tree; reading again instead of seeding")
+            return
+        self._read_mark = read.mark
+        self._native_z = read.native_z
+        self._raw_reply = read.text
+        self._parsed_root = read.root if read.narrowed else None
+        self._identities = {id(el): ident for el, ident in zip(els, identities, strict=True)}
+        self._last_tree = els
+        self._record_tree(els)
+        self._seeded_tree = els
+
     def _describe(self) -> list[base.Element]:
         # `_read_source` refreshes `_native_z` for this read, so it is read after, never before.
-        source = self._read_source()
-        els, identities = parse_hierarchy_with_identities(source, self._native_z)
+        root = self._read_source()
+        els, identities = elements_with_identities(root, self._native_z)
         self._identities = {id(el): ident for el, ident in zip(els, identities, strict=True)}
         # The tree the identity map above describes. `_device_act` counts an element's peers against
         # *this* list, never against a tree it captured earlier: `_resolve` re-queries on a transient
@@ -689,14 +805,28 @@ class AdbDriver(CoordinateTreeDriver):
         return els
 
     def last_raw_source(self) -> base.RawSource | None:
-        """The raw dump behind `_last_tree` (`base.RawSourceProvider`), or None before the first read."""
-        return self._raw_source
+        """The raw dump behind `_last_tree` (`base.RawSourceProvider`), or None before the first read.
 
-    def _read_source(self) -> str:
-        """The raw hierarchy dump text: the resident channel when available, else `uiautomator dump`.
+        The `parsed_input` half is serialized here rather than on the read, because this accessor is
+        the `rawTree` capture's own seam and nothing else calls it: a run that never takes that
+        capture — every run by default — never pays to turn the narrowed tree back into a string
+        (BE-0407 unit 23).
+        """
+        if self._raw_reply is None:
+            return None
+        parsed_input = (
+            ET.tostring(self._parsed_root, encoding="unicode")
+            if self._parsed_root is not None
+            else None
+        )
+        return base.RawSource(text=self._raw_reply, suffix=".xml", parsed_input=parsed_input)
 
-        Both sources speak UI Automator's own XML, so the caller (`parse_hierarchy`) is unchanged
-        (BE-0245). A resident-channel failure degrades to the dump subprocess with a loud warning —
+    def _read_source(self) -> ET.Element | None:
+        """The hierarchy tree to parse: the resident channel when available, else `uiautomator dump`.
+
+        Both sources speak UI Automator's own XML, so the parse behind them is unchanged
+        (`elements_with_identities`, BE-0245). A resident-channel failure degrades to the dump
+        subprocess with a loud warning —
         never silently, so a slower fallback read stays visible — leaving the backend no worse off
         than the dump-every-read path it replaces. The failure latches: the channel is disabled after
         the first fault so the rest of the lease reads via dump without re-logging or re-paying the
@@ -734,15 +864,12 @@ class AdbDriver(CoordinateTreeDriver):
                         "X-Bajutsu-Read-Mark",
                         self._READ_LAG_S,
                     )
-                # `read.raw` is the device's own reply before narrowing, when narrowing changed it —
-                # that is now the primary artifact (`text`); `read.text`, what the parser actually
-                # consumed, becomes secondary (`parsed_input`) only in that case. When narrowing was a
-                # no-op, `read.raw` is None and `read.text` already IS the untouched reply.
-                self._raw_source = base.RawSource(
-                    text=read.raw if read.raw is not None else read.text,
-                    suffix=".xml",
-                    parsed_input=read.text if read.raw is not None else None,
-                )
+                # `read.text` is the device's own reply, untouched — the primary artifact. The tree
+                # bajutsu actually parsed becomes the secondary one (`parsed_input`) only where
+                # narrowing changed something, and only if a `rawTree` capture asks for it; see
+                # `last_raw_source`.
+                self._raw_reply = read.text
+                self._parsed_root = read.root if read.narrowed else None
             except AdbResidentError as exc:
                 logger.warning(
                     "resident hierarchy read failed (%s); falling back to `uiautomator dump` for "
@@ -765,7 +892,10 @@ class AdbDriver(CoordinateTreeDriver):
                     "resident-read", stall_diagnostics.device_probes(self.serial)
                 )
             else:
-                return read.text
+                # A body the channel could not narrow (garbled, or a null root mid-transition) comes
+                # back with no tree; slicing it here yields None too, and the caller's empty-tree
+                # degrade applies exactly as it did when this returned that body as text.
+                return read.root if read.root is not None else slice_hierarchy_root(read.text)
         # The dump subprocess carries no event mark, so the barrier reverts to its wall-clock budget,
         # and no measured position either, so every element reports the honest absence.
         self._read_mark = None
@@ -775,10 +905,9 @@ class AdbDriver(CoordinateTreeDriver):
         logger.debug(
             "dump read in %.2fs (no mark: the barrier is on its wall clock)", time.monotonic() - t0
         )
-        self._raw_source = base.RawSource(
-            text=text, suffix=".xml"
-        )  # already untouched: no narrowing
-        return text
+        self._raw_reply = text
+        self._parsed_root = None  # already untouched: no narrowing
+        return slice_hierarchy_root(text)
 
     def _record_tree(self, els: list[base.Element]) -> list[base.Element]:
         els = super()._record_tree(els)
@@ -1292,16 +1421,27 @@ class AdbDriver(CoordinateTreeDriver):
                 # unchecked, the request would go out to a connection the driver just tore down, fault,
                 # and log a "the channel stays in use" warning that contradicts the latch just set.
                 return False
+            pre_key = self._last_stable_key
+            # Two different marks, conflated into one until BE-0407 unit 16. `since` is what the
+            # device's own pre-injection read must postdate — the *previous* gesture's mark, the same
+            # value `_read_source` passes — and `mark` anchors the barrier armed for *this* gesture,
+            # so it is the clock as of now. Sending `mark` for both asked the device to wait for an
+            # event newer than the instant the request was built: on a settled screen no such event
+            # can exist, so every gesture spent the server's whole `POSTDATE_BUDGET_MS`. Measured on
+            # an API 34 emulator: 2217ms and 2042ms with the fresh mark, 64ms and 62ms with the
+            # pending one — the wait is spent before the staleness check, so a `stale` reply paid it
+            # too. Nothing is weakened: `_settle` above has already drained any pending barrier, the
+            # device still settles its own bounds read, and the value sent is exactly the one the
+            # endpoint's contract asks for.
             request = ActRequest(
                 kind=kind,
                 identity=identity,
                 index=index,
                 count=len(same),
-                since=self._capture_mark(),
+                since=self._catchup.actuation_mark if self._catchup is not None else None,
                 duration_ms=duration_ms,
             )
-            pre_key = self._last_stable_key
-            mark = request.since
+            mark = self._capture_mark()
             # Recorded per attempt, before the endpoint answers, so a declined or faulted request still
             # shows what it aimed at — and a gesture that then falls back records the coordinate
             # injection after this, in the order the two happened. The device picks the touch point
@@ -1396,6 +1536,9 @@ class AdbDriver(CoordinateTreeDriver):
                         sel,
                         outcome.published_mark,
                     )
+                    # The same confirmation licenses adopting the tree the reply carried, when it
+                    # carried one (BE-0407 unit 19) — so the read `_settle` opens with is already done.
+                    self._seed_from_act(outcome.read, mark)
                 else:
                     self._arm_catchup(pre_key, mark)
                 return True

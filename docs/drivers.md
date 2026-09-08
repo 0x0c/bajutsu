@@ -249,7 +249,10 @@ abstraction resolves **id → frame center → coordinate tap**. Implementation:
   publish slower than the window, and a server old enough never to have waited at all. Confirmation
   is the device's to give and never the driver's to assume, because a coordinate-resolving follower
   (`pinch`, `rotate`, a directional `swipe`/`drag` anchor) has no `stale` re-resolve to self-heal
-  with, unlike an identity-addressed follower.
+  with, unlike an identity-addressed follower. A confirmed gesture also carries the tree the device
+  dumped once that publish had landed, so the read the next settle would open with is already
+  answered; the driver adopts it only after re-checking that the tree's own mark postdates the
+  gesture (BE-0407 unit 19).
   The barrier's own wall-clock budget — not the device's publish window — is the same number the
   `scroll` loop uses to confirm an
   end of content before failing (`ReadLagProvider`, BE-0326 / BE-0332; see
