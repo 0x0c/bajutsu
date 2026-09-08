@@ -641,10 +641,23 @@ def render_html(items: list[Any]) -> str:
         '<input type="search" class="be-search" '
         'placeholder="Search id, title, topic, status…" aria-label="Search roadmap items">'
     )
+    # Three shortcuts beside the chips: "Show open only" is a one-click alternative to
+    # unchecking Implemented/Deferred/Rejected by hand, and the expand/collapse pair is a one-click
+    # alternative to opening every category's heading individually. All three are additive — they
+    # drive the same `on` state and the same `setCollapsed` the chips and headings already use, so a
+    # no-JS reader loses nothing: the buttons render but do nothing without the script that wires them.
+    shortcuts = (
+        '<div class="be-shortcuts">'
+        '<button type="button" class="be-quickfilter" data-state="all">Show open only</button>'
+        '<button type="button" class="be-expand-all">Expand all</button>'
+        '<button type="button" class="be-collapse-all">Collapse all</button>'
+        "</div>"
+    )
     filters = (
         f'<div class="be-filters" role="group" aria-label="Filter roadmap items">'
         f'<div class="be-search-row">{search}</div>'
         f'<div class="be-chips">{chips}</div>'
+        f"{shortcuts}"
         "</div>"
     )
 
@@ -709,9 +722,11 @@ def render_html(items: list[Any]) -> str:
     )
     toggle = f'<div class="be-viewtoggle" role="group" aria-label="Choose layout">{buttons}</div>'
     cards_view = f'<div class="be-cards-view">{groups}</div>'
-    table_view = (
-        f'<div class="be-table-view is-hidden">{_progress_strip(by_topic)}{_table(items)}</div>'
-    )
+    # The pager itself is script-built: how many rows match the search box and status
+    # chips — and therefore how many page buttons to draw — is only known once those filters run, so
+    # the container ships empty and the script fills it in on every apply()/sortBy() pass.
+    pager = '<nav class="be-pager" aria-label="Table pagination"></nav>'
+    table_view = f'<div class="be-table-view is-hidden">{_progress_strip(by_topic)}{_table(items)}{pager}</div>'
     empty = '<div class="be-empty" role="status"></div>'
     return (
         f'<div class="be-dash">{filters}{toggle}{cards_view}{table_view}'
@@ -725,6 +740,11 @@ _STYLE = """
 .be-filters{margin:.5rem 0 1.5rem}
 .be-search-row{margin-bottom:.6rem}
 .be-chips{display:flex;flex-wrap:wrap;align-items:center;gap:.6rem}
+.be-shortcuts{display:flex;flex-wrap:wrap;gap:.5rem;margin-top:.7rem}
+.be-quickfilter,.be-expand-all,.be-collapse-all{font:inherit;font-size:12.5px;padding:.3rem .7rem;
+  border:1px solid rgba(128,128,128,.35);border-radius:8px;background:transparent;color:inherit;
+  cursor:pointer}
+.be-quickfilter:hover,.be-expand-all:hover,.be-collapse-all:hover{background:rgba(128,128,128,.12)}
 .be-search{width:100%;box-sizing:border-box;max-width:420px;font:inherit;font-size:13px;
   padding:.3rem .6rem;
   border:1px solid rgba(128,128,128,.35);border-radius:8px;background:transparent;color:inherit}
@@ -736,7 +756,7 @@ _STYLE = """
 .be-filter{display:inline-flex;align-items:center;gap:.45rem;cursor:pointer;user-select:none;opacity:.5}
 .be-filter.is-active{opacity:1;background:rgba(128,128,128,.1)}
 .be-check{width:15px;height:15px;margin:0;cursor:pointer;flex:none}
-.be-group.is-hidden,.be-cat.is-hidden,.be-card.is-hidden,.be-row.is-hidden,
+.be-group.is-hidden,.be-cat.is-hidden,.be-card.is-hidden,.be-row.is-hidden,.be-row.is-paged-out,
   .be-cards-view.is-hidden,.be-table-view.is-hidden,.be-map-view.is-hidden{display:none}
 .be-group-head{font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.04em;
   color:#888;border-bottom:1px solid rgba(128,128,128,.2);padding-bottom:.3rem;margin:1.6rem 0 .6rem}
@@ -787,6 +807,13 @@ _STYLE = """
 .be-table th[aria-sort="ascending"]::after{content:" ▲";font-size:9px}
 .be-table th[aria-sort="descending"]::after{content:" ▼";font-size:9px}
 .be-table tbody tr:hover{background:rgba(128,128,128,.08)}
+.be-pager{display:flex;flex-wrap:wrap;gap:.35rem;margin:1rem 0 0}
+.be-pager:empty{margin:0}
+.be-pager-btn{font:inherit;font-size:12.5px;padding:.25rem .65rem;
+  border:1px solid rgba(128,128,128,.35);border-radius:8px;background:transparent;color:inherit;
+  cursor:pointer}
+.be-pager-btn:hover{background:rgba(128,128,128,.12)}
+.be-pager-btn.is-active{background:rgba(128,128,128,.18);font-weight:600}
 .be-row-title a{color:inherit;font-weight:600;text-decoration:underline;
   text-decoration-color:rgba(128,128,128,.5)}
 .be-row-title a:hover{text-decoration-color:currentColor}
@@ -894,6 +921,14 @@ _SCRIPT = """
   var cats=document.querySelectorAll('.be-cat');
   var groups=document.querySelectorAll('.be-group');
   var empty=document.querySelector('.be-empty');
+  var quickfilter=document.querySelector('.be-quickfilter');
+  var expandAllBtn=document.querySelector('.be-expand-all');
+  var collapseAllBtn=document.querySelector('.be-collapse-all');
+  // The buckets "Show open only" isolates: work that hasn't landed yet and is actively being
+  // worked, as opposed to Deferred (parked on purpose) or Rejected (never coming back) — a
+  // narrower set than _topic_progress's "outstanding" (Rejected only), chosen so a Deferred item
+  // doesn't dilute the shortcut's whole point of surfacing what's live right now.
+  var OPEN_BUCKETS=['Proposals', 'In progress'];
   var on={};
   checks.forEach(function(c){ on[c.getAttribute('data-filter')]=c.checked; });
   // Each card and row carries its searchable text (id + title + topic + status, lower-cased) in
@@ -907,6 +942,15 @@ _SCRIPT = """
     cat.classList.toggle('is-collapsed', collapsed);
     var head=cat.querySelector('.be-cat-head');
     if(head) head.setAttribute('aria-expanded', String(!collapsed));
+  }
+  // True exactly when the chips already read "open items only": both OPEN_BUCKETS on, every other
+  // bucket off. Drives both what a click on the shortcut does next and its own label/data-state, so
+  // the two can never say different things — including when a reader reaches this state by hand,
+  // one chip at a time.
+  function isOpenOnlyState(){
+    return Object.keys(on).every(function(name){
+      return OPEN_BUCKETS.indexOf(name)>=0 ? on[name] : !on[name];
+    });
   }
   // Cards and rows are the same items in two layouts, so one predicate drives both: a status chip
   // and the query. Counts and the empty-state message come from the cards (the canonical set), so a
@@ -960,11 +1004,34 @@ _SCRIPT = """
       }
       empty.textContent=msg;
     }
+    // The shortcut's label always reflects the chips, even when a reader reaches "open items only"
+    // by hand (one chip at a time) rather than by clicking the shortcut itself.
+    if(quickfilter){
+      var openOnly=isOpenOnlyState();
+      quickfilter.setAttribute('data-state', openOnly ? 'open' : 'all');
+      quickfilter.textContent=openOnly ? 'Show all' : 'Show open only';
+    }
+    // A new search string or chip combination changes which rows match, so start back at page 1
+    // rather than stranding the reader on a page number that may no longer exist.
+    tablePage=1;
+    applyTablePaging();
   }
   checks.forEach(function(c){
     c.addEventListener('change', function(){ on[c.getAttribute('data-filter')]=c.checked; apply(); });
   });
   if(search) search.addEventListener('input', apply);
+  if(quickfilter){
+    quickfilter.addEventListener('click', function(){
+      // Toggle: land on "open items only" from anywhere else, or back to every status on from
+      // exactly that state — mirroring the chips' own "all on" resting state.
+      var toOpenOnly=!isOpenOnlyState();
+      Object.keys(on).forEach(function(name){
+        on[name]=toOpenOnly ? OPEN_BUCKETS.indexOf(name)>=0 : true;
+      });
+      checks.forEach(function(c){ c.checked=on[c.getAttribute('data-filter')]; });
+      apply();
+    });
+  }
   cats.forEach(function(cat){
     var head=cat.querySelector('.be-cat-head');
     function toggle(){ setCollapsed(cat, !cat.classList.contains('is-collapsed')); }
@@ -973,6 +1040,21 @@ _SCRIPT = """
       if(e.key==='Enter'||e.key===' '){ e.preventDefault(); toggle(); }
     });
   });
+
+  // A one-click alternative to opening (or closing) every heading by hand. Reuses the same
+  // setCollapsed the individual headings call, so this never grows a second notion of "collapsed" —
+  // and the next chip or search change still overrides it via apply()'s own collapse pass, exactly
+  // as an individual heading click would be overridden today.
+  if(expandAllBtn){
+    expandAllBtn.addEventListener('click', function(){
+      cats.forEach(function(cat){ setCollapsed(cat, false); });
+    });
+  }
+  if(collapseAllBtn){
+    collapseAllBtn.addEventListener('click', function(){
+      cats.forEach(function(cat){ setCollapsed(cat, true); });
+    });
+  }
 
   // Table sort: clicking (or Enter/Space on) a header reorders the tbody rows by that column,
   // toggling ascending/descending on repeat clicks and marking the active column with aria-sort.
@@ -1003,12 +1085,63 @@ _SCRIPT = """
       arr.forEach(function(r){ tbody.appendChild(r); });
       ths.forEach(function(h){ h.setAttribute('aria-sort', 'none'); });
       th.setAttribute('aria-sort', sortDir>0?'ascending':'descending');
+      // The reordered rows are the same matched set, so start back at page 1 rather than showing
+      // whatever 50 rows now happen to land in the old page's slice.
+      tablePage=1;
+      applyTablePaging();
     }
     th.addEventListener('click', sortBy);
     th.addEventListener('keydown', function(e){
       if(e.key==='Enter'||e.key===' '){ e.preventDefault(); sortBy(); }
     });
   });
+
+  // Table pagination: 50 rows at a time, over whatever the search box and status chips currently
+  // pass, in whatever order sortBy() last left tbody in. is-hidden (the filter's own verdict) and
+  // is-paged-out (this page's verdict) stay separate classes, so paging never needs a second copy
+  // of what the filter already decided — it only reads is-hidden off tbody.children.
+  var TABLE_PAGE_SIZE=50;
+  var tablePage=1;
+  var pager=document.querySelector('.be-pager');
+  function matchedRows(){
+    if(!tbody) return [];
+    return Array.prototype.filter.call(tbody.children, function(r){
+      return !r.classList.contains('is-hidden');
+    });
+  }
+  function renderPager(total){
+    if(!pager) return;
+    // Rebuilding the buttons below destroys whichever one holds keyboard focus — including the very
+    // button whose own click just triggered this call, since applyTablePaging() calls straight back
+    // into renderPager(). Remember that and hand focus to the new current-page button afterward, so
+    // a keyboard reader isn't dropped back to <body> on every page change.
+    var hadFocus=pager.contains(document.activeElement);
+    // Always at least one button, even when everything fits on page 1 — so the current page stays
+    // visible rather than the pager silently vanishing once a chip or search narrows the result.
+    var pages=Math.max(1, Math.ceil(total/TABLE_PAGE_SIZE));
+    if(tablePage>pages) tablePage=pages;
+    pager.textContent='';
+    var activeBtn=null;
+    for(var i=1;i<=pages;i++){
+      (function(page){
+        var btn=document.createElement('button');
+        btn.type='button';
+        btn.className='be-pager-btn'+(page===tablePage?' is-active':'');
+        btn.textContent=String(page);
+        if(page===tablePage){ btn.setAttribute('aria-current', 'page'); activeBtn=btn; }
+        btn.addEventListener('click', function(){ tablePage=page; applyTablePaging(); });
+        pager.appendChild(btn);
+      })(i);
+    }
+    if(hadFocus && activeBtn) activeBtn.focus();
+  }
+  function applyTablePaging(){
+    if(!tbody) return;
+    var matched=matchedRows();
+    renderPager(matched.length);
+    var start=(tablePage-1)*TABLE_PAGE_SIZE, end=start+TABLE_PAGE_SIZE;
+    matched.forEach(function(r, i){ r.classList.toggle('is-paged-out', i<start||i>=end); });
+  }
 
   // Relationship map. The drawing arrives finished from the build — rows, connectors, and node
   // positions are all computed in Python — so nothing here lays anything out. The script only
@@ -1291,9 +1424,13 @@ _INTRO = (
     "outstanding work are grouped separately under Completed. Categories start collapsed to a "
     "progress overview — click a heading to expand it, toggle the status chips on and off, or type "
     "in the search box to narrow the "
-    "cards by id, title, topic, or status. Switch between the card grid and a sortable table with the "
+    'cards by id, title, topic, or status. "Show open only" is a shortcut to that same narrowing — '
+    "Proposal and In progress on, everything else off, one click back to restore every status — and "
+    "Expand all / Collapse all open or close every category at once instead of one heading at a "
+    "time. Switch between the card grid and a sortable table with the "
     "Cards / Table toggle — the table lists every item as a row with sortable Created and Updated "
-    "columns, and the search and status filters narrow both views alike. A third view, Map, draws "
+    "columns, paginated 50 rows at a time, and the search and status filters narrow both views "
+    "alike. A third view, Map, draws "
     "the relationships the items themselves record as a transit map: one line per topic, its items "
     "as stops along it in id order, and a curve joining every pair that stands in a Related, "
     "Origin, or Superseded by relation. Point at a stop to light up what it connects to and see a "

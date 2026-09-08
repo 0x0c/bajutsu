@@ -185,6 +185,70 @@ def test_search_box_sits_in_its_own_row_above_the_chips() -> None:
     assert _PAGE.index('class="be-search"') < chip_row
 
 
+def test_shortcut_buttons_are_rendered_after_the_chips() -> None:
+    """ "Show open only", "Expand all", and "Collapse all" sit in their own row after the chips.
+
+    One of each (progressive enhancement: inert without the script that wires them, BE-0311's
+    pattern for the Cards/Table toggle), and after ``.be-chips`` since they act on the chips and the
+    categories the chips narrow.
+    """
+    assert _PAGE.count('class="be-quickfilter"') == 1
+    assert _PAGE.count('class="be-expand-all"') == 1
+    assert _PAGE.count('class="be-collapse-all"') == 1
+    assert 'data-state="all"' in _PAGE
+    chip_row = _PAGE.index('class="be-chips"')
+    shortcuts_row = _PAGE.index('class="be-shortcuts"')
+    assert chip_row < shortcuts_row, "shortcuts must render after the chip container"
+    assert _PAGE.index('class="be-quickfilter"') > shortcuts_row
+
+
+def test_quickfilter_toggles_between_open_only_and_every_status() -> None:
+    """Clicking "Show open only" isolates Proposal/In progress; clicking it again restores all five.
+
+    ``OPEN_BUCKETS`` is a narrower set than ``_topic_progress``'s "outstanding" (which also counts
+    Deferred): a parked item would dilute the shortcut's point of surfacing what's live right now.
+    Matched loosely so a harmless reformat of the script doesn't break the test, only the actual
+    wiring does.
+    """
+    script = brd.filter_script()
+    # Pinned against bri.BUCKETS (the source of truth the chips' data-filter values are built from,
+    # scripts/build_roadmap_dashboard.py:635) rather than re-asserting the JS literal against
+    # itself — a bucket rename there would otherwise leave this test green while silently breaking
+    # the shortcut's OPEN_BUCKETS.indexOf() lookups.
+    open_buckets = re.search(r"OPEN_BUCKETS=\[([^\]]*)\]", script)
+    assert open_buckets, "the script must define OPEN_BUCKETS"
+    open_names = {n.strip().strip("'\"") for n in open_buckets.group(1).split(",")}
+    assert open_names == {"Proposals", "In progress"}
+    assert open_names <= {name for name, _key in brd.bri.BUCKETS}
+    assert "function isOpenOnlyState()" in script
+    assert re.search(
+        r"""quickfilter\.addEventListener\(\s*['"]click['"]\s*,""",
+        script,
+    )
+    # The label and data-state flip in lockstep with the chips, whether reached by the shortcut or
+    # by hand — so a reader who unchecks chips one at a time still sees an accurate label.
+    assert "'Show open only'" in script and "'Show all'" in script
+    assert "quickfilter.setAttribute('data-state'" in script
+
+
+def test_expand_all_and_collapse_all_reuse_setcollapsed() -> None:
+    """The two bulk buttons call the same ``setCollapsed`` an individual heading click does.
+
+    So a later chip or search change still overrides the bulk action via ``apply()``'s own collapse
+    pass, exactly as it already overrides an individual heading click — no second notion of
+    "collapsed" to keep in sync. Matched loosely so a harmless reformat doesn't break the test.
+    """
+    script = brd.filter_script()
+    assert re.search(
+        r"""expandAllBtn\.addEventListener\(\s*['"]click['"]\s*,[\s\S]*?setCollapsed\(cat, false\)""",
+        script,
+    )
+    assert re.search(
+        r"""collapseAllBtn\.addEventListener\(\s*['"]click['"]\s*,[\s\S]*?setCollapsed\(cat, true\)""",
+        script,
+    )
+
+
 def test_every_card_carries_its_topic() -> None:
     """Each card exposes its Topic as ``data-topic`` so search can match it without scraping markup."""
     for item in _ITEMS:
@@ -304,6 +368,90 @@ def test_table_headers_are_sortable_and_wired() -> None:
     assert _PAGE.count('aria-sort="none"') >= len(brd._TABLE_COLUMNS)
     assert "th[data-sort-key]" in _PAGE
     assert re.search(r"""addEventListener\(\s*['"]click['"]\s*,\s*sortBy\s*\)""", _PAGE)
+
+
+def test_table_pager_container_is_present_and_empty() -> None:
+    """The pager ships as an empty ``<nav>`` inside the table view; the script fills it in.
+
+    How many rows match the search box and status chips — and so how many page buttons to draw — is
+    only known once those filters run, so nothing is baked into the static markup. A no-JS reader
+    never sees ``is-paged-out`` anywhere in the page: every row from :func:`_table` stays visible,
+    exactly as every card does without the script.
+    """
+    table_view = _PAGE.split('class="be-table-view', 1)[-1]
+    assert '<nav class="be-pager" aria-label="Table pagination"></nav>' in table_view
+    assert "is-paged-out" not in _PAGE.split("<style>", 1)[0]
+    # The style/script that reference the class don't count as the class being applied to a row.
+    assert 'class="be-row' in table_view
+    for item in _ITEMS:
+        assert f'<tr class="be-row" data-status="{item.bucket}"' in table_view
+
+
+def test_table_pagination_is_wired_to_apply_and_sort() -> None:
+    """Both ``apply()`` (search/chip changes) and ``sortBy()`` (column clicks) reset to page 1.
+
+    Otherwise a reader could be stranded on a page number that no longer exists once a new query or
+    sort narrows or reorders the matched rows. Matched loosely so a harmless reformat of the script
+    doesn't break the test, only the actual wiring does.
+    """
+    script = brd.filter_script()
+    assert re.search(r"TABLE_PAGE_SIZE\s*=\s*50", script)
+    assert "function matchedRows()" in script
+    assert "function renderPager(total)" in script
+    assert "function applyTablePaging()" in script
+    # matchedRows() reads is-hidden off the live tbody order, never a cached NodeList — a cached one
+    # would still reflect the DOM order from before the last sortBy() reorder.
+    assert "tbody.children" in script
+    reset_pattern = re.compile(r"tablePage\s*=\s*1\s*;\s*applyTablePaging\(\s*\)\s*;")
+    apply_fn = script[
+        script.index("function apply()") : script.index("c.addEventListener('change'")
+    ]
+    assert reset_pattern.search(apply_fn)
+    sort_by = script[script.index("function sortBy()") : script.index("th.addEventListener")]
+    assert reset_pattern.search(sort_by)
+
+
+def test_pager_always_shows_at_least_one_page_button() -> None:
+    """The pager renders a "1" button even when everything fits on one page.
+
+    Otherwise the pager would vanish the moment a chip or search narrows the result to 50 rows or
+    fewer, leaving no visual anchor for where the reader is (confirmed with a live render: unchecking
+    Implemented leaves 29 matched rows and a single "1" button, not zero). Matched loosely so a
+    harmless reformat doesn't break the test, only an early-return regression does.
+    """
+    script = brd.filter_script()
+    render_pager = script[
+        script.index("function renderPager(total)") : script.index("function applyTablePaging()")
+    ]
+    assert not re.search(r"if\s*\(\s*pages\s*<=\s*1\s*\)\s*return", render_pager)
+    assert re.search(r"for\s*\(\s*var\s+i\s*=\s*1\s*;\s*i\s*<=\s*pages\s*;", render_pager)
+
+
+def test_pager_rebuild_restores_keyboard_focus_to_the_current_page() -> None:
+    """A page-button click survives its own button being destroyed and rebuilt.
+
+    ``renderPager()`` wipes ``pager.textContent`` and rebuilds every button on each call — including
+    the call a page button's own click handler triggers via ``applyTablePaging()``. Without restoring
+    focus, a keyboard reader who activates "3" loses focus to ``<body>`` on every page change. Matched
+    loosely (function-body order, not exact spacing) so a harmless reformat doesn't break the test,
+    only a focus-restoration regression does.
+    """
+    script = brd.filter_script()
+    render_pager = script[
+        script.index("function renderPager(total)") : script.index("function applyTablePaging()")
+    ]
+    had_focus = re.search(
+        r"var hadFocus\s*=\s*pager\.contains\(document\.activeElement\)", render_pager
+    )
+    assert had_focus, "must capture focus state before the wipe"
+    focus_call = re.search(
+        r"if\s*\(\s*hadFocus\s*&&\s*activeBtn\s*\)\s*activeBtn\.focus\(\)", render_pager
+    )
+    assert focus_call, "must restore focus to the rebuilt current-page button"
+    # The focus check must run before pager.textContent is cleared, or activeElement is already gone.
+    assert had_focus.start() < render_pager.index("pager.textContent=''")
+    # The restore must run after the loop that (re)builds activeBtn, or it would focus a stale button.
+    assert focus_call.start() > render_pager.rindex("pager.appendChild(btn)")
 
 
 def test_date_columns_render_iso_dates() -> None:
