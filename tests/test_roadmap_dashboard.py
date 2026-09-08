@@ -211,7 +211,15 @@ def test_quickfilter_toggles_between_open_only_and_every_status() -> None:
     wiring does.
     """
     script = brd.filter_script()
-    assert "OPEN_BUCKETS=['Proposals', 'In progress']" in script
+    # Pinned against bri.BUCKETS (the source of truth the chips' data-filter values are built from,
+    # scripts/build_roadmap_dashboard.py:635) rather than re-asserting the JS literal against
+    # itself — a bucket rename there would otherwise leave this test green while silently breaking
+    # the shortcut's OPEN_BUCKETS.indexOf() lookups.
+    open_buckets = re.search(r"OPEN_BUCKETS=\[([^\]]*)\]", script)
+    assert open_buckets, "the script must define OPEN_BUCKETS"
+    open_names = {n.strip().strip("'\"") for n in open_buckets.group(1).split(",")}
+    assert open_names == {"Proposals", "In progress"}
+    assert open_names <= {name for name, _key in brd.bri.BUCKETS}
     assert "function isOpenOnlyState()" in script
     assert re.search(
         r"""quickfilter\.addEventListener\(\s*['"]click['"]\s*,""",
@@ -387,19 +395,20 @@ def test_table_pagination_is_wired_to_apply_and_sort() -> None:
     doesn't break the test, only the actual wiring does.
     """
     script = brd.filter_script()
-    assert "var TABLE_PAGE_SIZE=50;" in script
+    assert re.search(r"TABLE_PAGE_SIZE\s*=\s*50", script)
     assert "function matchedRows()" in script
     assert "function renderPager(total)" in script
     assert "function applyTablePaging()" in script
     # matchedRows() reads is-hidden off the live tbody order, never a cached NodeList — a cached one
     # would still reflect the DOM order from before the last sortBy() reorder.
     assert "tbody.children" in script
+    reset_pattern = re.compile(r"tablePage\s*=\s*1\s*;\s*applyTablePaging\(\s*\)\s*;")
     apply_fn = script[
         script.index("function apply()") : script.index("c.addEventListener('change'")
     ]
-    assert "tablePage=1;" in apply_fn and "applyTablePaging();" in apply_fn
+    assert reset_pattern.search(apply_fn)
     sort_by = script[script.index("function sortBy()") : script.index("th.addEventListener")]
-    assert "tablePage=1;" in sort_by and "applyTablePaging();" in sort_by
+    assert reset_pattern.search(sort_by)
 
 
 def test_pager_always_shows_at_least_one_page_button() -> None:
@@ -415,7 +424,7 @@ def test_pager_always_shows_at_least_one_page_button() -> None:
         script.index("function renderPager(total)") : script.index("function applyTablePaging()")
     ]
     assert not re.search(r"if\s*\(\s*pages\s*<=\s*1\s*\)\s*return", render_pager)
-    assert "for(var i=1;i<=pages;i++)" in render_pager
+    assert re.search(r"for\s*\(\s*var\s+i\s*=\s*1\s*;\s*i\s*<=\s*pages\s*;", render_pager)
 
 
 def test_pager_rebuild_restores_keyboard_focus_to_the_current_page() -> None:
