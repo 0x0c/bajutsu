@@ -1046,7 +1046,12 @@ that breakdown (one `- [ ]` box per unit of work, ticked `- [x]` as it lands) pl
 chronological PR-linked log — **kept current as work proceeds**: every PR that advances an item ticks
 its boxes and adds a log entry in the same change, exactly as it fills `Implementing PR`. A
 not-yet-started `Proposal` carries a single placeholder box; an `Implemented` item carries the
-all-done checklist. `Related` / `Superseded by` are reciprocal — the superseding item lists the other
+all-done checklist. A unit the author investigated and decided against pursuing still counts as
+ticked. Strike through its own description, and nest the reason underneath as a sub-bullet. The
+strikethrough marks a unit closed by decision, not by shipped code
+([BE-0407](../roadmaps/BE-0407-step-latency-driver-internal-tuning/BE-0407-step-latency-driver-internal-tuning.md),
+[BE-0234](../roadmaps/BE-0234-adb-run-performance/BE-0234-adb-run-performance.md)). `Related` /
+`Superseded by` are reciprocal — the superseding item lists the other
 under `Related`, the superseded one names its successor under `Superseded by`. These two rules are
 review-enforced, not machine-enforced: the gate confirms the `## Progress` section exists and the
 fields keep their canonical order, but not that a breakdown is genuinely exhaustive or a box honest.
