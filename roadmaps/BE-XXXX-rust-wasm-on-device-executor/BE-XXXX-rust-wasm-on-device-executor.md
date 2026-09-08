@@ -172,10 +172,11 @@ BE-0407's `recovery.py`).
 
 - **Port independently to Swift and Kotlin, as BE-0408 through BE-0410 already propose.** The smaller
   initial implementation cost is real: nobody has to stand up a Rust toolchain or a WASM runtime on
-  either platform first. Rejected as this item's own approach, because the cost that alternative avoids
-  up front returns as a standing tax on every later change to selector-resolution semantics, paid in
-  two languages neither the host implementation nor the conformance suite alone can catch before a test
-  run does. This item spends a one-time toolchain cost to remove that recurring one.
+  either platform first. This item rejects that alternative because the cost it avoids up front
+  returns as a standing tax: every later change to selector-resolution semantics must be ported to
+  Swift and to Kotlin as well, and reading the host implementation alone never reveals a mistake in
+  either port — only a conformance-suite run does. This item spends a one-time toolchain cost to
+  remove that recurring one.
 - **Compile CPython itself to WASM (Pyodide or similar) instead of writing a new Rust core.** Rejected.
   A CPython WASM runtime runs tens of megabytes, too heavy to embed in an XCTest runner process or an
   Android instrumentation server, and CPython's global interpreter lock and threading model conflict

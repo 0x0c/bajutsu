@@ -225,7 +225,7 @@ BE-0407の`recovery.py`)がそのまま扱います。
 - [ ] `POST /scenario/cancel`を追加し、
   [BE-0370](../BE-0370-graceful-run-cancel/BE-0370-graceful-run-cancel-ja.md)
   の既存のキャンセル挙動に対して検証します。
-- [ ] AndroidのresidentUI Automatorサーバーに対して、同じWASM統合を繰り返します。
+- [ ] Androidのresident UI Automatorサーバーに対して、同じWASM統合を繰り返します。
 - [ ] `controls.yaml`(BE-0407・BE-0409・BE-0410が使う物差しと同じもの)を両プラットフォーム
   の新しい経路で計測し、BE-0409・BE-0410自身が掲げる1タップあたりの目標(iOS 200〜350ミリ秒、
   Android 150〜300ミリ秒)に対する結果を記録します。
