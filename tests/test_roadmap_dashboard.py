@@ -202,6 +202,27 @@ def test_shortcut_buttons_are_rendered_after_the_chips() -> None:
     assert _PAGE.index('class="be-quickfilter"') > shortcuts_row
 
 
+def test_quickfilter_toggles_between_open_only_and_every_status() -> None:
+    """Clicking "Show open only" isolates Proposal/In progress; clicking it again restores all five.
+
+    ``OPEN_BUCKETS`` is a narrower set than ``_topic_progress``'s "outstanding" (which also counts
+    Deferred): a parked item would dilute the shortcut's point of surfacing what's live right now.
+    Matched loosely so a harmless reformat of the script doesn't break the test, only the actual
+    wiring does.
+    """
+    script = brd.filter_script()
+    assert "OPEN_BUCKETS=['Proposals', 'In progress']" in script
+    assert "function isOpenOnlyState()" in script
+    assert re.search(
+        r"""quickfilter\.addEventListener\(\s*['"]click['"]\s*,""",
+        script,
+    )
+    # The label and data-state flip in lockstep with the chips, whether reached by the shortcut or
+    # by hand — so a reader who unchecks chips one at a time still sees an accurate label.
+    assert "'Show open only'" in script and "'Show all'" in script
+    assert "quickfilter.setAttribute('data-state'" in script
+
+
 def test_every_card_carries_its_topic() -> None:
     """Each card exposes its Topic as ``data-topic`` so search can match it without scraping markup."""
     for item in _ITEMS:

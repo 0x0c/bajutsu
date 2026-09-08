@@ -912,6 +912,12 @@ _SCRIPT = """
   var cats=document.querySelectorAll('.be-cat');
   var groups=document.querySelectorAll('.be-group');
   var empty=document.querySelector('.be-empty');
+  var quickfilter=document.querySelector('.be-quickfilter');
+  // The buckets "Show open only" isolates: work that hasn't landed yet and is actively being
+  // worked, as opposed to Deferred (parked on purpose) or Rejected (never coming back) — a
+  // narrower set than _topic_progress's "outstanding" (Rejected only), chosen so a Deferred item
+  // doesn't dilute the shortcut's whole point of surfacing what's live right now.
+  var OPEN_BUCKETS=['Proposals', 'In progress'];
   var on={};
   checks.forEach(function(c){ on[c.getAttribute('data-filter')]=c.checked; });
   // Each card and row carries its searchable text (id + title + topic + status, lower-cased) in
@@ -925,6 +931,15 @@ _SCRIPT = """
     cat.classList.toggle('is-collapsed', collapsed);
     var head=cat.querySelector('.be-cat-head');
     if(head) head.setAttribute('aria-expanded', String(!collapsed));
+  }
+  // True exactly when the chips already read "open items only": both OPEN_BUCKETS on, every other
+  // bucket off. Drives both what a click on the shortcut does next and its own label/data-state, so
+  // the two can never say different things — including when a reader reaches this state by hand,
+  // one chip at a time.
+  function isOpenOnlyState(){
+    return Object.keys(on).every(function(name){
+      return OPEN_BUCKETS.indexOf(name)>=0 ? on[name] : !on[name];
+    });
   }
   // Cards and rows are the same items in two layouts, so one predicate drives both: a status chip
   // and the query. Counts and the empty-state message come from the cards (the canonical set), so a
@@ -978,11 +993,30 @@ _SCRIPT = """
       }
       empty.textContent=msg;
     }
+    // The shortcut's label always reflects the chips, even when a reader reaches "open items only"
+    // by hand (one chip at a time) rather than by clicking the shortcut itself.
+    if(quickfilter){
+      var openOnly=isOpenOnlyState();
+      quickfilter.setAttribute('data-state', openOnly ? 'open' : 'all');
+      quickfilter.textContent=openOnly ? 'Show all' : 'Show open only';
+    }
   }
   checks.forEach(function(c){
     c.addEventListener('change', function(){ on[c.getAttribute('data-filter')]=c.checked; apply(); });
   });
   if(search) search.addEventListener('input', apply);
+  if(quickfilter){
+    quickfilter.addEventListener('click', function(){
+      // Toggle: land on "open items only" from anywhere else, or back to every status on from
+      // exactly that state — mirroring the chips' own "all on" resting state.
+      var toOpenOnly=!isOpenOnlyState();
+      Object.keys(on).forEach(function(name){
+        on[name]=toOpenOnly ? OPEN_BUCKETS.indexOf(name)>=0 : true;
+      });
+      checks.forEach(function(c){ c.checked=on[c.getAttribute('data-filter')]; });
+      apply();
+    });
+  }
   cats.forEach(function(cat){
     var head=cat.querySelector('.be-cat-head');
     function toggle(){ setCollapsed(cat, !cat.classList.contains('is-collapsed')); }
