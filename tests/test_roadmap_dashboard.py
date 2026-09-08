@@ -418,6 +418,33 @@ def test_pager_always_shows_at_least_one_page_button() -> None:
     assert "for(var i=1;i<=pages;i++)" in render_pager
 
 
+def test_pager_rebuild_restores_keyboard_focus_to_the_current_page() -> None:
+    """A page-button click survives its own button being destroyed and rebuilt.
+
+    ``renderPager()`` wipes ``pager.textContent`` and rebuilds every button on each call — including
+    the call a page button's own click handler triggers via ``applyTablePaging()``. Without restoring
+    focus, a keyboard reader who activates "3" loses focus to ``<body>`` on every page change. Matched
+    loosely (function-body order, not exact spacing) so a harmless reformat doesn't break the test,
+    only a focus-restoration regression does.
+    """
+    script = brd.filter_script()
+    render_pager = script[
+        script.index("function renderPager(total)") : script.index("function applyTablePaging()")
+    ]
+    had_focus = re.search(
+        r"var hadFocus\s*=\s*pager\.contains\(document\.activeElement\)", render_pager
+    )
+    assert had_focus, "must capture focus state before the wipe"
+    focus_call = re.search(
+        r"if\s*\(\s*hadFocus\s*&&\s*activeBtn\s*\)\s*activeBtn\.focus\(\)", render_pager
+    )
+    assert focus_call, "must restore focus to the rebuilt current-page button"
+    # The focus check must run before pager.textContent is cleared, or activeElement is already gone.
+    assert had_focus.start() < render_pager.index("pager.textContent=''")
+    # The restore must run after the loop that (re)builds activeBtn, or it would focus a stale button.
+    assert focus_call.start() > render_pager.rindex("pager.appendChild(btn)")
+
+
 def test_date_columns_render_iso_dates() -> None:
     """The Created/Updated cells show the ``YYYY-MM-DD`` day and sort on the full UTC ISO stamp.
 

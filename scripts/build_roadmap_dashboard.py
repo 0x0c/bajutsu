@@ -1111,22 +1111,29 @@ _SCRIPT = """
   }
   function renderPager(total){
     if(!pager) return;
+    // Rebuilding the buttons below destroys whichever one holds keyboard focus — including the very
+    // button whose own click just triggered this call, since applyTablePaging() calls straight back
+    // into renderPager(). Remember that and hand focus to the new current-page button afterward, so
+    // a keyboard reader isn't dropped back to <body> on every page change.
+    var hadFocus=pager.contains(document.activeElement);
     // Always at least one button, even when everything fits on page 1 — so the current page stays
     // visible rather than the pager silently vanishing once a chip or search narrows the result.
     var pages=Math.max(1, Math.ceil(total/TABLE_PAGE_SIZE));
     if(tablePage>pages) tablePage=pages;
     pager.textContent='';
+    var activeBtn=null;
     for(var i=1;i<=pages;i++){
       (function(page){
         var btn=document.createElement('button');
         btn.type='button';
         btn.className='be-pager-btn'+(page===tablePage?' is-active':'');
         btn.textContent=String(page);
-        if(page===tablePage) btn.setAttribute('aria-current', 'page');
+        if(page===tablePage){ btn.setAttribute('aria-current', 'page'); activeBtn=btn; }
         btn.addEventListener('click', function(){ tablePage=page; applyTablePaging(); });
         pager.appendChild(btn);
       })(i);
     }
+    if(hadFocus && activeBtn) activeBtn.focus();
   }
   function applyTablePaging(){
     if(!tbody) return;
