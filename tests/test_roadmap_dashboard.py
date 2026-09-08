@@ -362,6 +362,62 @@ def test_table_headers_are_sortable_and_wired() -> None:
     assert re.search(r"""addEventListener\(\s*['"]click['"]\s*,\s*sortBy\s*\)""", _PAGE)
 
 
+def test_table_pager_container_is_present_and_empty() -> None:
+    """The pager ships as an empty ``<nav>`` inside the table view; the script fills it in.
+
+    How many rows match the search box and status chips — and so how many page buttons to draw — is
+    only known once those filters run, so nothing is baked into the static markup. A no-JS reader
+    never sees ``is-paged-out`` anywhere in the page: every row from :func:`_table` stays visible,
+    exactly as every card does without the script.
+    """
+    table_view = _PAGE.split('class="be-table-view', 1)[-1]
+    assert '<nav class="be-pager" aria-label="Table pagination"></nav>' in table_view
+    assert "is-paged-out" not in _PAGE.split("<style>", 1)[0]
+    # The style/script that reference the class don't count as the class being applied to a row.
+    assert 'class="be-row' in table_view
+    for item in _ITEMS:
+        assert f'<tr class="be-row" data-status="{item.bucket}"' in table_view
+
+
+def test_table_pagination_is_wired_to_apply_and_sort() -> None:
+    """Both ``apply()`` (search/chip changes) and ``sortBy()`` (column clicks) reset to page 1.
+
+    Otherwise a reader could be stranded on a page number that no longer exists once a new query or
+    sort narrows or reorders the matched rows. Matched loosely so a harmless reformat of the script
+    doesn't break the test, only the actual wiring does.
+    """
+    script = brd.filter_script()
+    assert "var TABLE_PAGE_SIZE=50;" in script
+    assert "function matchedRows()" in script
+    assert "function renderPager(total)" in script
+    assert "function applyTablePaging()" in script
+    # matchedRows() reads is-hidden off the live tbody order, never a cached NodeList — a cached one
+    # would still reflect the DOM order from before the last sortBy() reorder.
+    assert "tbody.children" in script
+    apply_fn = script[
+        script.index("function apply()") : script.index("c.addEventListener('change'")
+    ]
+    assert "tablePage=1;" in apply_fn and "applyTablePaging();" in apply_fn
+    sort_by = script[script.index("function sortBy()") : script.index("th.addEventListener")]
+    assert "tablePage=1;" in sort_by and "applyTablePaging();" in sort_by
+
+
+def test_pager_always_shows_at_least_one_page_button() -> None:
+    """The pager renders a "1" button even when everything fits on one page.
+
+    Otherwise the pager would vanish the moment a chip or search narrows the result to 50 rows or
+    fewer, leaving no visual anchor for where the reader is (confirmed with a live render: unchecking
+    Implemented leaves 29 matched rows and a single "1" button, not zero). Matched loosely so a
+    harmless reformat doesn't break the test, only an early-return regression does.
+    """
+    script = brd.filter_script()
+    render_pager = script[
+        script.index("function renderPager(total)") : script.index("function applyTablePaging()")
+    ]
+    assert not re.search(r"if\s*\(\s*pages\s*<=\s*1\s*\)\s*return", render_pager)
+    assert "for(var i=1;i<=pages;i++)" in render_pager
+
+
 def test_date_columns_render_iso_dates() -> None:
     """The Created/Updated cells show the ``YYYY-MM-DD`` day and sort on the full UTC ISO stamp.
 

@@ -722,9 +722,11 @@ def render_html(items: list[Any]) -> str:
     )
     toggle = f'<div class="be-viewtoggle" role="group" aria-label="Choose layout">{buttons}</div>'
     cards_view = f'<div class="be-cards-view">{groups}</div>'
-    table_view = (
-        f'<div class="be-table-view is-hidden">{_progress_strip(by_topic)}{_table(items)}</div>'
-    )
+    # The pager itself is script-built: how many rows match the search box and status
+    # chips — and therefore how many page buttons to draw — is only known once those filters run, so
+    # the container ships empty and the script fills it in on every apply()/sortBy() pass.
+    pager = '<nav class="be-pager" aria-label="Table pagination"></nav>'
+    table_view = f'<div class="be-table-view is-hidden">{_progress_strip(by_topic)}{_table(items)}{pager}</div>'
     empty = '<div class="be-empty" role="status"></div>'
     return (
         f'<div class="be-dash">{filters}{toggle}{cards_view}{table_view}'
@@ -754,7 +756,7 @@ _STYLE = """
 .be-filter{display:inline-flex;align-items:center;gap:.45rem;cursor:pointer;user-select:none;opacity:.5}
 .be-filter.is-active{opacity:1;background:rgba(128,128,128,.1)}
 .be-check{width:15px;height:15px;margin:0;cursor:pointer;flex:none}
-.be-group.is-hidden,.be-cat.is-hidden,.be-card.is-hidden,.be-row.is-hidden,
+.be-group.is-hidden,.be-cat.is-hidden,.be-card.is-hidden,.be-row.is-hidden,.be-row.is-paged-out,
   .be-cards-view.is-hidden,.be-table-view.is-hidden,.be-map-view.is-hidden{display:none}
 .be-group-head{font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.04em;
   color:#888;border-bottom:1px solid rgba(128,128,128,.2);padding-bottom:.3rem;margin:1.6rem 0 .6rem}
@@ -805,6 +807,13 @@ _STYLE = """
 .be-table th[aria-sort="ascending"]::after{content:" ▲";font-size:9px}
 .be-table th[aria-sort="descending"]::after{content:" ▼";font-size:9px}
 .be-table tbody tr:hover{background:rgba(128,128,128,.08)}
+.be-pager{display:flex;flex-wrap:wrap;gap:.35rem;margin:1rem 0 0}
+.be-pager:empty{margin:0}
+.be-pager-btn{font:inherit;font-size:12.5px;padding:.25rem .65rem;
+  border:1px solid rgba(128,128,128,.35);border-radius:8px;background:transparent;color:inherit;
+  cursor:pointer}
+.be-pager-btn:hover{background:rgba(128,128,128,.12)}
+.be-pager-btn.is-active{background:rgba(128,128,128,.18);font-weight:600}
 .be-row-title a{color:inherit;font-weight:600;text-decoration:underline;
   text-decoration-color:rgba(128,128,128,.5)}
 .be-row-title a:hover{text-decoration-color:currentColor}
@@ -1002,6 +1011,10 @@ _SCRIPT = """
       quickfilter.setAttribute('data-state', openOnly ? 'open' : 'all');
       quickfilter.textContent=openOnly ? 'Show all' : 'Show open only';
     }
+    // A new search string or chip combination changes which rows match, so start back at page 1
+    // rather than stranding the reader on a page number that may no longer exist.
+    tablePage=1;
+    applyTablePaging();
   }
   checks.forEach(function(c){
     c.addEventListener('change', function(){ on[c.getAttribute('data-filter')]=c.checked; apply(); });
@@ -1072,12 +1085,56 @@ _SCRIPT = """
       arr.forEach(function(r){ tbody.appendChild(r); });
       ths.forEach(function(h){ h.setAttribute('aria-sort', 'none'); });
       th.setAttribute('aria-sort', sortDir>0?'ascending':'descending');
+      // The reordered rows are the same matched set, so start back at page 1 rather than showing
+      // whatever 50 rows now happen to land in the old page's slice.
+      tablePage=1;
+      applyTablePaging();
     }
     th.addEventListener('click', sortBy);
     th.addEventListener('keydown', function(e){
       if(e.key==='Enter'||e.key===' '){ e.preventDefault(); sortBy(); }
     });
   });
+
+  // Table pagination: 50 rows at a time, over whatever the search box and status chips currently
+  // pass, in whatever order sortBy() last left tbody in. is-hidden (the filter's own verdict) and
+  // is-paged-out (this page's verdict) stay separate classes, so paging never needs a second copy
+  // of what the filter already decided — it only reads is-hidden off tbody.children.
+  var TABLE_PAGE_SIZE=50;
+  var tablePage=1;
+  var pager=document.querySelector('.be-pager');
+  function matchedRows(){
+    if(!tbody) return [];
+    return Array.prototype.filter.call(tbody.children, function(r){
+      return !r.classList.contains('is-hidden');
+    });
+  }
+  function renderPager(total){
+    if(!pager) return;
+    // Always at least one button, even when everything fits on page 1 — so the current page stays
+    // visible rather than the pager silently vanishing once a chip or search narrows the result.
+    var pages=Math.max(1, Math.ceil(total/TABLE_PAGE_SIZE));
+    if(tablePage>pages) tablePage=pages;
+    pager.textContent='';
+    for(var i=1;i<=pages;i++){
+      (function(page){
+        var btn=document.createElement('button');
+        btn.type='button';
+        btn.className='be-pager-btn'+(page===tablePage?' is-active':'');
+        btn.textContent=String(page);
+        if(page===tablePage) btn.setAttribute('aria-current', 'page');
+        btn.addEventListener('click', function(){ tablePage=page; applyTablePaging(); });
+        pager.appendChild(btn);
+      })(i);
+    }
+  }
+  function applyTablePaging(){
+    if(!tbody) return;
+    var matched=matchedRows();
+    renderPager(matched.length);
+    var start=(tablePage-1)*TABLE_PAGE_SIZE, end=start+TABLE_PAGE_SIZE;
+    matched.forEach(function(r, i){ r.classList.toggle('is-paged-out', i<start||i>=end); });
+  }
 
   // Relationship map. The drawing arrives finished from the build — rows, connectors, and node
   // positions are all computed in Python — so nothing here lays anything out. The script only
