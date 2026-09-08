@@ -250,6 +250,55 @@ def test_worker_runs_one_iteration(monkeypatch: pytest.MonkeyPatch, tmp_path: Pa
     }
 
 
+def test_worker_runs_a_bundle_job_from_the_bundles_own_tree(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A job off an uploaded bundle runs from the bundle's tree, not the worker's bare directory.
+
+    The loop hands that one workspace to the run, the console log, and the evidence upload alike.
+    Leaving any of the three on the worker's own directory would upload an empty tree and lose every
+    artifact for uploaded-bundle runs, with nothing else in the suite noticing.
+    """
+    monkeypatch.chdir(tmp_path)
+    tree = tmp_path / "extracted"
+    tree.mkdir()
+    seen: dict[str, Any] = {}
+    leases = 0
+
+    def fake_post(url: str, body: dict[str, Any], *, token: str | None = None) -> tuple[int, Any]:
+        nonlocal leases
+        if url.endswith("/lease"):
+            leases += 1
+            if leases == 1:
+                return 200, {
+                    "job_id": "j1",
+                    "spec": {"cmd": "run", "bundle": {"id": "a" * 64}},
+                    "bundle_urls": {"bundle": "https://signed/bundle"},
+                }
+            raise _StopLoop
+        return 200, {}
+
+    monkeypatch.setattr(worker_mod, "_post_json", fake_post)
+    monkeypatch.setattr(worker_mod, "_bundle_workspace", lambda *_a, **_k: tree)
+    monkeypatch.setattr(
+        worker_mod, "_write_console_log", lambda work, *_a: seen.setdefault("log", work)
+    )
+    monkeypatch.setattr(
+        worker_mod, "_upload_evidence", lambda work, *_a, **_k: seen.setdefault("evidence", work)
+    )
+
+    def fake_execute(spec: dict[str, Any], **kwargs: Any) -> _FakeJob:
+        seen["run"] = kwargs["cwd"]
+        return _FakeJob()
+
+    monkeypatch.setattr(worker_mod, "execute_job_spec", fake_execute)
+
+    with pytest.raises(_StopLoop):
+        worker(server_url="http://cp", poll_interval=1, heartbeat_interval=5, worker_id="w1")
+
+    assert seen == {"run": tree, "log": tree, "evidence": tree}
+
+
 def test_advertised_capabilities_splits_platforms_and_falls_back_to_env(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -396,21 +445,49 @@ def test_worker_abandons_reclaimed_job(monkeypatch: pytest.MonkeyPatch) -> None:
 
     monkeypatch.setattr(worker_mod, "_post_json", fake_post)
     # abandoned=True → worker drops the result and continues to the next lease poll.
-    monkeypatch.setattr(worker_mod, "_run_with_heartbeat", lambda *a, **k: ({}, True))
+    monkeypatch.setattr(worker_mod, "_run_with_heartbeat", lambda *a, **k: ({}, True, Path()))
 
     with pytest.raises(_StopLoop):
         worker(server_url="http://cp", poll_interval=1, heartbeat_interval=1)
     assert leases == 2
 
 
+def test_worker_leaves_a_transient_bundle_fetch_to_lapse(monkeypatch: pytest.MonkeyPatch) -> None:
+    # A `None` result means the bundle fetch failed transiently: nothing is posted, and the worker
+    # moves straight to its next lease poll rather than reporting a permanent failure.
+    leases = 0
+    posted = []
+
+    def fake_post(url: str, body: dict[str, Any], *, token: str | None = None) -> tuple[int, Any]:
+        nonlocal leases
+        if url.endswith("/lease"):
+            leases += 1
+            if leases == 1:
+                return 200, {"job_id": "j1", "spec": {"cmd": "run"}}
+            raise _StopLoop
+        posted.append((url, body))
+        return 200, {}
+
+    monkeypatch.setattr(worker_mod, "_post_json", fake_post)
+    monkeypatch.setattr(worker_mod, "_run_with_heartbeat", lambda *a, **k: (None, False, Path()))
+
+    with pytest.raises(_StopLoop):
+        worker(server_url="http://cp", poll_interval=1, heartbeat_interval=1)
+    assert leases == 2
+    assert posted == []  # no /result call for a transient failure
+
+
 # --- _run_with_heartbeat ------------------------------------------------------------------------
 
 
-def _run_hb(tmp_path: Path) -> tuple[dict[str, Any], bool]:
+def _run_hb(
+    tmp_path: Path, *, bundle_urls: Any = None, spec: dict[str, Any] | None = None
+) -> tuple[dict[str, Any] | None, bool, Path]:
     return worker_mod._run_with_heartbeat(
-        {"cmd": "run"},
+        spec if spec is not None else {"cmd": "run"},
         job_id="j1",
         work=tmp_path,
+        bundle_urls=bundle_urls,
         bus=InMemoryLogBus(),
         url="http://cp",
         wid="w1",
@@ -427,9 +504,10 @@ def test_run_with_heartbeat_normal_completion(
     # heartbeat stays in-process rather than reaching out to http://cp/… — keeps the test hermetic.
     monkeypatch.setattr(worker_mod, "_post_json", lambda *a, **k: (200, {}))
     monkeypatch.setattr(worker_mod, "execute_job_spec", lambda *a, **k: _FakeJob())
-    result, abandoned = _run_hb(tmp_path)
+    result, abandoned, job_work = _run_hb(tmp_path)
     assert abandoned is False
     assert result == {"ok": True, "runId": "r1"}  # `lines` popped before return
+    assert job_work == tmp_path  # a job with no bundle runs from the worker's own directory
 
 
 def test_run_with_heartbeat_job_exception(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -439,8 +517,9 @@ def test_run_with_heartbeat_job_exception(monkeypatch: pytest.MonkeyPatch, tmp_p
         raise RuntimeError("job blew up")
 
     monkeypatch.setattr(worker_mod, "execute_job_spec", boom)
-    result, abandoned = _run_hb(tmp_path)
+    result, abandoned, _job_work = _run_hb(tmp_path)
     assert abandoned is False
+    assert result is not None
     assert result["ok"] is False
     assert "job blew up" in result["error"]
 
@@ -456,12 +535,17 @@ def test_run_with_heartbeat_reclaimed_on_409(
 
     monkeypatch.setattr(worker_mod, "execute_job_spec", slow_exec)
 
-    def hb_409(url: str, body: dict[str, Any], *, token: str | None = None) -> tuple[int, Any]:
+    def hb_409(
+        url: str, body: dict[str, Any], *, token: str | None = None, timeout: float | None = None
+    ) -> tuple[int, Any]:
         release.set()  # let the job finish so the follow-up join() returns
+        # Asserted, not merely accepted: deleting the kwarg would otherwise leave the suite green
+        # (`_run_with_heartbeat`'s heartbeat POST carries why it is bounded). `_run_hb` passes 0.02.
+        assert timeout == 0.02
         return 409, {}  # the control plane reclaimed the lease
 
     monkeypatch.setattr(worker_mod, "_post_json", hb_409)
-    _result, abandoned = _run_hb(tmp_path)
+    _result, abandoned, _job_work = _run_hb(tmp_path)
     assert abandoned is True
 
 
@@ -476,13 +560,120 @@ def test_run_with_heartbeat_survives_heartbeat_error(
 
     monkeypatch.setattr(worker_mod, "execute_job_spec", slow_exec)
 
-    def hb_error(url: str, body: dict[str, Any], *, token: str | None = None) -> tuple[int, Any]:
+    def hb_error(
+        url: str, body: dict[str, Any], *, token: str | None = None, timeout: float | None = None
+    ) -> tuple[int, Any]:
         release.set()
         raise URLError("heartbeat dropped")  # logged and retried, not fatal
 
     monkeypatch.setattr(worker_mod, "_post_json", hb_error)
-    _result, abandoned = _run_hb(tmp_path)
+    _result, abandoned, _job_work = _run_hb(tmp_path)
     assert abandoned is False
+
+
+def test_run_with_heartbeat_covers_the_bundle_fetch(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # The bundle fetch used to run before this function was ever called, so nothing renewed the
+    # lease while it downloaded. It now runs on the same background thread as the job itself, so a
+    # slow fetch heartbeats exactly like a slow run — proven here by a reclaim (409) arriving while
+    # `_bundle_workspace` is still the thread's only work.
+    release = threading.Event()
+
+    def slow_workspace(work: Path, spec: dict[str, Any], urls: Any) -> Path:
+        release.wait(2.0)  # stay alive until the heartbeat fires
+        return work
+
+    monkeypatch.setattr(worker_mod, "_bundle_workspace", slow_workspace)
+    # Keep the real executor out of reach: if `release.wait` ever times out on a slow runner, the
+    # thread would otherwise fall into `subprocess.Popen` with a spec that carries no `cmd`.
+    monkeypatch.setattr(worker_mod, "execute_job_spec", lambda *a, **k: _FakeJob())
+
+    def hb_409(
+        url: str, body: dict[str, Any], *, token: str | None = None, timeout: float | None = None
+    ) -> tuple[int, Any]:
+        release.set()
+        return 409, {}
+
+    monkeypatch.setattr(worker_mod, "_post_json", hb_409)
+    _result, abandoned, _job_work = _run_hb(
+        tmp_path, bundle_urls={"bundle": "https://signed/bundle"}, spec={"bundle": {"id": "a" * 64}}
+    )
+    assert abandoned is True
+
+
+def test_run_with_heartbeat_never_starts_the_run_once_the_lease_is_lost_mid_fetch(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A reclaim seen while the fetch is still running must stop the run from starting at all.
+
+    Moving the fetch under the heartbeat (the test above) makes a 409 observable before the run
+    ever begins — but observing it is not enough on its own: without the `lost` event, this thread
+    would walk from the finished fetch straight into `execute_job_spec`, installing the app and
+    driving the device beside whichever worker won the re-lease, and only discard the result
+    afterward. Pinned here by asserting `execute_job_spec` is never called at all.
+    """
+    started = threading.Event()
+
+    def slow_workspace(work: Path, spec: dict[str, Any], urls: Any) -> Path:
+        # Deliberately *not* keyed off the heartbeat: it would fire before the main thread
+        # runs `lost.set()`, so waking on it would leave this thread racing that assignment. No
+        # signal exists after `lost.set()` either — the only hook is inside `_post_json`, which
+        # returns first — so bound the fetch by a wait nothing ever sets, long enough (25 times
+        # `_run_hb`'s 0.02 interval) that the 409 and the `lost.set()` behind it have both landed.
+        threading.Event().wait(0.5)
+        return work
+
+    def recording_execute(spec: dict[str, Any], **kwargs: Any) -> _FakeJob:
+        started.set()  # would prove the bug if this ever fires
+        return _FakeJob()
+
+    monkeypatch.setattr(worker_mod, "_bundle_workspace", slow_workspace)
+    monkeypatch.setattr(worker_mod, "execute_job_spec", recording_execute)
+
+    def hb_409(
+        url: str, body: dict[str, Any], *, token: str | None = None, timeout: float | None = None
+    ) -> tuple[int, Any]:
+        return 409, {}
+
+    monkeypatch.setattr(worker_mod, "_post_json", hb_409)
+    _result, abandoned, _job_work = _run_hb(
+        tmp_path, bundle_urls={"bundle": "https://signed/bundle"}, spec={"bundle": {"id": "a" * 64}}
+    )
+    assert abandoned is True
+    assert not started.is_set()
+
+
+def test_run_with_heartbeat_leaves_a_transient_fetch_failure_to_lapse(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # A reset connection partway through the fetch is transient: another worker (or this one, a
+    # minute later) would likely succeed, so nothing is posted and the lease is left to lapse.
+    def failing_workspace(work: Path, spec: dict[str, Any], urls: Any) -> Path:
+        raise worker_mod._TransientFetch("could not fetch bundle: connection reset")
+
+    monkeypatch.setattr(worker_mod, "_bundle_workspace", failing_workspace)
+    monkeypatch.setattr(worker_mod, "_post_json", lambda *a, **k: (200, {}))
+    result, abandoned, _job_work = _run_hb(
+        tmp_path, bundle_urls={"bundle": "https://signed/bundle"}, spec={"bundle": {"id": "a" * 64}}
+    )
+    assert result is None
+    assert abandoned is False
+
+
+def test_run_with_heartbeat_reports_a_permanent_fetch_failure(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # An invalid bundle id is permanent: no worker could ever start this job, so it is reported
+    # failed rather than left for the queue to keep re-leasing forever.
+    monkeypatch.setattr(worker_mod, "_post_json", lambda *a, **k: (200, {}))
+    result, abandoned, _job_work = _run_hb(
+        tmp_path, bundle_urls={}, spec={"bundle": {"id": "not-a-digest"}}
+    )
+    assert abandoned is False
+    assert result is not None
+    assert result["ok"] is False
+    assert "invalid bundle id" in result["error"]
 
 
 # --- evidence upload (presigned PUT) ------------------------------------------------------------
@@ -857,3 +1048,28 @@ def test_put_tree_files_raises_on_a_non_string_key_when_not_best_effort(tmp_path
     run = _run_tree(tmp_path, "r1")
     with pytest.raises(RuntimeError, match="unexpected upload entry"):
         _put_tree_files(run, {123: "https://x/put"}, best_effort=False)  # type: ignore[dict-item]
+
+
+def test_run_with_heartbeat_reports_a_failure_raised_after_the_download(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A failure while *building* the tree is permanent, even though its type is an `OSError`.
+
+    This is the half that pins the classification boundary. The transient test above passes under a
+    catch keyed on `(URLError, OSError)` just as happily as under the phase-scoped `_TransientFetch`;
+    only this one fails if the catch widens back to the type, since `FileExistsError` is an
+    `OSError` and extracting is not something a retry fixes.
+    """
+
+    def bad_tree(work: Path, spec: dict[str, Any], urls: Any) -> Path:
+        raise FileExistsError("appPath collides with a file the scenarios zip placed")
+
+    monkeypatch.setattr(worker_mod, "_bundle_workspace", bad_tree)
+    monkeypatch.setattr(worker_mod, "_post_json", lambda *a, **k: (200, {}))
+    result, abandoned, _job_work = _run_hb(
+        tmp_path, bundle_urls={"bundle": "https://signed/bundle"}, spec={"bundle": {"id": "a" * 64}}
+    )
+    assert abandoned is False
+    assert result is not None
+    assert result["ok"] is False
+    assert "appPath collides" in result["error"]

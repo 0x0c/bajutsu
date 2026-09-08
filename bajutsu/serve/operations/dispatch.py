@@ -215,6 +215,11 @@ def _register_and_dispatch(
     job.env_overlay = resolve_provider_env(state, job.org)
     if binding is not None:
         job.cwd = binding.cwd
+        if binding.upload is not None:
+            # A remote worker has no project on disk, so `job.cwd` means nothing there. Carry the
+            # bundle's identity as well, and the lease signs a GET for its stored zip — without it
+            # the run starts against an `appPath` no worker ever received.
+            job.bundle = binding.upload.worker_ref
     registered = state.try_register(job, device_budget=device_budget)
     if registered is None:
         oplog.log_event(
@@ -347,7 +352,11 @@ def start_run(
             app_path=app_path,
             build=build,
             materials=materials,
-            materialize_baselines=on_worker,
+            # An uploaded bundle ships its own baselines and runs from its own tree, so the org's
+            # stored baselines must not be materialized over them — `_download_baselines` clears the
+            # destination dir first, which would delete the bundle's. Same reasoning that omits
+            # `--baselines` above: the bundle is self-contained (BE-0073).
+            materialize_baselines=on_worker and binding.upload is None,
             provenance=binding.upload.provenance if binding.upload is not None else None,
             actor=actor,
             org=org,
