@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from xml.etree import ElementTree as ET
 
 
 # A resident UI Automator server (BE-0245) returns the hierarchy over an already-open channel,
@@ -19,10 +20,18 @@ class HierarchyRead:
     on the `uiautomator dump` fallback, which carries no such stamp; there the wall-clock budget stands
     in, exactly as before this unit.
 
-    `raw` is the body exactly as the resident server answered it, before `narrow_to_active_window`
-    strips SystemUI decor windows — `text` is what that narrowing produced. None when the caller applies
-    no such transform, so a `rawTree` capture (`RawSourceProvider`) has both halves to diff a mismatch
-    against: the device's own dump, and bajutsu's own processing of it.
+    `text` is the body exactly as the device answered it, untouched by bajutsu's own processing, so a
+    `rawTree` capture (`RawSourceProvider`) can tell a device dump that already looked wrong from one
+    bajutsu changed.
+
+    `root` is that same body parsed once, with the SystemUI decor windows already stripped — the tree
+    the caller should consume. Carrying the parsed tree rather than a re-serialized string is what
+    keeps the host from parsing every read twice (BE-0407 unit 23): narrowing had to parse to strip a
+    window, and the parser then parsed the string it produced. None on the dump fallback and on a
+    body that would not parse, where the caller falls back to slicing `text` itself. `narrowed` says
+    whether stripping actually removed a window, so the `rawTree` capture knows whether the parsed
+    tree is worth serializing beside the reply — and, being the only consumer, pays that serialization
+    only when it is actually taken.
 
     `native_z` maps each opted-in view's content key to its own `View.getZ()` (BE-0355 Unit 3), keyed
     the way it is because the device measures those values in a second walk whose node sequence does
@@ -32,5 +41,6 @@ class HierarchyRead:
 
     text: str
     mark: float | None = None
-    raw: str | None = None
     native_z: dict[str, float] = field(default_factory=dict)
+    root: ET.Element | None = None
+    narrowed: bool = False

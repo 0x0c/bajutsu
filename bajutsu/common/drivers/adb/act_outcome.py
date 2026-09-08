@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from .hierarchy_read import HierarchyRead
+
 
 @dataclass(frozen=True)
 class ActOutcome:
@@ -22,3 +24,10 @@ class ActOutcome:
 
     acted: bool  # False is the `stale` reply: the identity no longer names the same nodes there
     published_mark: float | None  # the device-clock time of an event postdating the injection
+    # The tree the device dumped after that publish, when it confirmed one (BE-0407 unit 19). Carried
+    # only alongside a confirmation, because that confirmation is exactly what makes it safe: an
+    # event postdates the injection, so this dump cannot describe the pre-gesture screen. None
+    # None otherwise: an unconfirmed gesture, an older server, and a target that asked for `nativeZ`
+    # (whose reading this reply cannot carry, so the driver reads for itself rather than report every
+    # element's position as absent).
+    read: HierarchyRead | None = None

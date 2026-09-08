@@ -2,12 +2,17 @@
 
 from __future__ import annotations
 
+import contextlib
+import hashlib
 import http.client
 import math
+import select
 import subprocess
 import urllib.parse
 import xml.etree.ElementTree as ET
+from collections.abc import Iterator
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from bajutsu.common.drivers.adb import (
     ActOutcome,
@@ -22,10 +27,13 @@ from bajutsu.common.drivers.adb import (
 from ._process import _Process
 from ._shared import _SERVER_APK, _TEST_APK, logger
 
+if TYPE_CHECKING:
+    from .keepalive import Keepalive
+
 # The response header the resident server stamps `GET /source` with: the device-clock time
 # (`SystemClock.uptimeMillis`) of the most recent accessibility event it had observed (BE-0332 Unit 3).
 # Carried in a header so the XML body stays byte-identical to `uiautomator dump`'s, keeping
-# `parse_hierarchy` and `narrow_to_active_window` unchanged.
+# `parse_hierarchy` and `narrowed_root` unchanged.
 _READ_MARK_HEADER = "X-Bajutsu-Read-Mark"
 
 # The response header carrying each opted-in view's own `View.getZ()` (BE-0355 Unit 3), in the same
@@ -56,14 +64,27 @@ _NO_ENDPOINT_STATUS = 404
 _SYSTEM_DECOR_PACKAGES = frozenset({"com.android.systemui"})
 
 
-def narrow_to_active_window(xml: str) -> str:
-    """Drop system-decor windows from a `dumpWindowHierarchy` tree so it matches the active-window dump.
+# Which one-shot warnings this process has already given. A garbled reply repeats on every gesture,
+# so the first is the diagnosis and the rest are noise. Per process rather than per lease — unlike
+# `AdbDriver`'s own `_mark_warned` / `_clock_warned` / `_act_warned`, which are per driver — because
+# what this reports is a property of the device server's build, not of one lease: a server that
+# garbles a reply garbles it for every lease it serves, and repeating the diagnosis per lease of a
+# long `serve` session would say nothing new.
+_warned: set[str] = set()
+
+
+def narrowed_root(xml: str) -> tuple[ET.Element | None, bool]:
+    """Parse `xml` once and drop its system-decor windows; the tree, and whether any were dropped.
 
     `dumpWindowHierarchy` emits one top-level `<node>` per window; `uiautomator dump` scopes to the
     active window. Removing the SystemUI status/navigation-bar windows reconciles the two so
     `parse_hierarchy` produces identical Elements. A tree with no system window (the active-window dump
-    itself) passes through unchanged, and unparseable input is returned as-is so the driver's existing
-    empty-tree handling still applies.
+    itself) comes back untouched with False, and unparseable input yields `(None, False)` so the
+    driver's existing empty-tree handling still applies.
+
+    The tree, not a string: the parse this had to do to strip a window is the same parse the driver
+    would otherwise repeat on the string it produced, so handing the tree over is what removes the
+    host's second pass over every read (BE-0407 unit 23).
 
     Scope: this drops only SystemUI decor. The Android e2e lane (BE-0208) exercises the resident path
     across the showcase scenarios, including one that raises the IME (`search`); the `permission`
@@ -74,17 +95,84 @@ def narrow_to_active_window(xml: str) -> str:
     """
     root = slice_hierarchy_root(xml)
     if root is None:
-        return xml
+        return None, False
     decor = [window for window in root if window.get("package") in _SYSTEM_DECOR_PACKAGES]
-    if not decor:
-        return xml
     for window in decor:
         root.remove(window)
-    return ET.tostring(root, encoding="unicode")
+    return root, bool(decor)
+
+
+def _is_stale(conn: http.client.HTTPConnection) -> bool:
+    """Whether `conn` is unfit to carry another request — the peer closed it, or bytes are waiting.
+
+    A zero-timeout `select` answers that *before* any byte of the next request is sent, so the
+    ordinary idle close reconnects cleanly instead of surfacing as a half-sent request whose
+    delivery is ambiguous — the distinction `act` cannot afford to guess through, since a re-sent
+    gesture is a second touch.
+    """
+    sock = conn.sock
+    if sock is None:
+        return True
+    try:
+        readable, _, _ = select.select([sock], [], [], 0)
+        # Readable at all, not just readable-and-closed. On a correctly drained idle connection
+        # there is nothing to read, so bytes waiting *before* a request goes out mean the two ends
+        # disagree about where the last reply ended — and reusing the socket would let the next
+        # `getresponse()` parse those bytes as this request's answer.
+        return bool(readable)
+    except (OSError, ValueError):
+        # `ValueError` is the already-closed socket: its descriptor is -1, which `select` refuses
+        # outright rather than reporting as unreadable. Either way the answer is the same one this
+        # guard exists to give — reconnect, because writing onto a socket whose state cannot be
+        # established is exactly the ambiguity a gesture must not be sent through.
+        return True
+
+
+@contextlib.contextmanager
+def _channel(
+    host_port: int, keepalive: Keepalive | None, timeout: float
+) -> Iterator[http.client.HTTPConnection]:
+    """The connection one call should use, kept or one-shot, retired correctly either way.
+
+    A `keepalive` is retired on any exception and kept on a clean return — including a return down a
+    branch that read a non-200 and chose not to raise, which is a complete exchange leaving the
+    connection perfectly good (`fetch_clock`'s non-200 and `act`'s `409`). Without one, the
+    connection is closed on the way out exactly as it was before this unit.
+
+    Getting the connection can itself fail, and that failure is converted here rather than left to
+    each caller. Before the connection was kept, `HTTPConnection` connected lazily inside
+    `request()`, so a refused connect surfaced inside the caller's own `try` and became an
+    `AdbResidentError`; connecting eagerly moved it outside. `act` is the caller that noticed — a
+    raw `OSError` escaped it, escaped `_device_act`'s three-exception catch, and failed the step
+    on the one fault class that is provably safe to fall back from, since nothing had been sent.
+    """
+    if keepalive is None:
+        conn = http.client.HTTPConnection("127.0.0.1", host_port, timeout=timeout)
+        try:
+            yield conn
+        finally:
+            conn.close()
+        return
+    try:
+        conn = keepalive.connection(host_port, timeout)
+    except (OSError, http.client.HTTPException) as exc:
+        keepalive.discard()
+        raise AdbResidentError(f"resident channel unreachable on port {host_port}: {exc}") from exc
+    try:
+        yield conn
+    except BaseException:
+        keepalive.discard()
+        raise
+    keepalive.succeeded()
 
 
 def fetch_source(
-    host_port: int, since: float | None = None, *, timeout: float = 5.0
+    host_port: int,
+    since: float | None = None,
+    *,
+    timeout: float = 5.0,
+    native_z: bool = False,
+    keepalive: Keepalive | None = None,
 ) -> HierarchyRead:
     """GET the resident server's current hierarchy over the forwarded loopback host port.
 
@@ -98,35 +186,48 @@ def fetch_source(
             the request as `?since=`, and the resident server blocks until an accessibility event
             postdates it before dumping once — collapsing the host's re-poll into one round trip. None
             (a read with no gesture pending) requests the current hierarchy with no wait.
+        native_z: Ask the device to measure each opted-in view's own `View.getZ()` (BE-0355). Off by
+            default because the walk that answers it covers every node on every read and returns
+            nothing at all for an app that opted no view in (BE-0407 unit 18); a target turns it on
+            in its own config.
+        keepalive: The lease's reused connection, when there is one.
 
     Raises:
         AdbResidentError: the channel could not be reached or did not answer 200 — an infrastructure
             failure the driver catches to fall back to `uiautomator dump`, never a test outcome.
     """
-    conn = http.client.HTTPConnection("127.0.0.1", host_port, timeout=timeout)
-    path = "/source" if since is None else f"/source?since={since}"
+    query = {} if since is None else {"since": since}
+    if native_z:
+        query["nativeZ"] = 1
+    path = "/source" + (f"?{urllib.parse.urlencode(query)}" if query else "")
     try:
-        conn.request("GET", path)
-        resp = conn.getresponse()
-        body = resp.read()
-        if resp.status != 200:
-            raise AdbResidentError(f"resident server returned HTTP {resp.status}")
-        # An absent or malformed mark here degrades the driver's barrier to its wall-clock budget
-        # rather than failing the read: the mark only ever tightens the wait.
-        mark = _parse_mark(resp.getheader(_READ_MARK_HEADER))
-        native_z = _parse_native_z(resp.getheader(_NATIVE_Z_HEADER))
-        # A truncated/garbled body (a mid-write device server) must degrade to the dump fallback, not
-        # escape past the driver's AdbResidentError-only catch — whether it surfaces as a
-        # UnicodeDecodeError (garbled bytes) or an http.client.HTTPException (IncompleteRead from a
-        # short body, BadStatusLine/UnknownProtocol from a malformed status line).
-        return HierarchyRead(body.decode("utf-8"), mark, native_z=native_z)
+        with _channel(host_port, keepalive, timeout) as conn:
+            conn.request("GET", path)
+            resp = conn.getresponse()
+            body = resp.read()
+            if resp.status != 200:
+                raise AdbResidentError(f"resident server returned HTTP {resp.status}")
+            # An absent or malformed mark here degrades the driver's barrier to its wall-clock budget
+            # rather than failing the read: the mark only ever tightens the wait.
+            mark = _parse_mark(resp.getheader(_READ_MARK_HEADER))
+            measured_z = _parse_native_z(resp.getheader(_NATIVE_Z_HEADER))
+            # A truncated/garbled body (a mid-write device server) must degrade to the dump fallback,
+            # not escape past the driver's AdbResidentError-only catch — whether it surfaces as a
+            # UnicodeDecodeError (garbled bytes) or an http.client.HTTPException (IncompleteRead from
+            # a short body, BadStatusLine/UnknownProtocol from a malformed status line).
+            return HierarchyRead(body.decode("utf-8"), mark, native_z=measured_z)
     except (OSError, UnicodeDecodeError, http.client.HTTPException) as exc:
         raise AdbResidentError(f"resident channel unreachable on port {host_port}: {exc}") from exc
-    finally:
-        conn.close()
 
 
-def act(host_port: int, request: ActRequest, *, timeout: float = 10.0) -> ActOutcome:
+def act(
+    host_port: int,
+    request: ActRequest,
+    *,
+    timeout: float = 10.0,
+    keepalive: Keepalive | None = None,
+    want_tree: bool = True,
+) -> ActOutcome:
     """Ask the resident server to perform one gesture on an element the host already resolved.
 
     The element crosses as its four accessibility fields plus its ordinal among the nodes sharing them,
@@ -139,7 +240,10 @@ def act(host_port: int, request: ActRequest, *, timeout: float = 10.0) -> ActOut
         there, so the host must re-resolve rather than let a coordinate be guessed — and, when the
         gesture landed, whether an accessibility event postdated it before the server replied
         (`_ACT_PUBLISH_HEADER`). A server that never sends that header reports no confirmation, which
-        is what leaves the driver's read-lag barrier armed exactly as it was.
+        is what leaves the driver's read-lag barrier armed exactly as it was. A confirmed gesture also
+        carries the tree the device dumped after that publish (`read`), which is the host's next read
+        already answered (BE-0407 unit 19) — unless `want_tree` is False, which tells the device not
+        to take that dump at all.
 
     Raises:
         AdbResidentError: the channel could not be reached, or answered anything else — including the
@@ -147,6 +251,7 @@ def act(host_port: int, request: ActRequest, *, timeout: float = 10.0) -> ActOut
             actuators, so a device that cannot serve this is never worse off than before.
     """
     fields = {
+        "tree": "1" if want_tree else "0",
         "kind": request.kind,
         "index": str(request.index),
         "count": str(request.count),
@@ -155,14 +260,13 @@ def act(host_port: int, request: ActRequest, *, timeout: float = 10.0) -> ActOut
         "text": request.identity[2],
         "cls": request.identity[3],
     }
-    if request.since is not None:
-        fields["since"] = str(request.since)
     if request.duration_ms is not None:
         fields["durationMs"] = str(request.duration_ms)
+    if request.since is not None:
+        fields["since"] = str(request.since)
     # A longer timeout than a read: the server honors the `since` mark and settles before it injects,
     # and a press-and-hold then holds for its own duration on top of that.
-    conn = http.client.HTTPConnection("127.0.0.1", host_port, timeout=timeout)
-    try:
+    with _channel(host_port, keepalive, timeout) as conn:
         try:
             conn.request("POST", "/act?" + urllib.parse.urlencode(fields))
         except (OSError, http.client.HTTPException) as exc:
@@ -173,13 +277,14 @@ def act(host_port: int, request: ActRequest, *, timeout: float = 10.0) -> ActOut
             ) from exc
         try:
             resp = conn.getresponse()
-            body = resp.read().decode("utf-8", "replace").strip()
+            raw = resp.read()
         except (OSError, http.client.HTTPException) as exc:
             # The request went out, and the device injects before it answers, so the gesture may
             # already have happened. Re-actuating on the coordinate path would be a second touch.
             raise AdbActUncertain(
                 f"resident actuation was sent but its reply was lost on port {host_port}: {exc}"
             ) from exc
+        body = raw.decode("utf-8", "replace").strip()
         if resp.status == _STALE_STATUS:
             logger.debug("resident actuation reported the target moved: %s", body)
             return ActOutcome(acted=False, published_mark=None)
@@ -191,10 +296,46 @@ def act(host_port: int, request: ActRequest, *, timeout: float = 10.0) -> ActOut
         # device could not confirm" — the barrier stays armed — rather than failing a gesture that
         # actually landed.
         return ActOutcome(
-            acted=True, published_mark=_parse_mark(resp.getheader(_ACT_PUBLISH_HEADER))
+            acted=True,
+            published_mark=_parse_mark(resp.getheader(_ACT_PUBLISH_HEADER)),
+            read=_act_read(resp, raw),
         )
-    finally:
-        conn.close()
+
+
+def _act_read(resp: http.client.HTTPResponse, raw: bytes) -> HierarchyRead | None:
+    """The caught-up tree a confirmed gesture's reply carries, or None when it carries none.
+
+    The read mark is what distinguishes the two bodies this endpoint can answer: a bare `ok` from an
+    unconfirmed gesture, and the post-publish dump from a confirmed one (BE-0407 unit 19). Keyed off
+    the header rather than the content type because that is the same signal the driver already trusts
+    to decide the tree is not stale — a body with no mark is one the driver could not have used
+    anyway. An older server sends neither, so it needs no version negotiation.
+
+    A body that will not decode or will not narrow yields None rather than raising: the gesture itself
+    landed, and losing this optimisation only costs the read it would have saved. It is still said out
+    loud once per process, because it is the same mid-write-server symptom `fetch_source` tears the
+    channel down over — at debug only, a server garbling every reply would present as an unexplained
+    slowdown and nothing else.
+    """
+    mark = _parse_mark(resp.getheader(_READ_MARK_HEADER))
+    if mark is None:
+        return None
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        _warn_once("resident actuation returned an undecodable tree; reading again instead")
+        return None
+    root, narrowed = narrowed_root(text)
+    if root is None:
+        _warn_once("resident actuation returned an unparseable tree; reading again instead")
+        return None
+    return HierarchyRead(text, mark, root=root, narrowed=narrowed)
+
+
+def _warn_once(message: str) -> None:
+    if message not in _warned:
+        _warned.add(message)
+        logger.warning(message)
 
 
 def _parse_mark(raw: str | None) -> float | None:
@@ -239,7 +380,9 @@ def _parse_native_z(raw: str | None) -> dict[str, float]:
     return found
 
 
-def fetch_clock(host_port: int, *, timeout: float = 5.0) -> float | None:
+def fetch_clock(
+    host_port: int, *, timeout: float = 5.0, keepalive: Keepalive | None = None
+) -> float | None:
     """GET the resident server's current device clock (`SystemClock.uptimeMillis`), or None.
 
     Read just before a gesture (BE-0332 Unit 3) so a later read must postdate it, on the device's own
@@ -247,18 +390,32 @@ def fetch_clock(host_port: int, *, timeout: float = 5.0) -> float | None:
     is an optimisation over the wall-clock budget, so a clock hiccup slows the barrier at worst, never
     fails a read or accepts a stale one.
     """
-    conn = http.client.HTTPConnection("127.0.0.1", host_port, timeout=timeout)
     try:
-        conn.request("GET", "/clock")
-        resp = conn.getresponse()
-        body = resp.read()
-        if resp.status != 200:
-            return None
-        return float(body.decode("utf-8").strip())
-    except (OSError, ValueError, UnicodeDecodeError, http.client.HTTPException):
+        with _channel(host_port, keepalive, timeout) as conn:
+            conn.request("GET", "/clock")
+            resp = conn.getresponse()
+            body = resp.read()
+            if resp.status != 200:
+                return None
+            return float(body.decode("utf-8").strip())
+    # `AdbResidentError` included since `_channel` converts a failed connect into one: this probe is
+    # documented never to raise, and `_capture_mark` relies on that — a clock hiccup must slow the
+    # barrier, never fail the gesture that was about to take a mark.
+    except (OSError, ValueError, UnicodeDecodeError, http.client.HTTPException, AdbResidentError):
         return None
-    finally:
-        conn.close()
+
+
+def _apk_digest(path: Path) -> str:
+    """A content digest of one APK, naming the exact bytes a device would be given.
+
+    Read in chunks rather than whole: an instrumentation APK runs to a megabyte, and nothing here
+    needs it in memory.
+    """
+    digest = hashlib.sha256()
+    with path.open("rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def server_apks_built(server_apk: Path = _SERVER_APK, test_apk: Path = _TEST_APK) -> bool:

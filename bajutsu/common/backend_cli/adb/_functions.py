@@ -558,6 +558,15 @@ def uninstall_cmd(serial: str, package: str) -> list[str]:
     return _adb(serial, "uninstall", package)
 
 
+def package_path_cmd(serial: str, package: str) -> list[str]:
+    """Ask where a package's APK sits on the device; empty output means it is not installed.
+
+    `pm path` rather than `pm list packages`, because it names one package directly instead of
+    filtering a list the device has to build.
+    """
+    return _adb(serial, "shell", "pm", "path", package)
+
+
 def forward_cmd(serial: str, device_port: int = RESIDENT_DEVICE_PORT) -> list[str]:
     """Forward a free host port to the device's resident-server port; adb prints the host port on stdout.
 

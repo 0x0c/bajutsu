@@ -15,17 +15,20 @@
 
 ## Introduction
 
-A performance investigation, recorded under a companion item proposing driver-internal tuning,
+A performance investigation, recorded under [BE-0407](../BE-0407-step-latency-driver-internal-tuning/BE-0407-step-latency-driver-internal-tuning.md), which proposes driver-internal tuning,
 measured a real `tap` step against the 250–500 millisecond target
-Bajutsu sets for end-to-end step execution, evidence capture included. That companion item's
+Bajutsu sets for end-to-end step execution, evidence capture included. That item's
 reductions still leave iOS at roughly 0.3–0.6 seconds per step and Android at roughly 0.6–1.2
 seconds — short of the target, because every step still pays at least one host-device round trip for
 each condition it polls. Closing the remainder needs the condition itself evaluated on the device,
 not polled from the host. This item defines the protocol and selector semantics that make that
 possible: what moves to the device, what stays on the host, and how a selector resolves identically
-on both sides. It is the shared foundation two platform-specific companion items (an iOS executor
-inside the XCTest runner, an Android executor inside the resident instrumentation server) build on;
-neither platform implementation is in this item's scope.
+on both sides. It is the shared foundation two platform-specific items build on —
+[BE-0409](../BE-0409-step-latency-ios-device-executor/BE-0409-step-latency-ios-device-executor.md),
+an iOS executor inside the XCTest runner, and
+[BE-0410](../BE-0410-step-latency-android-device-executor/BE-0410-step-latency-android-device-executor.md),
+an Android executor inside the resident instrumentation server; neither platform implementation is
+in this item's scope.
 
 ## Motivation
 
@@ -52,11 +55,13 @@ collapsed a multi-round-trip element read into a single snapshot.
 ## Detailed design
 
 **Implementation order.** This item is the second of four related items in a strict order: the
-driver-internal-tuning item, then this item, then the iOS executor item, then the Android executor
-item. **Work on this item must not begin until the driver-internal-tuning item is complete** — this
+driver-internal-tuning item ([BE-0407](../BE-0407-step-latency-driver-internal-tuning/BE-0407-step-latency-driver-internal-tuning.md)),
+then this item, then the iOS executor ([BE-0409](../BE-0409-step-latency-ios-device-executor/BE-0409-step-latency-ios-device-executor.md)),
+then the Android executor ([BE-0410](../BE-0410-step-latency-android-device-executor/BE-0410-step-latency-android-device-executor.md)).
+**Work on this item must not begin until BE-0407 is complete** — this
 item's design is meant to pick up from that item's shipped, measured baseline, and starting protocol
 design against a baseline that is still moving risks designing around numbers that change under it.
-Once this item ships, the iOS executor item must not begin until this item is complete either, for the
+Once this item ships, BE-0409 must not begin until this item is complete either, for the
 same reason: an executor built against a still-moving protocol design would need rework whenever the
 protocol changed under it.
 
@@ -148,7 +153,7 @@ its platform.
 > *Detailed design* (one box per unit of work); the log records what changed and when
 > (oldest first), linking the PRs.
 
-**Sequence status: blocked on the driver-internal-tuning item's completion** (see *Implementation
+**Sequence status: blocked on BE-0407's completion** (see *Implementation
 order* in *Detailed design*). Do not start the checklist below before then.
 
 - [ ] Write the wire format for stage 1 (`POST /wait`) and agree it across both platform items before
@@ -161,8 +166,7 @@ order* in *Detailed design*). Do not start the checklist below before then.
 - [ ] Define the wire format for stages 2–4 (`settled`, screen-closed `assert`, `POST /scenario`),
   informed by whatever stage 1 and the platform items learn from a real implementation.
 - [x] Once the `roadmap-id` workflow allocates the four ids on `main`, backfill a reciprocal
-  `Related` link with the driver-internal-tuning, iOS executor, and Android executor items (see the
-  same box on the driver-internal-tuning item).
+  `Related` link with BE-0407, BE-0409, and BE-0410 (see the same box on BE-0407).
 
 ## References
 

@@ -43,6 +43,12 @@ class TargetConfig(_Model):
     # Android only: runtime permissions granted up front (`pm grant`) before launch, so a permission
     # prompt never blocks a scenario (BE-0210). App-specific, so it lives in config, not the driver.
     grant_permissions: list[str] = Field(default_factory=list, alias="grantPermissions")
+    # Android only: ask the device to measure each opted-in view's own `View.getZ()` (BE-0355), which
+    # `elements.json` reports as `nativeZ`. Off by default because the walk that answers it covers
+    # every node on every read — 20-100ms — and returns nothing at all unless the app under test links
+    # `BajutsuAndroid` and opts views in, which is why the cost belongs to the targets that read the
+    # value rather than to every Android run (BE-0407 unit 18).
+    native_z: bool = Field(default=False, alias="nativeZ")
     # Web backend only: run with a visible (headed) browser instead of headless. iOS ignores it.
     # The `bajutsu run --headed/--no-headed` flag (and the Web UI's "Show browser" toggle) override.
     headless: bool = True

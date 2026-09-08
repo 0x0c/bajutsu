@@ -19,3 +19,7 @@ class AndroidConfig:
     # Runtime permissions granted up front (`pm grant`) at lease time, so a permission prompt never
     # blocks a scenario (BE-0210). Empty = grant nothing.
     grant_permissions: list[str] = field(default_factory=list)
+    # Ask the resident server for each opted-in view's measured `View.getZ()` (BE-0355). Off by
+    # default: the walk answering it runs over every node on every read and reports nothing for an
+    # app that opted no view in (BE-0407 unit 18).
+    native_z: bool = False

@@ -9,7 +9,7 @@
 | Author | [@0x0c](https://github.com/0x0c) |
 | Status | **In progress** |
 | Tracking issue | [Search](https://github.com/bajutsu-e2e/bajutsu/issues?q=is%3Aissue+label%3Aroadmap-tracking+in%3Atitle+"BE-0407") |
-| Implementing PR | [#1897](https://github.com/bajutsu-e2e/bajutsu/pull/1897) (Group 1, units 1, 3-5), [#1912](https://github.com/bajutsu-e2e/bajutsu/pull/1912) (Group 1 unit 6, Group 2 units 7, 9, 10, 11, 12, 13, and half of 14), [#1925](https://github.com/bajutsu-e2e/bajutsu/pull/1925) (Group 1 unit 2, completing Group 1) |
+| Implementing PR | [#1897](https://github.com/bajutsu-e2e/bajutsu/pull/1897) (Group 1, units 1, 3-5), [#1912](https://github.com/bajutsu-e2e/bajutsu/pull/1912) (Group 1 unit 6, Group 2 units 7, 9, 10, 11, 12, 13, and half of 14), [#1925](https://github.com/bajutsu-e2e/bajutsu/pull/1925) (Group 1 unit 2, completing Group 1), [#1938](https://github.com/bajutsu-e2e/bajutsu/pull/1938) (Group 3 units 16, 18, 19, 21, 22, 23) |
 | Topic | Platform support |
 | Related | [BE-0105](../BE-0105-xcuitest-single-snapshot-query/BE-0105-xcuitest-single-snapshot-query.md), [BE-0114](../BE-0114-driver-conformance-suite/BE-0114-driver-conformance-suite.md), [BE-0234](../BE-0234-adb-run-performance/BE-0234-adb-run-performance.md), [BE-0259](../BE-0259-assert-query-snapshot-reuse/BE-0259-assert-query-snapshot-reuse.md), [BE-0310](../BE-0310-ios-accessibility-screen-change-readiness/BE-0310-ios-accessibility-screen-change-readiness.md), [BE-0341](../BE-0341-pre-action-evidence-capture/BE-0341-pre-action-evidence-capture.md), [BE-0396](../BE-0396-ios-sfsafariviewcontroller-tree/BE-0396-ios-sfsafariviewcontroller-tree.md), [BE-0408](../BE-0408-step-latency-device-executor-protocol/BE-0408-step-latency-device-executor-protocol.md), [BE-0409](../BE-0409-step-latency-ios-device-executor/BE-0409-step-latency-ios-device-executor.md), [BE-0410](../BE-0410-step-latency-android-device-executor/BE-0410-step-latency-android-device-executor.md) |
 <!-- /BE-METADATA -->
@@ -320,22 +320,79 @@ half alone; *Progress* below records the measurement behind dropping its `elemen
   no button its interruption monitor is registered to answer — timing out `POST /type` and
   crashing the runner. Needs a way to suppress or auto-answer that alert, or confirmation it does
   not fire on some other iOS version, before this can land.
-- [ ] Group 3, unit 16 — confirm the `POSTDATE_BUDGET_MS` mechanism against resident-server logs,
-  then implement the fix.
-- [ ] Group 3, units 17–24 — the remaining Android driver-internal reductions, including the `/act`
-  swipe variant (unit 24).
-- [ ] Rerun [`trace_run.py`](misc/step-performance/trace_run.py) against `controls.yaml` after
+- [x] Group 3, unit 16 — the mechanism confirmed by direct measurement, and the fix is a
+  one-line correction rather than a redesign. `_device_act` sent one value for two purposes: the
+  mark the device's own pre-injection read must postdate, and the anchor for the barrier armed
+  after the gesture. Both took the clock as of building the request, so the device was asked to
+  wait for an event newer than the request itself, which a settled screen can never produce.
+  Measured on an API 34 emulator, driving the channel directly against a still screen: `POST /act`
+  took 2217ms and 2042ms with that mark against 64ms and 62ms with none. The wait falls before the
+  staleness check, so a `stale` reply paid it too. `since` now carries the pending barrier's own
+  mark, which `_settle` has usually already drained, and the barrier keeps anchoring on the clock.
+  Nothing the read-lag barrier protects moves: the host still settles before it sends, and the
+  device still settles its own bounds read.
+- [x] Group 3, unit 18 — the `nativeZ` walk is now asked for, by `targets.<name>.android`'s own
+  `nativeZ: true`, rather than run on every read.
+- [x] Group 3, unit 19 — `/act` carries the caught-up tree, so the read the host opens `_settle`
+  with is already answered. Carried only alongside a publish confirmation, because that
+  confirmation is the whole safety argument: an event postdates the injection, so the dump cannot
+  be the pre-gesture screen. The driver re-checks the tree's own mark against the gesture too, so
+  one mislabelled header cannot seed a stale screen.
+- [x] Group 3, unit 21 — one connection per lease on both ends, retired by the same proactive
+  staleness check unit 11 uses on the XCUITest channel.
+- [x] Group 3, unit 22 — the resident APK pair is reused across a run's leases, keyed on the two
+  APKs' own digests (which pin the signing key the uninstall-first rule was guarding) and on a `pm
+  path` check that the device still carries both.
+- [x] Group 3, unit 23 — the resident channel hands the driver the tree it already parsed to strip
+  the decor windows, and the narrowed body is serialized only when a `rawTree` capture asks for it.
+- [ ] Group 3, unit 17 — skip `settledDump`'s second read when no accessibility event fired between
+  the two. Implemented, then reverted after measurement. The premise is sound in isolation: a
+  node's bounds reach a dump by way of an accessibility event, so no event means no change. What it
+  misses is that the confirming dump is also what *keeps the event stream flowing to the server's
+  own listener*, and the read mark that listener maintains is what the host's read-lag barrier
+  releases on. Without the second dump the mark stalls: an API 34 emulator's `controls.yaml`
+  scroll step went to 7.5, 7.7 and 10.0 seconds against 5.7, 5.9 and 6.0 with the dump restored,
+  because the pan's barrier spent its whole budget on a mark that never advanced. Landing this
+  needs a way to keep the mark live that does not depend on the dump.
+- [ ] Group 3, unit 20 — take screenshots from the resident server with
+  `UiAutomation.takeScreenshot()`. Not implemented: the design predates unit 2, which landed the
+  day before ([#1925](https://github.com/bajutsu-e2e/bajutsu/pull/1925)) and already moved the
+  `adb exec-out screencap` subprocess off the critical path by overlapping it with the tree read.
+  Moving the shot onto the resident channel would undo that overlap rather than deepen it: the
+  server serves one connection at a time, so the shot would serialize behind the read it currently
+  runs beside. Unit 2 measured that pair at 3361ms serialized against 2182ms overlapped, against
+  the 103ms subprocess spin-up this unit targets. A concurrent server would be the way in, and
+  whether `UiAutomation` tolerates a screenshot beside a dump is undocumented — a determinism
+  question, not a performance one, so it is not guessed at here.
+- [ ] Group 3, unit 24 — add a `swipe` variant to `/act`. Implemented twice, reverted both times
+  after on-device measurement. With `UiDevice.swipe` the `controls.yaml` scroll step went to 12.8
+  seconds against the coordinate path's 4.2: UiAutomator paces its drag through
+  `UiAutomation.executeAndWaitForEvent`, which consumes the events it sees, and a pan's events all
+  land *during* the drag — so none reached the read mark, the reply confirmed no publish, and the
+  host's barrier spent its full four seconds. Rebuilding the drag from its own `MotionEvent`s (the
+  shape `injectDoubleTap` already uses for the same reason) brought it to 7.5 seconds, still worse
+  than the coordinate path, and a server-side probe showed the read mark unchanged across the whole
+  pan — so that drag was not moving the content either. The unit's stated root cause was unit 16's
+  fixed budget, and unit 16 has now removed it; what remains of a `scroll` step is the drag's own
+  duration, which BE-0400 fixes deliberately, plus one confirming read.
+- [x] Rerun [`trace_run.py`](misc/step-performance/trace_run.py) against `controls.yaml` after
   each group lands, and record the resulting per-step wall-clock here. iOS, after Group 1 unit 6
   and the shipped half of Group 2 (2026-09-06, iPhone 17 Pro Simulator, `controls.yaml`): `POST
   /tap` mean 690ms → 446ms across 3 taps, and only 6 of 9 `drain_interruptions` calls reached the
   wire (the rest answered from a tap's own fold). Real, measured progress against the baseline,
-  short of this item's own 0.3–0.6s per-tap target now that units 8 and 15 are deferred. Android
-  (Group 3) not yet remeasured.
+  short of this item's own 0.3–0.6s per-tap target now that units 8 and 15 are deferred. Android,
+  after Group 3 (2026-09-07, API 34 arm64 emulator, `controls.yaml`, three runs each side on a
+  freshly booted device with the runs serialized, step wall-clock from the run manifest rather than
+  the tracer — the step is what this item's target is stated in, and the emulator's own noise swamps
+  a per-call cut): a `tap` step went from 3.46–5.67s to 2.32–4.57s, roughly a third off its median,
+  and a `scroll` step from 5.99–6.02s to 5.97–8.24s, unchanged within that noise. The whole scenario
+  went from 25.3–28.1s to 19.2–26.7s. That is short of the 0.6–1.2s this item targets for Android —
+  the rest of that gap is the device-side executor's ([BE-0410](../BE-0410-step-latency-android-device-executor/BE-0410-step-latency-android-device-executor.md)).
 - [x] Backfill reciprocal `Related` links between this item and the device-side protocol, iOS
   executor, and Android executor items, in both languages — done after the `roadmap-id` workflow
   allocated the four ids on `main`, since a new item may not cross-reference another new item by
   `BE-XXXX` before allocation, so none of the four could carry this on merge.
-- [ ] Replace each "companion item" mention with a link to the now-numbered item, in both languages.
+- [x] Replace each "companion item" mention with a link to the now-numbered item, in both languages.
 
 Log:
 
@@ -379,6 +436,21 @@ Log:
   never stands in for the fault that caused it. The reservation gets its owner-only mode before the
   recorder writes into it. A shot that never wrote leaves no zero-byte husk. Measured on an API 34
   emulator, through the real driver and sink. The shot-then-read pair fell from 3361ms to 2182ms.
+- [#1938](https://github.com/bajutsu-e2e/bajutsu/pull/1938) — Group 3, units 16, 18, 19, 21, 22 and 23. Stopped asking the device to wait for an event
+  newer than the request that asked for it, which a settled screen can never produce and which cost
+  every gesture the server's whole 2s postdate budget. Made the `nativeZ` node walk something a
+  target asks for in its own config rather than something every Android read pays for. Had `/act`
+  carry the tree the device dumped once it had confirmed the gesture published, so the read the
+  host opens `_settle` with is already answered — gated on that confirmation, and on the tree's own
+  mark postdating the gesture, so no unconfirmed reply can seed a stale screen. Kept one HTTP
+  connection per lease on both ends. Stopped reinstalling the resident APK pair on every lease when
+  the run had already put those exact bytes on that device and `pm path` still finds them. Stopped
+  parsing the hierarchy XML twice on the host, and moved the narrowed body's serialization onto the
+  `rawTree` capture's own accessor so a run that never takes it never pays. Verified on an API 34
+  arm64 emulator across the eighteen scenarios the Android e2e lane runs, all passing; a `tap` step
+  fell from 3.46–5.67s to 2.32–4.57s across three runs each side, with `scroll` unchanged within
+  the emulator's noise. Units 17, 20 and 24 were each implemented and reverted after measurement
+  found them slower than what they replace — see the Progress notes on all three.
 
 ## References
 

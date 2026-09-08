@@ -700,6 +700,28 @@ def test_android_target_yields_android_sub_config() -> None:
     assert eff.platform_config.package == "com.x.app"
 
 
+def test_android_native_z_flows_into_the_sub_config() -> None:
+    # BE-0407 unit 18: the `nativeZ` reading (BE-0355) is asked for per target, because the node walk
+    # answering it costs every Android read whether or not the app opted a view in. The alias and the
+    # default both matter — a wrong alias would ship as a silently ignored config line.
+    cfg = load_config(
+        "targets:\n  s:\n    platform: android\n    package: com.x.app\n    backend: [adb]\n"
+        "    nativeZ: true\n"
+    )
+    assert resolve(cfg, "s").platform_config == AndroidConfig(package="com.x.app", native_z=True)
+
+
+def test_android_native_z_defaults_off() -> None:
+    # Off unless asked for: the walk reports nothing at all for an app that opted no view in, which
+    # is every app but the ones BE-0355 was built for.
+    cfg = load_config(
+        "targets:\n  s:\n    platform: android\n    package: com.x.app\n    backend: [adb]\n"
+    )
+    platform_config = resolve(cfg, "s").platform_config
+    assert isinstance(platform_config, AndroidConfig)
+    assert platform_config.native_z is False
+
+
 def test_android_grant_permissions_flow_into_the_sub_config() -> None:
     # BE-0210: runtime permissions to pre-grant live in config (app-specific), reaching AndroidConfig.
     cfg = load_config(

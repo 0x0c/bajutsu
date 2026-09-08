@@ -41,7 +41,7 @@ from ._functions import _strip_pkg as _strip_pkg
 from ._functions import _to_element as _to_element
 from ._functions import _traits as _traits
 from ._functions import _warn_malformed_bounds as _warn_malformed_bounds
-from ._functions import parse_hierarchy, parse_hierarchy_with_identities, slice_hierarchy_root
+from ._functions import elements_with_identities, parse_hierarchy, slice_hierarchy_root
 from ._shared import NodeIdentity, logger
 from .act_outcome import ActOutcome
 from .act_request import ActRequest
@@ -65,8 +65,8 @@ __all__ = [
     "HierarchyRead",
     "NodeIdentity",
     "RunFn",
+    "elements_with_identities",
     "logger",
     "parse_hierarchy",
-    "parse_hierarchy_with_identities",
     "slice_hierarchy_root",
 ]

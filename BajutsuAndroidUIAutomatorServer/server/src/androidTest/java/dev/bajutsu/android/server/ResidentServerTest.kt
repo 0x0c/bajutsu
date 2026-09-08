@@ -18,6 +18,7 @@ import java.io.OutputStream
 import java.net.InetAddress
 import java.net.ServerSocket
 import java.net.Socket
+import java.net.SocketTimeoutException
 import java.net.URLDecoder
 import java.nio.charset.StandardCharsets
 import java.util.concurrent.TimeUnit
@@ -88,36 +89,108 @@ class ResidentServerTest {
         }
     }
 
+    /**
+     * Serve requests on one connection until the peer stops sending, then let it close.
+     *
+     * A connection per request cost a fresh TCP handshake on every read, every clock probe and every
+     * gesture — tens of milliseconds each, compounding across a scenario's many reads (BE-0407 unit
+     * 21, the Android peer of unit 11's XCUITest keep-alive). The loop ends the way the iOS runner's
+     * does: on a peer that has gone idle, on a request line that does not parse, and on a reply that
+     * could not be written — ending the connection rather than desynchronizing it.
+     *
+     * Safe to serve serially because the host holds exactly one resident connection at a time: reads,
+     * the clock probe and gestures all issue from the driver's own thread, and the one call that does
+     * run on a worker — the overlapped screenshot (BE-0407 unit 2) — goes through `adb exec-out
+     * screencap`, not through here.
+     */
     private fun handle(client: Socket, device: UiDevice, readMark: ReadMark) {
         // A stalled client (slow or incomplete request) must not block the single-threaded accept
         // loop: without a read timeout, readLine() would wait forever and wedge the whole server.
+        // With the connection now reused, the same timeout doubles as the idle ceiling on it.
         client.soTimeout = SO_TIMEOUT_MS
+        // A reply is small and the host blocks on it, so Nagle's delay buys nothing and can cost a
+        // round trip's worth of latency on exactly the exchanges this unit is shortening.
+        client.tcpNoDelay = true
         val reader = client.getInputStream().bufferedReader(StandardCharsets.UTF_8)
-        val target = readRequestTarget(reader) ?: return
         val out = client.getOutputStream()
-        when (target.substringBefore('?')) {
-            "/source" -> respondSource(out, device, readMark, sinceOf(target))
-            "/act" -> respondAct(out, device, readMark, target)
-            "/clock" ->
-                respond(
-                    out,
-                    "200 OK",
-                    "text/plain; charset=utf-8",
-                    SystemClock.uptimeMillis().toString().toByteArray(StandardCharsets.UTF_8),
-                )
-            else -> respond(out, "404 Not Found", "text/plain", "unknown path\n".toByteArray())
+        while (true) {
+            // Two different silences, told apart because only one is ordinary. `soTimeout` governs
+            // every read on the socket, so a timeout *after* the request line arrived is a fault the
+            // host is blocking on — for `/act` it reaches the driver as "may or may not have
+            // landed", when in fact nothing was injected — while one before it is a peer that simply
+            // went quiet, the ordinary end of a reused connection.
+            val started = Started()
+            val target = try {
+                readRequestTarget(reader, started) ?: return
+            } catch (e: SocketTimeoutException) {
+                if (started.value) {
+                    Log.w(TAG, "connection went quiet mid-request; nothing was served", e)
+                } else {
+                    Log.d(TAG, "connection idle past ${SO_TIMEOUT_MS}ms; closing it", e)
+                }
+                return
+            }
+            if (target.isEmpty()) {
+                // A request line that does not parse. With one connection per request this could
+                // only be a bad client; with the connection reused it is the signature of the two
+                // ends disagreeing about where the last reply ended, which is the one symptom that
+                // would reveal such a desynchronization in the wild.
+                Log.w(TAG, "malformed request line; ending the connection rather than guessing")
+                return
+            }
+            when (target.substringBefore('?')) {
+                "/source" -> respondSource(out, device, readMark, target)
+                "/act" -> respondAct(out, device, readMark, target)
+                "/clock" ->
+                    respond(
+                        out,
+                        "200 OK",
+                        "text/plain; charset=utf-8",
+                        SystemClock.uptimeMillis().toString().toByteArray(StandardCharsets.UTF_8),
+                    )
+                else -> respond(out, "404 Not Found", "text/plain", "unknown path\n".toByteArray())
+            }
+            out.flush()
         }
-        out.flush()
     }
 
-    /** The request target (path plus any query) after the method; null if empty/malformed. */
-    private fun readRequestTarget(reader: BufferedReader): String? {
+    /** Whether a request line has been read yet, so the caller can tell an idle peer from a fault. */
+    private class Started {
+        var value = false
+    }
+
+    /**
+     * The request target (path plus any query) after the method; null at end of input, empty if the
+     * request line does not parse.
+     *
+     * Also drains the request body, which only became load-bearing once the connection is reused:
+     * bytes left unread would be parsed as the *next* request on it, so a desynchronized connection
+     * would answer wrong rather than fail. Every request this server serves is body-less today, and
+     * `http.client` sends `Content-Length: 0` for them, so this drains nothing in practice — it is
+     * the invariant, not a workaround.
+     */
+    private fun readRequestTarget(reader: BufferedReader, started: Started): String? {
         val requestLine = reader.readLine() ?: return null
-        val target = requestLine.split(' ').getOrNull(1) ?: return null
+        started.value = true
+        val target = requestLine.split(' ').getOrNull(1) ?: return ""
         // Drain the remaining request headers so the client sees a clean, complete exchange.
+        var contentLength = 0
         while (true) {
             val line = reader.readLine() ?: break
             if (line.isEmpty()) break
+            if (line.startsWith(CONTENT_LENGTH_HEADER, ignoreCase = true)) {
+                contentLength = line.substringAfter(':').trim().toIntOrNull() ?: 0
+            }
+        }
+        if (contentLength > 0) {
+            Log.w(TAG, "request carried a $contentLength-byte body; draining it to keep the stream aligned")
+            var left = contentLength
+            val buffer = CharArray(DRAIN_CHUNK)
+            while (left > 0) {
+                val read = reader.read(buffer, 0, minOf(left, buffer.size))
+                if (read < 0) break
+                left -= String(buffer, 0, read).toByteArray(StandardCharsets.UTF_8).size
+            }
         }
         return target
     }
@@ -156,7 +229,7 @@ class ResidentServerTest {
      * rather than an index into the whole dump, so the two do not have to agree on the *position* a
      * node sits at in their respective trees — but they do still have to agree on which *windows* the
      * tree includes, because `count` is a count: `matchingBounds` below drops SystemUI's own windows
-     * the same way the host's `narrow_to_active_window` does, so a node whose bare identity happens to
+     * the same way the host's `narrowed_root` does, so a node whose bare identity happens to
      * collide with an equally bare SystemUI container is not counted here when the host never counted
      * it either.
      *
@@ -169,10 +242,11 @@ class ResidentServerTest {
      * [publishHeader], which is what lets the host skip the read-lag barrier for it (BE-0339 Unit 5).
      */
     private fun respondAct(out: OutputStream, device: UiDevice, readMark: ReadMark, target: String) {
-        // Validated, never defaulted. A missing or malformed field here would otherwise pick an
-        // element by assumption — `index` 0 of `count` 1 — which is exactly the guess this endpoint
-        // exists to refuse. An identity field may legitimately be empty (a node with no text), so
-        // presence is required and emptiness is not.
+        // Validated first, and never defaulted. A missing or malformed field here would otherwise
+        // pick an element by assumption — `index` 0 of `count` 1 — which is exactly the guess this
+        // endpoint exists to refuse. An identity field may legitimately be empty (a node with no
+        // text), so presence is required and emptiness is not. Before the waits below, so a request
+        // that cannot be served does not first spend the postdate budget earning its `400`.
         val kind = paramOf(target, "kind") ?: return respond(out, BAD_REQUEST, TEXT, "no kind\n".bytes())
         val index = paramOf(target, "index")?.toIntOrNull()
             ?: return respond(out, BAD_REQUEST, TEXT, "no usable index\n".bytes())
@@ -218,7 +292,47 @@ class ResidentServerTest {
         if (!landed) {
             return respond(out, INJECT_FAILED_STATUS, TEXT, "$kind rejected by the platform\n".bytes())
         }
-        respond(out, "200 OK", TEXT, "ok\n".bytes(), publishHeader(readMark, injectedAt))
+        respondLanded(out, device, readMark, injectedAt, paramOf(target, "tree") != "0")
+    }
+
+    /**
+     * Answer a gesture that landed: its publish confirmation, and the caught-up tree when there is one.
+     *
+     * The tree rides along only where the publish was confirmed (BE-0407 unit 19). That is the whole
+     * safety argument: a confirmed publish means an accessibility event postdates the injection, so a
+     * dump taken now cannot describe the pre-gesture screen — the same claim [publishHeader] already
+     * licenses the host to skip its read-lag barrier on. Unconfirmed, the dump could be the old
+     * screen, and handing one over would turn a barrier the host still arms into a stale tree it
+     * trusts. So an unconfirmed gesture answers exactly as it did before this unit.
+     *
+     * The saving is a whole round trip: the host's own `_settle` opens with a read it can now skip,
+     * measured by the investigation at 400-600ms on this backend.
+     *
+     * A host that says `tree=0` gets the bare `ok` instead, and the dump is never taken. That is the
+     * `nativeZ` target's case: the reply cannot carry that reading, so a tree it seeded would report
+     * every position as absent, and building one anyway would spend a settled dump per gesture on a
+     * body the host discards.
+     */
+    private fun respondLanded(
+        out: OutputStream,
+        device: UiDevice,
+        readMark: ReadMark,
+        injectedAt: Long,
+        wantTree: Boolean,
+    ) {
+        val published = publishHeader(readMark, injectedAt)
+        if (published.isEmpty() || !wantTree) return respond(out, "200 OK", TEXT, "ok\n".bytes())
+        // Snapshot before the settle, for the reason [respondSource] states at length: the mark must
+        // never outrun the body it is stamped on, or a stale tree would certify as caught up.
+        val mark = readMark.current()
+        val body = settledDump(device)
+        respond(
+            out,
+            "200 OK",
+            "application/xml; charset=utf-8",
+            body,
+            published + (READ_MARK_HEADER to mark.toString()),
+        )
     }
 
     /**
@@ -309,7 +423,7 @@ class ResidentServerTest {
      * Bounds come from this dump, not from the host's, so the gesture lands where the element is now.
      * `dumpWindowHierarchy` emits one top-level `<node>` per window; a SystemUI window (and everything
      * under it) is skipped, the same filter the host applies before it counts matches
-     * (`narrow_to_active_window`) — without it, an unlabeled Compose node whose identity happens to
+     * (`narrowed_root`) — without it, an unlabeled Compose node whose identity happens to
      * collide with an equally bare SystemUI container (empty `resource-id`/`content-desc`/`text`, a
      * generic `class`) would count nodes here that the host's narrowed copy never saw, so `count`
      * never agrees and every such gesture answers stale on every attempt.
@@ -351,7 +465,8 @@ class ResidentServerTest {
 
     private fun String.bytes(): ByteArray = toByteArray(StandardCharsets.UTF_8)
 
-    private fun respondSource(out: OutputStream, device: UiDevice, readMark: ReadMark, since: Double?) {
+    private fun respondSource(out: OutputStream, device: UiDevice, readMark: ReadMark, target: String) {
+        val since = sinceOf(target)
         // dumpWindowHierarchy traverses every window, so this XML also carries the SystemUI status
         // bar (clock, wifi, battery, notification icons — 29 nodes) that the platform `uiautomator
         // dump` omits by scoping to the active window. `parse_hierarchy` parses the format unchanged.
@@ -377,7 +492,15 @@ class ResidentServerTest {
         val mark = readMark.current()
         val body = settledDump(device)
         val headers = mutableMapOf(READ_MARK_HEADER to mark.toString())
-        nativeZHeader(device)?.let { headers[NATIVE_Z_HEADER] = it }
+        // Only when the host asked (BE-0407 unit 18). The walk covers every node on every read —
+        // 20-100ms — and answers nothing at all for an app that opted no view into `nativeZ`, which
+        // is every app but the ones BE-0355 was built for. The host asks on behalf of a target that
+        // says so in its own config, so the cost lands on the runs that read the value and on no
+        // others; an older host that never sends the parameter simply stops paying for a reading it
+        // was already discarding.
+        if (paramOf(target, "nativeZ") == "1") {
+            nativeZHeader(device)?.let { headers[NATIVE_Z_HEADER] = it }
+        }
         respond(
             out,
             "200 OK",
@@ -541,7 +664,10 @@ class ResidentServerTest {
             append("Content-Type: ").append(contentType).append("\r\n")
             append("Content-Length: ").append(body.size).append("\r\n")
             for ((name, value) in extraHeaders) append(name).append(": ").append(value).append("\r\n")
-            append("Connection: close\r\n")
+            // The connection stays open for the next request on it (BE-0407 unit 21); `Content-Length`
+            // above is what lets the client find where this reply ends, so the framing needs nothing
+            // more than the header it already sent.
+            append("Connection: keep-alive\r\n")
             append("\r\n")
         }
         out.write(header.toByteArray(StandardCharsets.UTF_8))
@@ -648,6 +774,10 @@ class ResidentServerTest {
         // now scoped to tearing while the mark decides staleness.
         const val SETTLE_DUMPS = 4
 
+        // Read so a body can be drained off a reused connection; see `readRequestTarget`.
+        const val CONTENT_LENGTH_HEADER = "content-length:"
+        const val DRAIN_CHUNK = 4096
+
         const val TEXT = "text/plain; charset=utf-8"
         const val BAD_REQUEST = "400 Bad Request"
 
@@ -677,7 +807,7 @@ class ResidentServerTest {
 
         // SystemUI owns the status/navigation-bar windows that dumpWindowHierarchy's full tree carries
         // and the platform `uiautomator dump` (active window only) omits. The host drops these before
-        // it counts matches (`bajutsu/common/backend_cli/adb_resident.py` narrow_to_active_window, keyed off this same
+        // it counts matches (`bajutsu/common/backend_cli/adb_resident.py` narrowed_root, keyed off this same
         // package name) — matchingBounds below must drop them too, or a count taken over the full dump
         // disagrees with one taken over the host's narrowed copy.
         val SYSTEM_DECOR_PACKAGES = setOf("com.android.systemui")

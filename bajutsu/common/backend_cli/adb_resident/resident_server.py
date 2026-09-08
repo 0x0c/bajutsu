@@ -12,18 +12,23 @@ from bajutsu.common.backend_cli import adb
 from bajutsu.common.drivers.adb import ActOutcome, ActRequest, AdbResidentError, HierarchyRead
 
 from ._functions import (
+    _apk_digest,
     _default_spawn,
     _parse_forward_port,
     act,
     fetch_clock,
     fetch_source,
-    narrow_to_active_window,
+    narrowed_root,
 )
 from ._process import _Process
 from ._shared import _SERVER_APK, _TEST_APK, logger
+from .keepalive import Keepalive
 from .resident_channel import ResidentChannel
 
 Spawn = Callable[[list[str]], _Process]
+# The three per-port calls a lease makes, as the shapes a test can substitute. They take the port and
+# nothing else the caller has to know about: whichever connection carries them, and whether the read
+# asks for `nativeZ`, are bound by `ResidentServer` when it builds its own defaults.
 Fetch = Callable[[int, float | None], HierarchyRead]
 ClockProbe = Callable[[int], float | None]
 ActProbe = Callable[[int, ActRequest], ActOutcome]
@@ -49,20 +54,51 @@ class ResidentServer:
         *,
         run: adb.RunFn = adb.real_run,
         spawn: Spawn = _default_spawn,
-        fetch: Fetch = fetch_source,
-        clock: ClockProbe = fetch_clock,
-        act_probe: ActProbe = act,
+        fetch: Fetch | None = None,
+        clock: ClockProbe | None = None,
+        act_probe: ActProbe | None = None,
         server_apk: Path = _SERVER_APK,
         test_apk: Path = _TEST_APK,
+        installed: dict[str, tuple[str, str]] | None = None,
+        native_z: bool = False,
     ) -> None:
         self._serial = adb.checked_serial(serial)
         self._run = run
         self._spawn = spawn
-        self._fetch = fetch
-        self._clock = clock
-        self._act = act_probe
+        # One connection for the lease, shared by all three calls below (BE-0407 unit 21). Built here
+        # rather than in `start`, so a `stop`-then-`start` on the same server reuses the record and a
+        # test that substitutes a call gets no socket at all.
+        self._keepalive = Keepalive()
+        # Whether this target asked for the `nativeZ` reading (BE-0407 unit 18). Kept, not just
+        # closed over, because `start` consults it again to decide whether a gesture's own tree can
+        # stand in for a read — a seeded tree carries no `nativeZ` header.
+        self._native_z = native_z
+        # Defaulted here rather than in the signature because the real implementations need two
+        # things only this object knows — its connection, and whether this target asked for
+        # `nativeZ` — while a substituted call takes the bare `(port, …)` shape and neither.
+        self._fetch = fetch or (
+            lambda port, since: fetch_source(
+                port, since, native_z=native_z, keepalive=self._keepalive
+            )
+        )
+        self._clock = clock or (lambda port: fetch_clock(port, keepalive=self._keepalive))
+        # `tree=0` when this target asked for `nativeZ`: the reply cannot carry that reading, so a
+        # tree seeded from it would report every element's position as absent — indistinguishable
+        # from an app that opted no view in, the one confusion BE-0355 works hardest to avoid. Said
+        # on the *request* rather than dropped from the reply, so the device does not build and ship
+        # a settled dump the host will discard, which would make unit 19 a per-gesture regression on
+        # exactly the targets unit 18 exists for.
+        self._act = act_probe or (
+            lambda port, request: act(
+                port, request, keepalive=self._keepalive, want_tree=not native_z
+            )
+        )
         self._server_apk = server_apk
         self._test_apk = test_apk
+        # Which APK pair this run already put on which device (BE-0407 unit 22). Owned by the caller
+        # because a `ResidentServer` lives for one lease while the pair survives the whole run; None
+        # (the default) keeps the reinstall-every-lease behavior every other caller had.
+        self._installed = installed
         self._proc: _Process | None = None
         self._host_port: int | None = None
 
@@ -73,15 +109,7 @@ class ResidentServer:
                 "`make -C BajutsuAndroidUIAutomatorServer build`"
             )
         try:
-            # Clear both first. A device carrying an older pair fails `install -r` outright when the
-            # signing key differs, and where it succeeds it can leave the instrumentation and the
-            # server disagreeing about which endpoints exist — a `/act` that 404s against a server
-            # that has one, which is the confusing half of this channel's failure modes.
-            for package in (adb.RESIDENT_TEST_PACKAGE, adb.RESIDENT_SERVER_PACKAGE):
-                with contextlib.suppress(subprocess.CalledProcessError, OSError):
-                    self._run(adb.uninstall_cmd(self._serial, package))
-            self._run(adb.install_cmd(self._serial, str(self._server_apk)))
-            self._run(adb.install_cmd(self._serial, str(self._test_apk)))
+            self._install_apks()
             self._proc = self._spawn(adb.instrument_cmd(self._serial))
             self._host_port = _parse_forward_port(self._run(adb.forward_cmd(self._serial)))
         except (subprocess.CalledProcessError, OSError, AdbResidentError) as exc:
@@ -99,12 +127,14 @@ class ResidentServer:
         def fetch(since: float | None) -> HierarchyRead:
             try:
                 read = self._fetch(port, since)
-                narrowed = narrow_to_active_window(read.text)
-                # Only when narrowing actually changed something: an active-window dump with no system
-                # decor to strip passes through unchanged, and carrying an identical `raw` alongside
-                # `text` would make every `rawTree` capture write two copies of the same body.
-                raw = read.text if narrowed != read.text else None
-                return HierarchyRead(narrowed, read.mark, raw=raw, native_z=read.native_z)
+                # The device's reply travels on as `text`, untouched; what the driver parses is the
+                # tree narrowing already built from it. `narrowed` is what tells a `rawTree` capture
+                # the two differ — an active-window dump with no system decor to strip would otherwise
+                # have it write two copies of the same body.
+                root, narrowed = narrowed_root(read.text)
+                return HierarchyRead(
+                    read.text, read.mark, native_z=read.native_z, root=root, narrowed=narrowed
+                )
             except AdbResidentError:
                 # Stop the resident server before the driver degrades to `uiautomator dump`. A read
                 # fault is usually a wedged-but-alive instrumentation — a read that outran the socket
@@ -134,8 +164,77 @@ class ResidentServer:
 
         return ResidentChannel(fetch, clock, act_on_device)
 
+    def _install_apks(self) -> None:
+        """Put this run's resident-server pair on the device, unless it is already the pair there.
+
+        The install is the dominant cost of starting a lease — an uninstall of both packages followed
+        by two `install -r` calls, ~6-12 s on a cold emulator — and every lease after the first put
+        the very same bytes back (BE-0407 unit 22). Skipping it needs two things to hold together:
+        that *this run* installed this exact pair on this serial (the digests, which pin the signing
+        key too, since identical bytes cannot be signed differently), and that both packages are
+        still on the device. The second is checked rather than assumed, so a package removed out of
+        band brings the install back rather than leaving the lease to fail on a missing endpoint.
+        What it does not see is a package *replaced* out of band — another checkout's
+        `gradlew installDebug`, say — which `pm path` reports as present, so the skip would take it
+        with the wrong build. Contrived enough to leave uncovered, but not covered.
+        """
+        wanted = (_apk_digest(self._server_apk), _apk_digest(self._test_apk))
+        if (
+            self._installed is not None
+            and self._installed.get(self._serial) == wanted
+            and self._packages_installed()
+        ):
+            logger.debug("resident APKs already installed on %s; skipping reinstall", self._serial)
+            return
+        # Clear both first. A device carrying an older pair fails `install -r` outright when the
+        # signing key differs, and where it succeeds it can leave the instrumentation and the
+        # server disagreeing about which endpoints exist — a `/act` that 404s against a server
+        # that has one, which is the confusing half of this channel's failure modes.
+        if self._installed is not None:
+            # Dropped before the uninstall, not after the install: a failure anywhere below must not
+            # leave a record claiming a pair is installed when the device no longer carries it.
+            self._installed.pop(self._serial, None)
+        for package in (adb.RESIDENT_TEST_PACKAGE, adb.RESIDENT_SERVER_PACKAGE):
+            with contextlib.suppress(subprocess.CalledProcessError, OSError):
+                self._run(adb.uninstall_cmd(self._serial, package))
+        self._run(adb.install_cmd(self._serial, str(self._server_apk)))
+        self._run(adb.install_cmd(self._serial, str(self._test_apk)))
+        if self._installed is not None:
+            self._installed[self._serial] = wanted
+
+    def _packages_installed(self) -> bool:
+        """Whether the device still carries both resident packages; False on any doubt.
+
+        One `pm path` per package — tens of milliseconds against the seconds the skip saves. A fault
+        reads as "not installed", so an unanswerable device reinstalls rather than starting a server
+        that may not be there.
+        """
+        try:
+            for package in (adb.RESIDENT_SERVER_PACKAGE, adb.RESIDENT_TEST_PACKAGE):
+                # The `package:` prefix `pm path` actually emits, not merely non-empty output: an
+                # adb error line or a `pm` diagnostic would otherwise read as "installed" and skip
+                # an install the device needs, leaving the lease to fail on a missing endpoint.
+                if not self._run(adb.package_path_cmd(self._serial, package)).startswith(
+                    "package:"
+                ):
+                    logger.debug(
+                        "resident package %s not reported installed on %s", package, self._serial
+                    )
+                    return False
+        except (subprocess.CalledProcessError, OSError) as exc:
+            # Said out loud, because the consequence is silent: a device that cannot answer this
+            # reinstalls both APKs on every lease, losing the seconds unit 22 exists to save.
+            logger.debug(
+                "could not ask %s about its packages (%s); reinstalling", self._serial, exc
+            )
+            return False
+        return True
+
     def stop(self) -> None:
         """Kill the instrumentation and remove the forward; safe to call on a partial start."""
+        # Before the forward goes away, so the kept connection is closed rather than left pointing at
+        # a port `adb forward --remove` is about to retire (BE-0407 unit 21).
+        self._keepalive.discard()
         if self._proc is not None:
             with contextlib.suppress(OSError):
                 self._proc.terminate()

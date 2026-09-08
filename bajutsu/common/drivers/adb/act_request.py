@@ -22,5 +22,10 @@ class ActRequest:
     identity: NodeIdentity
     index: int  # the element's ordinal among the nodes sharing `identity`, in document order
     count: int  # how many such nodes the host saw — the device refuses if its own count differs
-    since: float | None  # the device-clock mark the read behind the gesture must postdate
+    # The mark the device's *own* pre-injection bounds read must postdate: the previous gesture's
+    # actuation mark, so those bounds describe a screen that gesture has already reached. None when
+    # no gesture is still outstanding — which, since `_device_act` settles first, is the common case.
+    # Never the clock as of building this request: no event can postdate that on a settled screen, so
+    # the device would spend its whole postdate budget on every gesture (BE-0407 unit 16).
+    since: float | None
     duration_ms: int | None  # press-and-hold length, for "longPress"

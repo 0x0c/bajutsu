@@ -16,16 +16,24 @@ from ._functions import _NO_ENDPOINT_STATUS as _NO_ENDPOINT_STATUS
 from ._functions import _READ_MARK_HEADER as _READ_MARK_HEADER
 from ._functions import _STALE_STATUS as _STALE_STATUS
 from ._functions import _SYSTEM_DECOR_PACKAGES as _SYSTEM_DECOR_PACKAGES
+from ._functions import _act_read as _act_read
+from ._functions import _apk_digest as _apk_digest
+from ._functions import _channel as _channel
 from ._functions import _default_spawn as _default_spawn
+from ._functions import _is_stale as _is_stale
 from ._functions import _parse_forward_port as _parse_forward_port
 from ._functions import _parse_mark as _parse_mark
 from ._functions import _parse_native_z as _parse_native_z
-from ._functions import act, fetch_clock, fetch_source, narrow_to_active_window, server_apks_built
+from ._functions import _warn_once as _warn_once
+from ._functions import _warned as _warned
+from ._functions import act, fetch_clock, fetch_source, narrowed_root, server_apks_built
 from ._process import _Process as _Process
 from ._shared import _REPO_ROOT as _REPO_ROOT
 from ._shared import _SERVER_APK as _SERVER_APK
 from ._shared import _TEST_APK as _TEST_APK
 from ._shared import logger
+from .keepalive import _KEEPALIVE_IDLE_RECONNECT_S as _KEEPALIVE_IDLE_RECONNECT_S
+from .keepalive import Keepalive
 from .resident_channel import ResidentChannel
 from .resident_server import ActProbe, ClockProbe, Fetch, ResidentServer, Spawn
 
@@ -33,6 +41,7 @@ __all__ = [
     "ActProbe",
     "ClockProbe",
     "Fetch",
+    "Keepalive",
     "ResidentChannel",
     "ResidentServer",
     "Spawn",
@@ -40,6 +49,6 @@ __all__ = [
     "fetch_clock",
     "fetch_source",
     "logger",
-    "narrow_to_active_window",
+    "narrowed_root",
     "server_apks_built",
 ]

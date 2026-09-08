@@ -190,7 +190,7 @@ def _native_z_key(node: ET.Element, occurrence: int) -> str:
     window while the body spans every window — and cannot key them by identity either, since the
     four accessibility fields `_identity` uses are deliberately not unique. Both sides walk the same
     accessibility tree depth-first, so the occurrence count agrees, *scoped to the active window*:
-    `narrow_to_active_window` drops SystemUI's own windows from the body before this key is computed,
+    `narrowed_root` drops SystemUI's own windows from the tree before this key is computed,
     but not a second window of the app under test itself (a dialog over its own main window). Two
     opted-in nodes sharing bounds, class, and package across the app's own windows would shift each
     other's occurrence count and could match onto the wrong one — narrower than the false-authority
@@ -211,7 +211,7 @@ def _elements_from_nodes(
 ) -> list[base.Element]:
     """`_to_element` over every node, warning once for the parse if any `bounds` was malformed.
 
-    The one place both `parse_hierarchy` and `parse_hierarchy_with_identities` build their `Element`
+    The one place both `parse_hierarchy` and `elements_with_identities` build their `Element`
     list, so the malformed-bounds tally and its warning are counted and logged once, not duplicated at
     each call site — and the one place a device-measured `nativeZ` is matched onto the node it belongs
     to (BE-0355).
@@ -230,15 +230,17 @@ def _elements_from_nodes(
     return els
 
 
-def parse_hierarchy_with_identities(
-    text: str, native_z: Mapping[str, float] | None = None
+def elements_with_identities(
+    root: ET.Element | None, native_z: Mapping[str, float] | None = None
 ) -> tuple[list[base.Element], list[NodeIdentity]]:
-    """`parse_hierarchy`, plus each element's device-addressable identity, index-aligned.
+    """Every `<node>` under `root` as an Element, plus its device-addressable identity, index-aligned.
 
     Both lists walk the same `<node>` sequence in document order, so element *i* is named by identity
     *i*. Produced together rather than by two passes so the alignment cannot drift.
+
+    Takes an already-parsed tree rather than text because the resident channel has one by the time it
+    calls here — it had to parse to strip the SystemUI decor windows (BE-0407 unit 23).
     """
-    root = slice_hierarchy_root(text)
     if root is None:
         return [], []
     nodes = list(root.iter("node"))
