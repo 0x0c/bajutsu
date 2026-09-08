@@ -185,6 +185,23 @@ def test_search_box_sits_in_its_own_row_above_the_chips() -> None:
     assert _PAGE.index('class="be-search"') < chip_row
 
 
+def test_shortcut_buttons_are_rendered_after_the_chips() -> None:
+    """ "Show open only", "Expand all", and "Collapse all" sit in their own row after the chips.
+
+    One of each (progressive enhancement: inert without the script that wires them, BE-0311's
+    pattern for the Cards/Table toggle), and after ``.be-chips`` since they act on the chips and the
+    categories the chips narrow.
+    """
+    assert _PAGE.count('class="be-quickfilter"') == 1
+    assert _PAGE.count('class="be-expand-all"') == 1
+    assert _PAGE.count('class="be-collapse-all"') == 1
+    assert 'data-state="all"' in _PAGE
+    chip_row = _PAGE.index('class="be-chips"')
+    shortcuts_row = _PAGE.index('class="be-shortcuts"')
+    assert chip_row < shortcuts_row, "shortcuts must render after the chip container"
+    assert _PAGE.index('class="be-quickfilter"') > shortcuts_row
+
+
 def test_every_card_carries_its_topic() -> None:
     """Each card exposes its Topic as ``data-topic`` so search can match it without scraping markup."""
     for item in _ITEMS:

@@ -641,10 +641,23 @@ def render_html(items: list[Any]) -> str:
         '<input type="search" class="be-search" '
         'placeholder="Search id, title, topic, status…" aria-label="Search roadmap items">'
     )
+    # Three shortcuts beside the chips: "Show open only" is a one-click alternative to
+    # unchecking Implemented/Deferred/Rejected by hand, and the expand/collapse pair is a one-click
+    # alternative to opening every category's heading individually. All three are additive — they
+    # drive the same `on` state and the same `setCollapsed` the chips and headings already use, so a
+    # no-JS reader loses nothing: the buttons render but do nothing without the script that wires them.
+    shortcuts = (
+        '<div class="be-shortcuts">'
+        '<button type="button" class="be-quickfilter" data-state="all">Show open only</button>'
+        '<button type="button" class="be-expand-all">Expand all</button>'
+        '<button type="button" class="be-collapse-all">Collapse all</button>'
+        "</div>"
+    )
     filters = (
         f'<div class="be-filters" role="group" aria-label="Filter roadmap items">'
         f'<div class="be-search-row">{search}</div>'
         f'<div class="be-chips">{chips}</div>'
+        f"{shortcuts}"
         "</div>"
     )
 
@@ -725,6 +738,11 @@ _STYLE = """
 .be-filters{margin:.5rem 0 1.5rem}
 .be-search-row{margin-bottom:.6rem}
 .be-chips{display:flex;flex-wrap:wrap;align-items:center;gap:.6rem}
+.be-shortcuts{display:flex;flex-wrap:wrap;gap:.5rem;margin-top:.7rem}
+.be-quickfilter,.be-expand-all,.be-collapse-all{font:inherit;font-size:12.5px;padding:.3rem .7rem;
+  border:1px solid rgba(128,128,128,.35);border-radius:8px;background:transparent;color:inherit;
+  cursor:pointer}
+.be-quickfilter:hover,.be-expand-all:hover,.be-collapse-all:hover{background:rgba(128,128,128,.12)}
 .be-search{width:100%;box-sizing:border-box;max-width:420px;font:inherit;font-size:13px;
   padding:.3rem .6rem;
   border:1px solid rgba(128,128,128,.35);border-radius:8px;background:transparent;color:inherit}
