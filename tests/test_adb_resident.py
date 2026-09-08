@@ -896,7 +896,9 @@ def test_the_targets_native_z_choice_binds_to_the_leases_act_calls(
     server_apk, test_apk = _apks(tmp_path)
     asked: list[bool] = []
     monkeypatch.setattr(
-        adb_resident,
+        # `ResidentServer` reads `act` through its own module's import, so the package attribute is
+        # not the binding this test replaces (BE-0411).
+        adb_resident.resident_server,
         "act",
         lambda port, request, **kw: (
             asked.append(bool(kw["want_tree"]))  # type: ignore[func-returns-value]

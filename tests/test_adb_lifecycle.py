@@ -964,8 +964,8 @@ def test_await_boot_gives_up_at_the_deadline_rather_than_spinning(
         nonlocal clock
         clock += seconds
 
-    monkeypatch.setattr("bajutsu.common.drivers.base.time.sleep", fake_sleep)
-    monkeypatch.setattr("bajutsu.common.drivers.base.time.monotonic", lambda: clock)
+    monkeypatch.setattr("bajutsu.common.drivers.base._functions.time.sleep", fake_sleep)
+    monkeypatch.setattr("bajutsu.common.drivers.base._functions.time.monotonic", lambda: clock)
 
     polls: list[list[str]] = []
 

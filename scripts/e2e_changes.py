@@ -128,7 +128,7 @@ _PERIPHERY_EXCLUSIONS: tuple[tuple[str, str], ...] = (
         "the AWS Device Farm submitter — a hosted batch path, not the local on-device run",
     ),
     (
-        "bajutsu/run/notify.py",
+        "bajutsu/run/notify/",
         "run-completion notifications (serve / CI glue), never exercised by a run itself",
     ),
     (
@@ -140,7 +140,7 @@ _PERIPHERY_EXCLUSIONS: tuple[tuple[str, str], ...] = (
         "the `bajutsu trace` diagnostic — it inspects a past run, it is never part of one",
     ),
     # common/agents/: record imports the Agent / EnrichmentAgent *protocols*
-    # (`common/agents/protocols.py`, swept in below), but a run drives no live agent, so the concrete
+    # (`common/agents/protocols`, swept in below), but a run drives no live agent, so the concrete
     # implementations stay out. The factory entry restates the former
     # `test_agent_factory_is_not_relevant_by_parity` (BE-0333 Unit 3).
     (
@@ -152,7 +152,7 @@ _PERIPHERY_EXCLUSIONS: tuple[tuple[str, str], ...] = (
         "AI model / credential configuration, an authoring-path concern",
     ),
     (
-        "bajutsu/common/agents/alerts.py",
+        "bajutsu/common/agents/alerts/",
         "serve-side alerting over a run's results, not part of the run",
     ),
     (
@@ -164,7 +164,7 @@ _PERIPHERY_EXCLUSIONS: tuple[tuple[str, str], ...] = (
         "the AI-credential probe doctor's AI half reports; the E2E doctor gate reads only its environment section",
     ),
     (
-        "bajutsu/common/agents/claude.py",
+        "bajutsu/common/agents/claude/",
         "a concrete Claude agent implementation, an authoring / record-proposal path",
     ),
     (
@@ -176,17 +176,17 @@ _PERIPHERY_EXCLUSIONS: tuple[tuple[str, str], ...] = (
         "Claude-backed evidence enrichment, a post-run authoring path",
     ),
     (
-        "bajutsu/common/agents/claude_triage.py",
+        "bajutsu/common/agents/claude_triage/",
         "Claude-backed triage, a diagnosis path off the run",
     ),
     ("bajutsu/common/agents/enrich.py", "the enrichment-agent surface a run never invokes"),
     # crawl/: record imports the crawl engine core (`core` / `serialize` / `__init__`, swept in); the
     # guide / report / repro / flows / tabs siblings are periphery the run never imports.
-    ("bajutsu/crawl/guide.py", "crawl's human-facing guide output, an authoring path"),
-    ("bajutsu/crawl/report.py", "crawl's report renderer, a post-crawl authoring path"),
+    ("bajutsu/crawl/guide/", "crawl's human-facing guide output, an authoring path"),
+    ("bajutsu/crawl/report/", "crawl's report renderer, a post-crawl authoring path"),
     ("bajutsu/crawl/repro.py", "crawl's repro-scenario emitter, an authoring path"),
     ("bajutsu/crawl/flows.py", "crawl's flow-analysis helpers, an authoring path"),
-    ("bajutsu/crawl/tabs.py", "crawl's tab-tracking helpers, an authoring path"),
+    ("bajutsu/crawl/tabs/", "crawl's tab-tracking helpers, an authoring path"),
     # cli/commands/: only the feature-less commands live here now (BE-0257 follow-on feature
     # colocation moved every other command beside its owning feature — `run`/`crawl`/`record`/
     # `triage`/`mcp`/`codegen`/`serve`/`worker`/`approve`/`audit`/`coverage`/`impact`/`stats`/
@@ -209,17 +209,17 @@ _PERIPHERY_EXCLUSIONS: tuple[tuple[str, str], ...] = (
 # that each stays claimed by at least one lane (none orphaned by this exclusion), and the per-lane
 # surface tests pin which lane(s).
 _LANE_CLAIMED: tuple[str, ...] = (
-    "bajutsu/common/drivers/adb.py",
+    "bajutsu/common/drivers/adb/",
     "bajutsu/common/drivers/coordinate_tree.py",
-    "bajutsu/common/drivers/playwright.py",
-    "bajutsu/common/drivers/xcuitest.py",
-    "bajutsu/common/drivers/xcuitest_live.py",
-    "bajutsu/common/platform_lifecycle/environments/android.py",
+    "bajutsu/common/drivers/playwright/",
+    "bajutsu/common/drivers/xcuitest/",
+    "bajutsu/common/drivers/xcuitest_live/",
+    "bajutsu/common/platform_lifecycle/environments/android/",
     "bajutsu/common/platform_lifecycle/environments/web.py",
-    "bajutsu/common/platform_lifecycle/environments/xcuitest.py",
+    "bajutsu/common/platform_lifecycle/environments/xcuitest/",
     "bajutsu/common/platform_lifecycle/environments/xcuitest_live.py",
-    "bajutsu/common/provisioning/provision.py",
-    "bajutsu/common/backend_cli/adb_resident.py",
+    "bajutsu/common/provisioning/provision/",
+    "bajutsu/common/backend_cli/adb_resident/",
     "bajutsu/serve/",
     "bajutsu/templates/",
     "bajutsu/record/cli.py",
@@ -276,10 +276,11 @@ _RUN_PATH = (
 # which meant a new `common/drivers/<foo>.py` fired nothing and silently under-triggered every required check.
 _LANE_PATHS: dict[str, str] = {
     "ios": (
-        r"|bajutsu/common/drivers/(?:xcuitest|xcuitest_live)\.py$"
+        r"|bajutsu/common/drivers/(?:xcuitest|xcuitest_live)/"
         # The XCUITest lifecycle environments (cold spawn, the warm resident lease, the BE-0292
         # bundled runner) — the iOS half of the `platform_lifecycle/` carve-out above.
-        r"|bajutsu/common/platform_lifecycle/environments/(?:xcuitest|xcuitest_live)\.py$"
+        r"|bajutsu/common/platform_lifecycle/environments/xcuitest/"
+        r"|bajutsu/common/platform_lifecycle/environments/xcuitest_live\.py$"
         r"|bajutsu/record/cli\.py$"
         r"|tests/test_driver_conformance_ondevice\.py$"
         r"|tests/test_fault_injection_ondevice\.py$"
@@ -318,12 +319,12 @@ _LANE_PATHS: dict[str, str] = {
         # Only the adb driver and the Python side of the resident UI Automator channel (BE-0245) this
         # lane exercises. coordinate_tree.py is adb.py's own read/settle core (BE-0254) — a change to
         # it can change adb's runtime behavior even though adb.py itself is untouched.
-        r"|bajutsu/common/drivers/adb\.py$"
+        r"|bajutsu/common/drivers/adb/"
         r"|bajutsu/common/drivers/coordinate_tree\.py$"
-        r"|bajutsu/common/backend_cli/adb_resident\.py$"
+        r"|bajutsu/common/backend_cli/adb_resident/"
         # The Android lifecycle environment (boot, install, the BE-0236 provision profile) — the
         # Android half of the `platform_lifecycle/` carve-out.
-        r"|bajutsu/common/platform_lifecycle/environments/android\.py$"
+        r"|bajutsu/common/platform_lifecycle/environments/android/"
         r"|demos/showcase/android/"
         r"|demos/showcase/scenarios/"
         r"|demos/showcase/showcase\.config\.yaml$"
@@ -346,7 +347,7 @@ _LANE_PATHS: dict[str, str] = {
         r"|scripts/android_pool_e2e\.sh$"
     ),
     "web": (
-        r"|bajutsu/common/drivers/playwright\.py$"
+        r"|bajutsu/common/drivers/playwright/"
         # The web lifecycle environment (browser launch, context teardown) — the web half of the
         # `platform_lifecycle/` carve-out.
         r"|bajutsu/common/platform_lifecycle/environments/web\.py$"
@@ -354,7 +355,7 @@ _LANE_PATHS: dict[str, str] = {
         # bajutsu.common.provisioning.provision --backend web` (BE-0304) to install Chromium for
         # real. Web-only: no other lane invokes it, and the lanes never run `scripts/install.sh`,
         # its other caller.
-        r"|bajutsu/common/provisioning/provision\.py$"
+        r"|bajutsu/common/provisioning/provision/"
         r"|bajutsu/record/cli\.py$"
         # The serve-UI dogfood (BE-0058) drives the served SPA, so the serve backend and its templates
         # are web-CI-relevant whenever they change, not only when the harness itself does.
@@ -385,7 +386,7 @@ _POOL_PATHS = (
     # size. The split itself lives here, so a change to it belongs on this surface even though the
     # shared `bajutsu/` sweep above already makes the module lane-relevant.
     r"|bajutsu/run/cli\.py$"
-    r"|bajutsu/common/evidence/core\.py$"
+    r"|bajutsu/common/evidence/core/"
     r"|bajutsu/common/evidence/sink\.py$"
     r"|scripts/assert_pool_isolation\.py$"
     r"|scripts/e2e_changes\.py$"

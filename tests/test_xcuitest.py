@@ -873,7 +873,7 @@ def _not_stale(monkeypatch: pytest.MonkeyPatch) -> None:
     """`_is_stale` always reports a reused connection alive — the common case every reuse test but
     the staleness ones themselves wants, so `select.select` need not simulate a real socket."""
     monkeypatch.setattr(
-        "bajutsu.common.drivers.xcuitest.select.select", lambda *a, **k: ([], [], [])
+        "bajutsu.common.drivers.xcuitest._functions.select.select", lambda *a, **k: ([], [], [])
     )
 
 
@@ -948,7 +948,9 @@ def test_raw_transport_applies_the_per_method_socket_timeout(
         def close(self) -> None:
             pass
 
-    monkeypatch.setattr("bajutsu.common.drivers.xcuitest.http.client.HTTPConnection", _FakeConn)
+    monkeypatch.setattr(
+        "bajutsu.common.drivers.xcuitest._functions.http.client.HTTPConnection", _FakeConn
+    )
     transport = _raw_http_transport("127.0.0.1", 1234)
     transport("GET", "/elements", None)
     transport("POST", "/gesture", {"kind": "pinch"})
@@ -986,7 +988,9 @@ def test_raw_transport_resets_the_timeout_on_a_reused_connection(
         def close(self) -> None:
             pass
 
-    monkeypatch.setattr("bajutsu.common.drivers.xcuitest.http.client.HTTPConnection", _FakeConn)
+    monkeypatch.setattr(
+        "bajutsu.common.drivers.xcuitest._functions.http.client.HTTPConnection", _FakeConn
+    )
     transport = _raw_http_transport("127.0.0.1", 1234)
     transport("GET", "/elements", None)
     transport("POST", "/gesture", {"kind": "pinch"})
@@ -1015,7 +1019,9 @@ def test_raw_transport_splits_delivery_on_connect_versus_send(
         def close(self) -> None:
             pass
 
-    monkeypatch.setattr("bajutsu.common.drivers.xcuitest.http.client.HTTPConnection", _Conn)
+    monkeypatch.setattr(
+        "bajutsu.common.drivers.xcuitest._functions.http.client.HTTPConnection", _Conn
+    )
     transport = _raw_http_transport("127.0.0.1", 1234)
 
     fail_at = "connect"
@@ -1061,7 +1067,9 @@ def test_raw_transport_reuses_one_connection_across_calls(monkeypatch: pytest.Mo
         def close(self) -> None:
             pass
 
-    monkeypatch.setattr("bajutsu.common.drivers.xcuitest.http.client.HTTPConnection", _FakeConn)
+    monkeypatch.setattr(
+        "bajutsu.common.drivers.xcuitest._functions.http.client.HTTPConnection", _FakeConn
+    )
     transport = _raw_http_transport("127.0.0.1", 1234)
     for _ in range(3):
         transport("GET", "/elements", None)
@@ -1101,12 +1109,14 @@ def test_raw_transport_reconnects_when_the_reused_connection_is_already_closed(
         def close(self) -> None:
             pass
 
-    monkeypatch.setattr("bajutsu.common.drivers.xcuitest.http.client.HTTPConnection", _FakeConn)
+    monkeypatch.setattr(
+        "bajutsu.common.drivers.xcuitest._functions.http.client.HTTPConnection", _FakeConn
+    )
     # `_is_stale` itself is exercised directly in its own unit tests below; here it only needs to
     # report the reused connection dead, without simulating a real socket's `fileno()`. It is never
     # consulted on the very first call (there is nothing yet to reuse), so unconditionally `True` is
     # unambiguous: only the second call below can possibly see it.
-    monkeypatch.setattr("bajutsu.common.drivers.xcuitest._is_stale", lambda _conn: True)
+    monkeypatch.setattr("bajutsu.common.drivers.xcuitest._functions._is_stale", lambda _conn: True)
     transport = _raw_http_transport("127.0.0.1", 1234)
     transport("GET", "/elements", None)
     transport("GET", "/elements", None)
@@ -1121,10 +1131,12 @@ def test_raw_transport_forces_a_reconnect_after_a_long_idle_gap(
     # the last call. `_raw_http_transport` must not lean on the peek alone once the gap has grown
     # past `_KEEPALIVE_IDLE_RECONNECT_SECONDS` — it reconnects on elapsed time, even though `_is_stale`
     # (patched here to always report "alive") would have said the old connection is still fine.
-    monkeypatch.setattr("bajutsu.common.drivers.xcuitest._is_stale", lambda _conn: False)
+    monkeypatch.setattr("bajutsu.common.drivers.xcuitest._functions._is_stale", lambda _conn: False)
     constructed = 0
     clock = [1000.0]
-    monkeypatch.setattr("bajutsu.common.drivers.xcuitest.time.monotonic", lambda: clock[0])
+    monkeypatch.setattr(
+        "bajutsu.common.drivers.xcuitest._functions.time.monotonic", lambda: clock[0]
+    )
 
     class _FakeConn:
         def __init__(self, host: str, port: int, timeout: float | None = None) -> None:
@@ -1150,7 +1162,9 @@ def test_raw_transport_forces_a_reconnect_after_a_long_idle_gap(
         def close(self) -> None:
             pass
 
-    monkeypatch.setattr("bajutsu.common.drivers.xcuitest.http.client.HTTPConnection", _FakeConn)
+    monkeypatch.setattr(
+        "bajutsu.common.drivers.xcuitest._functions.http.client.HTTPConnection", _FakeConn
+    )
     transport = _raw_http_transport("127.0.0.1", 1234)
     transport("GET", "/elements", None)
     assert constructed == 1
@@ -1169,7 +1183,9 @@ def test_raw_transport_reuses_a_connection_within_the_idle_threshold(
     _not_stale(monkeypatch)
     constructed = 0
     clock = [1000.0]
-    monkeypatch.setattr("bajutsu.common.drivers.xcuitest.time.monotonic", lambda: clock[0])
+    monkeypatch.setattr(
+        "bajutsu.common.drivers.xcuitest._functions.time.monotonic", lambda: clock[0]
+    )
 
     class _FakeConn:
         def __init__(self, host: str, port: int, timeout: float | None = None) -> None:
@@ -1195,7 +1211,9 @@ def test_raw_transport_reuses_a_connection_within_the_idle_threshold(
         def close(self) -> None:
             pass
 
-    monkeypatch.setattr("bajutsu.common.drivers.xcuitest.http.client.HTTPConnection", _FakeConn)
+    monkeypatch.setattr(
+        "bajutsu.common.drivers.xcuitest._functions.http.client.HTTPConnection", _FakeConn
+    )
     transport = _raw_http_transport("127.0.0.1", 1234)
     transport("GET", "/elements", None)
     clock[0] += _KEEPALIVE_IDLE_RECONNECT_SECONDS - 0.1
@@ -1264,7 +1282,9 @@ def test_raw_transport_discards_a_connection_a_non_os_error_failure_touched(
         def close(self) -> None:
             pass
 
-    monkeypatch.setattr("bajutsu.common.drivers.xcuitest.http.client.HTTPConnection", _FakeConn)
+    monkeypatch.setattr(
+        "bajutsu.common.drivers.xcuitest._functions.http.client.HTTPConnection", _FakeConn
+    )
     transport = _raw_http_transport("127.0.0.1", 1234)
     with pytest.raises(XcuitestChannelError):
         transport("GET", "/elements", None)
@@ -1307,7 +1327,9 @@ def test_raw_transport_treats_a_reused_connections_timeout_as_delivered(
         def close(self) -> None:
             pass
 
-    monkeypatch.setattr("bajutsu.common.drivers.xcuitest.http.client.HTTPConnection", _FakeConn)
+    monkeypatch.setattr(
+        "bajutsu.common.drivers.xcuitest._functions.http.client.HTTPConnection", _FakeConn
+    )
     transport = _raw_http_transport("127.0.0.1", 1234)
     transport("GET", "/elements", None)  # establishes the connection later calls reuse
     with pytest.raises(_TransportFailure) as exc:

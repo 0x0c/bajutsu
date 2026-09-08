@@ -24,6 +24,10 @@ from bajutsu.common.backend_cli import simctl
 from bajutsu.common.config import XcuitestConfig
 from bajutsu.common.platform_lifecycle.environments import _bundled_runner, xcuitest
 
+# The spawn reads `bundled_products_dir` from `_functions`'s own globals since BE-0411 split
+# the package, so patching the package's re-export would not reach it.
+from bajutsu.common.platform_lifecycle.environments.xcuitest import _functions as xcuitest_impl
+
 
 def _products(dir_: Path) -> Path:
     """Write a minimal products directory (a `.xctestrun` beside a stub bundle) and return it."""
@@ -49,7 +53,7 @@ def test_explicit_test_runner_wins_over_the_bundle(
 ) -> None:
     # Even with a bundle present, an explicit path takes precedence — the bundle is the fallback.
     bundle = _products(tmp_path / "bundle")
-    monkeypatch.setattr(xcuitest, "bundled_products_dir", lambda: bundle)
+    monkeypatch.setattr(xcuitest_impl, "bundled_products_dir", lambda: bundle)
     runner = tmp_path / "Explicit.xctestrun"
     runner.write_bytes(b"")
     cfg = XcuitestConfig.model_validate({"testRunner": str(runner)})
@@ -81,7 +85,7 @@ def test_build_without_a_test_runner_fails_instead_of_using_the_bundle(
     # `build` only ever refreshes the file at `testRunner`; without that path configured, silently
     # falling back to the bundled runner would drop the configured build on the floor.
     bundle = _products(tmp_path / "bundle")
-    monkeypatch.setattr(xcuitest, "bundled_products_dir", lambda: bundle)
+    monkeypatch.setattr(xcuitest_impl, "bundled_products_dir", lambda: bundle)
     cfg = XcuitestConfig.model_validate({"build": "make runner"})
     with pytest.raises(simctl.DeviceError, match=r"xcuitest\.build requires xcuitest\.testRunner"):
         xcuitest._resolve_runner(cfg, "simulator")
@@ -101,8 +105,8 @@ def test_simulator_falls_back_to_the_bundle(
         seen["source"] = source
         return materialized
 
-    monkeypatch.setattr(xcuitest, "bundled_products_dir", lambda: bundle)
-    monkeypatch.setattr(xcuitest, "materialize", _fake_materialize)
+    monkeypatch.setattr(xcuitest_impl, "bundled_products_dir", lambda: bundle)
+    monkeypatch.setattr(xcuitest_impl, "materialize", _fake_materialize)
 
     # Both "no xcuitest block" and an empty one resolve to the bundle on the Simulator.
     assert xcuitest._resolve_runner(None, "simulator") == materialized
@@ -111,7 +115,7 @@ def test_simulator_falls_back_to_the_bundle(
 
 
 def test_simulator_without_a_bundle_fails_clearly(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(xcuitest, "bundled_products_dir", lambda: None)
+    monkeypatch.setattr(xcuitest_impl, "bundled_products_dir", lambda: None)
     with pytest.raises(simctl.DeviceError, match="no bundled runner"):
         xcuitest._resolve_runner(None, "simulator")
 
@@ -121,7 +125,7 @@ def test_device_without_a_test_runner_never_uses_the_bundle(
 ) -> None:
     # A real device must not silently take a Simulator runner it cannot install (BE-0288).
     bundle = _products(tmp_path / "bundle")
-    monkeypatch.setattr(xcuitest, "bundled_products_dir", lambda: bundle)
+    monkeypatch.setattr(xcuitest_impl, "bundled_products_dir", lambda: bundle)
     cfg = XcuitestConfig.model_validate({"deviceType": "device"})
     with pytest.raises(simctl.DeviceError, match="deviceType: device requires"):
         xcuitest._resolve_runner(cfg, "device")
@@ -309,12 +313,12 @@ def test_bundled_products_dir_absent_by_default() -> None:
 
 def test_runner_source_reports_bundled(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     bundle = _products(tmp_path / "bundle")
-    monkeypatch.setattr(xcuitest, "bundled_products_dir", lambda: bundle)
+    monkeypatch.setattr(xcuitest_impl, "bundled_products_dir", lambda: bundle)
     assert xcuitest.runner_source(None, "simulator") == "bundled (wheel-shipped Simulator runner)"
 
 
 def test_runner_source_reports_no_bundle_present(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(xcuitest, "bundled_products_dir", lambda: None)
+    monkeypatch.setattr(xcuitest_impl, "bundled_products_dir", lambda: None)
     assert xcuitest.runner_source(None, "simulator") == (
         "none: no bundled runner in this build (set xcuitest.testRunner)"
     )
@@ -323,7 +327,9 @@ def test_runner_source_reports_no_bundle_present(monkeypatch: pytest.MonkeyPatch
 def test_runner_source_reports_device_requires_test_runner(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    monkeypatch.setattr(xcuitest, "bundled_products_dir", lambda: _products(tmp_path / "bundle"))
+    monkeypatch.setattr(
+        xcuitest_impl, "bundled_products_dir", lambda: _products(tmp_path / "bundle")
+    )
     assert xcuitest.runner_source(None, "device") == (
         "none: xcuitest.deviceType: device requires an explicit testRunner"
     )
@@ -365,13 +371,13 @@ def test_runner_source_never_runs_build_or_materializes(
     # The whole point of `runner_source` is to disclose without acting: it must not shell out to a
     # configured `build`, nor materialize the bundled runner into the cache.
     bundle = _products(tmp_path / "bundle")
-    monkeypatch.setattr(xcuitest, "bundled_products_dir", lambda: bundle)
+    monkeypatch.setattr(xcuitest_impl, "bundled_products_dir", lambda: bundle)
 
     def _boom(*args: object, **kwargs: Any) -> object:
         raise AssertionError("runner_source must not run build or materialize")
 
     monkeypatch.setattr(subprocess, "run", _boom)
-    monkeypatch.setattr(xcuitest, "materialize", _boom)
+    monkeypatch.setattr(xcuitest_impl, "materialize", _boom)
 
     assert xcuitest.runner_source(None, "simulator") == "bundled (wheel-shipped Simulator runner)"
     missing = tmp_path / "missing.xctestrun"
@@ -462,7 +468,7 @@ def test_toolchain_note_fires_only_for_the_bundled_tier(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     monkeypatch.setattr(
-        xcuitest, "bundled_runner_build_info", lambda: {"xcode": "16.0", "sdk": "18.0"}
+        xcuitest_impl, "bundled_runner_build_info", lambda: {"xcode": "16.0", "sdk": "18.0"}
     )
 
     def mismatch() -> tuple[str | None, str | None]:

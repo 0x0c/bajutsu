@@ -516,7 +516,9 @@ def test_filesink_dispatches_adb_driver_intervals_end_to_end(
         def stop(self, sig: int, timeout: float) -> None:
             return None
 
-    monkeypatch.setattr(intervals, "_SubprocessProc", lambda argv, stdout_path: _FakeProc())
+    monkeypatch.setattr(
+        intervals._functions, "_SubprocessProc", lambda argv, stdout_path: _FakeProc()
+    )
 
     ran: list[list[str]] = []
     pgrep_calls = 0
@@ -564,7 +566,7 @@ def test_filesink_confirms_ios_on_demand_video_start(
         def await_stderr(self, needle: str, timeout: float) -> float | None:
             return time.monotonic()  # simctl announced its first processed frame
 
-    monkeypatch.setattr(intervals, "_SubprocessProc", _FakeProc)
+    monkeypatch.setattr(intervals._functions, "_SubprocessProc", _FakeProc)
 
     sink = FileSink(tmp_path, udid="UDID")
     started = sink.start_scenario_intervals("00-s", ["video"])
@@ -591,7 +593,7 @@ def test_filesink_reports_a_video_that_never_confirmed_it_started(
             return time.monotonic() if announces["v"] else None
 
     announces = {"v": True}
-    monkeypatch.setattr(intervals, "_SubprocessProc", _FakeProc)
+    monkeypatch.setattr(intervals._functions, "_SubprocessProc", _FakeProc)
     stalls: list[bool] = []
     sink = FileSink(tmp_path, udid="UDID", on_video_start_stall=lambda: stalls.append(True))
     sink.start_scenario_intervals("00-s", ["video"])

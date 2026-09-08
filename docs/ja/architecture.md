@@ -78,19 +78,19 @@ flowchart TB
 
 | モジュール | 役割 | ページ |
 |---|---|---|
-| `common/drivers/base.py` | Driver Protocol + 共通型（`Element`/`Selector`/`Point`）+ **セレクタ解決**（決定性の核） | [selectors](selectors.md) / [drivers](drivers.md) |
-| `common/drivers/actuation.py` | `Actuation`/`ActuationLog`。各ドライバがステップの結果へ書き足す具体的なジェスチャーの記録（座標・経路・プラットフォームが受理したか）。`actionLog` 証跡種別を支えます（BE-0345） | [evidence](evidence.md#各ステップが画面に対して実際に行ったことactionlog) |
+| `common/drivers/base` | Driver Protocol + 共通型（`Element`/`Selector`/`Point`）+ **セレクタ解決**（決定性の核） | [selectors](selectors.md) / [drivers](drivers.md) |
+| `common/drivers/actuation` | `Actuation`/`ActuationLog`。各ドライバがステップの結果へ書き足す具体的なジェスチャーの記録（座標・経路・プラットフォームが受理したか）。`actionLog` 証跡種別を支えます（BE-0345） | [evidence](evidence.md#各ステップが画面に対して実際に行ったことactionlog) |
 | `common/drivers/coordinate_tree.py` | `CoordinateTreeDriver`。座標系のバックエンド（adb）が継承する共有基底クラス。一時的空ツリーへのリトライ / 安定キーによる settle / `_resolve` / `wait_for` を提供（BE-0254） | [drivers](drivers.md#adbandroid) |
-| `common/drivers/fake.py` | インメモリの `FakeDriver`（実機不要テスト用） | [drivers](drivers.md#fakedriver) |
-| `common/drivers/xcuitest.py` | XCUITest バックエンド（iOS。BE-0290 で idb を撤去して以来、iOS の唯一の backend。実機上に常駐する runner が semantic tap、ネイティブ条件待ち、テキスト選択、multi-touch を提供。BE-0019） | [drivers](drivers.md#xcuitestios) |
-| `common/drivers/adb.py` | adb バックエンド（Android。`tap`/`long_press`/`double_tap` は resident server の `POST /act` で端末側にて解決・inject し、channel が使えないときは `uiautomator dump` による frame 中心の座標 tap にフォールバックします。BE-0339） | [drivers](drivers.md#adbandroid) |
-| `common/drivers/playwright.py` | Playwright web バックエンド（ブラウザ。第一段、決定的 run） | [drivers](drivers.md#playwrightweb) |
-| `common/drivers/xcuitest_live.py` | live-route の XCUITest ドライバ。常駐 runner のチャネルの代わりに、予約済みのデバイスクラウド上の iOS デバイスへ W3C WebDriver（Appium の XCUITest ドライバ）で駆動する `appium` デバイスプロバイダ向け（BE-0238）。セッションのライフサイクル、query/tap/screenshot/readiness、ジェスチャ、テキスト入力までを実装済み。`selectAll`/`copy` は Appium 側に相当機能がなく明示的に失敗する。実デバイスクラウドのグリッドに対する検証は未了（[BE-0303](../../roadmaps/BE-0303-xcuitest-live-real-grid-verification/BE-0303-xcuitest-live-real-grid-verification-ja.md)） | — |
+| `common/drivers/fake` | インメモリの `FakeDriver`（実機不要テスト用） | [drivers](drivers.md#fakedriver) |
+| `common/drivers/xcuitest` | XCUITest バックエンド（iOS。BE-0290 で idb を撤去して以来、iOS の唯一の backend。実機上に常駐する runner が semantic tap、ネイティブ条件待ち、テキスト選択、multi-touch を提供。BE-0019） | [drivers](drivers.md#xcuitestios) |
+| `common/drivers/adb` | adb バックエンド（Android。`tap`/`long_press`/`double_tap` は resident server の `POST /act` で端末側にて解決・inject し、channel が使えないときは `uiautomator dump` による frame 中心の座標 tap にフォールバックします。BE-0339） | [drivers](drivers.md#adbandroid) |
+| `common/drivers/playwright` | Playwright web バックエンド（ブラウザ。第一段、決定的 run） | [drivers](drivers.md#playwrightweb) |
+| `common/drivers/xcuitest_live` | live-route の XCUITest ドライバ。常駐 runner のチャネルの代わりに、予約済みのデバイスクラウド上の iOS デバイスへ W3C WebDriver（Appium の XCUITest ドライバ）で駆動する `appium` デバイスプロバイダ向け（BE-0238）。セッションのライフサイクル、query/tap/screenshot/readiness、ジェスチャ、テキスト入力までを実装済み。`selectAll`/`copy` は Appium 側に相当機能がなく明示的に失敗する。実デバイスクラウドのグリッドに対する検証は未了（[BE-0303](../../roadmaps/BE-0303-xcuitest-live-real-grid-verification/BE-0303-xcuitest-live-real-grid-verification-ja.md)） | — |
 | `common/drivers/elements.py` | 正規化済み要素ツリーに対する、プラットフォーム非依存の述語・幾何ヘルパー（`screen_size_from_elements`、`shows_app_ui`）。assertions・crawl・runner パイプライン・record が共有 | [drivers](drivers.md) |
 | `common/drivers/dom.py` | Playwright バックエンドと WebView ブリッジが共有する DOM → `Element` 正規化 | [drivers](drivers.md#playwrightweb) |
 | `common/drivers/web_network.py` | web のネットワーク観測。Playwright 側の `Collector`（iOS 側と同じ `NetworkExchange` モデルへ `requestfinished` を橋渡し）+ `page.route` によるプロセス内 mock スタブ | [drivers](drivers.md#playwrightweb) |
-| `common/drivers/webview.py` | WebView ブリッジクライアント。BajutsuKit の WebView チャネルの Python 側（DOM 取得 + tap 発行を HTTP 経由で実施） | [drivers](drivers.md) |
-| `common/drivers/zorder.py` | z 順応答クライアント。BajutsuKit の `nativeZ` チャネルの Python 側（BE-0355） | [drivers](drivers.md) |
+| `common/drivers/webview` | WebView ブリッジクライアント。BajutsuKit の WebView チャネルの Python 側（DOM 取得 + tap 発行を HTTP 経由で実施） | [drivers](drivers.md) |
+| `common/drivers/zorder` | z 順応答クライアント。BajutsuKit の `nativeZ` チャネルの Python 側（BE-0355） | [drivers](drivers.md) |
 | `common/scenario/` | シナリオスキーマ（pydantic 厳格検証）+ YAML 読込 / 書出（パッケージ: `models` / `load` / `load_expanded` / `expand` / `select` / `serialize` / `edit`） | [scenarios](scenarios.md) |
 | `common/assertions/` | 機械アサーション評価（総関数。例外を投げない）（パッケージ: `evaluate` / `network` / `visual` / `schema` / `_common`、BE-0250） | [selectors](selectors.md#アサーション評価) |
 | `common/orchestrator/` | 決定的 Tier 2 run ループ（act → wait → verify）（パッケージ: `loop` / `waits` / `substitution` / `evidence_rules` / `actions` / `control_channel`） | [run-loop](run-loop.md) |
@@ -110,8 +110,8 @@ flowchart TB
 | `provision.py` | config 対応の環境インストーラ（BE-0164）。config の backend と AI プロバイダを解決し、必要な extra とツールだけを冪等に導入する（`make install`） | — |
 | `common/runner/` | config + シナリオ → レポート。デバイスプール + launch 手順。`device_provider` の seam が、run のデバイスをどこから調達するかを解決する（組み込みの `local` pass-through に加え、予約済みの実機 iOS デバイスを Appium/WebDriver エンドポイント越しにエンドツーエンドで駆動する `appium` provider、BE-0238。他のクラウドベンダ種別は今後の追加課題）。`recovery` はバックエンドクラッシュのリトライ回数・wall-clock 予算の判定を持ち、オンデバイスのドライバ適合性スイートと共有します（BE-0334）。障害を分類する述語も 2 つ持ちます。`recovers_by_respawn` が再試行を判断し、`is_host_fault` がホスト側に原因のある失敗を診断します。固まったデバイスは、この 2 つに違う答えを返します（BE-0378）。`is_host_fault` が名指しするのはプラットフォーム中立な `DeviceTimeout` なので、この基底を採用したバックエンドはすべて対象に入ります（BE-0374）。後続シナリオを止める run 単位のラッチも `recovery` にあり、復旧を諦めた理由（予算を使い切ったのか、ホストが固まったのか）を保持します。さらに `recovery` は、pool の teardown 箇所・`launch_driver`・オンデバイススイートの lease 破棄が共有する、守られた teardown の方針も持ちます（BE-0342）。`mailbox` は `email` ステップの transport を、`kind` で鍵付けしたレジストリで解決します（出荷済みなのは `http` の JSON アダプタ、BE-0186）。形は `ai/registry.py` を踏襲します（パッケージ: `pipeline` / `pool` / `launch` / `device_provider` / `recovery` / `mailbox`） | [run-loop](run-loop.md#runner実行パイプライン) |
 | `common/run_meta/` | 複数の機能が共有する run メタデータのヘルパ（パッケージ）: `files.py`（runs ルート名 + run ディレクトリのパスを介さない読み取り。一覧・manifest）、`id.py`（run id の生成・解析）、`root.py`（run ディレクトリの書き込みプロバイダ、BE-0331。後述の import 契約を参照）、`artifact_perms.py`（run の成果物への owner-only な `0700`/`0600` 権限、BE-0131）、`object_store.py`（証跡アップロードとサーバストレージ向けのバックエンド中立な `ObjectStore`。local/S3/GCS、BE-0110/BE-0204） | [configuration](configuration.md) |
-| `run/notify.py` | `bajutsu run` 完了後に送る run 完了通知（Slack など） | — |
-| `common/doctor.py` | 規約充足度スコア（id カバレッジ等） | [configuration](configuration.md#doctor規約充足度スコア) |
+| `run/notify` | `bajutsu run` 完了後に送る run 完了通知（Slack など） | — |
+| `common/doctor/` | 規約充足度スコア（id カバレッジ等） | [configuration](configuration.md#doctor規約充足度スコア) |
 | `agents/` | AI / オーサリングエージェントの periphery（BE-0257）：`protocols` + `factory`（`Observation`/`Proposal`/`Agent` 抽象 + 唯一の SDK エージェントの構築）、`claude`（オーサリングエージェント）、`claude_backed`（共有基底、BE-0246）、`claude_enrich`、`claude_triage`、`ai_config`（プロバイダ/モデル/effort/言語の解決）、`anthropic_client`（SDK クライアント構築）、`availability`（資格情報欠如のメッセージ化）、`enrich`（enrichment ループ）、`alerts`（システムアラートガード） | [recording](recording.md) |
 | `ai/` | ベンダー中立な AI バックエンドのシーム（BE-0104）。`AiBackend` プロトコルと正規化した request/response 型（`base`）、プロバイダレジストリ（`registry`）が登録済みのプロバイダを賄います。`agents.anthropic_client` の上に立つ Anthropic 参照アダプタ（`anthropic`）による Anthropic API と Amazon Bedrock、Anthropic CLI `ant`（同じく `anthropic` アダプタ経由、BE-0163）、Claude Code CLI（`claude_code`、BE-0176）、そしてファクトリが例外を送出してどの AI 経路にもバックエンドを構築させない `none`（`disabled`、BE-0394） | [configuration](configuration.md#ai-プロバイダaibe-0047) |
 | `run/` | `bajutsu run` の CLI コマンド（`cli.py`）: target/backend 解決、デバイスの lease 取得、plan 構築、決定的な run/report ディスパッチ | [cli](cli.md) |
@@ -128,7 +128,7 @@ flowchart TB
 | `analysis/` | 実機も AI も使わない読み取り専用の助言的分析パッケージ（BE-0257）、CI を止めない: `audit`（決定性・フレーキネス監査、BE-0049）、`coverage`（シナリオの id 名前空間カバレッジ、BE-0050）、`impact`（テスト影響分析。diff から影響ステップを選ぶ、BE-0321）、`stats`（集計 run 統計ダッシュボード、BE-0102）、クロスランのフレーキネスランキング（`flakiness`、BE-0220）、`trace` タイムライン（`trace.py`、`bajutsu trace` コマンドの本体）——それぞれの Typer コマンドは `cli/`（機能ごとに 1 ファイル）にあります | [cli](cli.md) |
 | `cli/` | Typer アプリの組み立て：各機能自身の CLI（`run`/`crawl`/`record`/`triage`/`mcp`/`codegen`/`serve`/`analysis`）と、機能を持たない `commands/`（`doctor`/`lint`/`schema`/`report`）、`.env` ローダ（`dotenv.py`）をマウント | [cli](cli.md) |
 | `common/screenshots.py` | AI 経路が共有するスクリーンショット取得 + ピクセル座標のヘルパ（`screenshot_bytes`、`png_size`、`fraction`、BE-0246） | [recording](recording.md) |
-| `common/handoff.py` | 人手介在ハンドオフの契約（Tier 1、BE-0179）。`record`（端末の stdin）と `serve`（SSE）が同じ transport 中立なリクエスト/レスポンスを実装 | [recording](recording.md) |
+| `common/handoff/` | 人手介在ハンドオフの契約（Tier 1、BE-0179）。`record`（端末の stdin）と `serve`（SSE）が同じ transport 中立なリクエスト/レスポンスを実装 | [recording](recording.md) |
 | `common/deprecations.py` | 改名済みのオーサリング/CLI 表記への一度きりの非推奨通知（`warn_once`）と、廃止済み表記への明示的な拒否（`reject_renamed_key`） | — |
 | `common/diagnostics.py` | プロセス全体のロギング設定。run が自分自身について何をどれだけ語るか | — |
 | `common/stall_diagnostics.py` | バックエンドが stall した瞬間の、範囲を限定したベストエフォートな状態取得（BE-0361/BE-0367） | — |
@@ -136,7 +136,7 @@ flowchart TB
 
 ## 依存関係（レイヤ）
 
-下層ほど安定で、上層が下層に依存します。中核は `common/drivers/base.py`（セレクタ解決）で、すべての実行系がここに依存します。
+下層ほど安定で、上層が下層に依存します。中核は `common/drivers/base`（セレクタ解決）で、すべての実行系がここに依存します。
 
 ![依存レイヤ図。cli/ がユーザ接点であり、その下に runner/、record.py/crawl/、codegen/、trace.py、triage.py が直接ぶら下がります（codegen/ と trace.py には、これ以上の依存関係が描かれていません）。runner/ は orchestrator/ に、record.py/crawl/ は AI エージェント関連のヘルパーに、triage.py は serve・CI 関連のヘルパーに、それぞれ依存します。orchestrator/ とエージェント関連のヘルパーは assertions/ と evidence/ に依存し、orchestrator/ はさらに config.py、backends.py、simctl.py にも依存します。assertions/ は scenario/ に、evidence/ は report/ に依存し、scenario/、report/、config.py、backends.py、simctl.py はいずれも決定性の核である drivers/base.py に収束します。そこから drivers/fake、iOS・Android 系ドライバ（xcuitest、adb）、Playwright ドライバへ分岐します。](assets/diagrams/architecture-dependency-layers-ja.svg)
 
@@ -152,7 +152,7 @@ flowchart TB
     record["record.py / crawl/<br/>（Tier 1 / AI）"]
     codegen["codegen/<br/>（構造マッピング）"]
     trace["trace.py<br/>（タイムライン）"]
-    triage["triage.py / agents/claude_triage.py<br/>（自己修復・助言）"]
+    triage["triage.py / agents/claude_triage<br/>（自己修復・助言）"]
 
     orch["orchestrator/"]
     agentStuff["agents/<br/>（protocols・factory・claude・alerts 等）"]
@@ -167,7 +167,7 @@ flowchart TB
     backends["backends.py"]
     simctl["simctl.py"]
 
-    base["drivers/base.py<br/>決定性の核（Element / Selector / resolve_unique）"]
+    base["drivers/base<br/>決定性の核（Element / Selector / resolve_unique）"]
 
     fake["drivers/fake"]
     ios["drivers/xcuitest・adb"]
@@ -208,20 +208,20 @@ flowchart TB
 
 - `common/orchestrator/` は `base.Driver` にのみ依存し、**どの具象ドライバとも結合しません**。そのため `FakeDriver` で実機なしにテストでき、本番では同じループが XCUITest（iOS）や playwright（web）を駆動します。
 - `common/runner/` はアプリを起動して準備済みドライバを返す factory を提供し、ループを実機から分離します。
-- `scenario/`（オーサリング表現の pydantic モデル）と `common/drivers/base.py`（実行時の TypedDict）は別物です。`Selector.as_selector()` が前者を後者へ変換します。
+- `scenario/`（オーサリング表現の pydantic モデル）と `common/drivers/base`（実行時の TypedDict）は別物です。`Selector.as_selector()` が前者を後者へ変換します。
 
 ### 強制されるレイヤ境界（BE-0112）
 
 上のレイヤ分けは規約にとどまりません。ゲートで**実行可能な契約**として強制します。`make lint-imports`（`make check` の一部であり、CI のステップでもあります）が [import-linter](https://import-linter.readthedocs.io/) を宣言したレイヤに対して実行するので、禁止された import は誰かが気付くまで残らず、その場でゲートを落とします。設定は `pyproject.toml` の `[tool.importlinter]` にあります。3 つのレイヤを宣言します。
 
-1. **決定性コア**：モデルにも periphery のスタックにも触れずに判定と証跡を導く経路です。`common/orchestrator/`、`common/runner/`、`common/drivers/base.py`、`assertions/`、`evidence/`、`report/`、`config/`、`scenario/`、`preflight.py` / `capability_preflight.py` / `capabilities.py`、`common/doctor.py`、`common/lint.py` が含まれます。prime directive を担います。
-2. **契約（contract）**：利用者が依存する安定した界面です。シナリオスキーマ（`scenario/`）と `Driver` Protocol（`common/drivers/base.py`）です。
-3. **periphery**：契約の利用側で、いずれもオプションの extra の背後に切り離せます。`serve/`、`mcp/`、codegen のエミッタ、AI / エージェント経路（`agents/` 以下の `protocols`、`ai_config`、`anthropic_client`、`enrich`、`alerts` など、加えて `record/`、`triage/`、`crawl/guide.py` など）、`github/actions.py` / `run/notify.py` のヘルパです（`github/` の残り、`app` と `errors` は決定的コアからも参照できるので、`config_source` は periphery を巻き込まずに利用します）。
+1. **決定性コア**：モデルにも periphery のスタックにも触れずに判定と証跡を導く経路です。`common/orchestrator/`、`common/runner/`、`common/drivers/base`、`assertions/`、`evidence/`、`report/`、`config/`、`scenario/`、`preflight.py` / `capability_preflight.py` / `capabilities.py`、`common/doctor/`、`common/lint.py` が含まれます。prime directive を担います。
+2. **契約（contract）**：利用者が依存する安定した界面です。シナリオスキーマ（`scenario/`）と `Driver` Protocol（`common/drivers/base`）です。
+3. **periphery**：契約の利用側で、いずれもオプションの extra の背後に切り離せます。`serve/`、`mcp/`、codegen のエミッタ、AI / エージェント経路（`agents/` 以下の `protocols`、`ai_config`、`anthropic_client`、`enrich`、`alerts` など、加えて `record/`、`triage/`、`crawl/guide` など）、`github/actions.py` / `run/notify` のヘルパです（`github/` の残り、`app` と `errors` は決定的コアからも参照できるので、`config_source` は periphery を巻き込まずに利用します）。
 
 強制する契約は 3 つです。
 
 - **決定性コアは periphery を import してはいけません。** これはprime directive 1 と 3 を静的な契約にしたものです。判定と証跡の経路を serve / AI / codegen のスタックから切り離したまま保ち、それらへの依存が黙って増えることを防ぎます。コアのモジュールが必要とする純粋な要素ツリーのヘルパ（`screen_size_from_elements`、`shows_app_ui` など）は、`record/` のような periphery のモジュールではなくコア（`bajutsu/common/drivers/elements.py`）に置きます。同様に、解決済みの `ai` ブロック（`AiConfig`）は `config/` に置き、コアは AI クライアントを import せずにそれを読みます。
-- **コアはホスト非依存に保ちます（BE-0129）。** マルチテナントなホスティングの関心事（組織、ロール、テナンシー）と、`db`（SQLAlchemy、Alembic、psycopg、cryptography）や `oauth`（Authlib）の extra は、`bajutsu/serve/` だけが持ちます。組織モデル（`OrgConfig`、`org_for_*`、`targets_for_org`、`load_serve_config`）は `config/` ではなく `bajutsu/serve/orgs.py` にあります。`Config` は `orgs` フィールドを持たず、コアのローダーは検証の前にトップレベルの `orgs:` を取り除くので、組織情報を含む config を読むホスト型構成の run はそのまま動きつつ、コアは組織を一切モデル化しません。同じ仕組みがトップレベルの `ui:` キー（BE-0191）も除去します。serve UI のプレゼンテーション設定（`ui.default_theme`）は serve の関心事であり、`bajutsu/serve/themes.py` で読み取られます。`Config` はモデル化しません。import-linter の forbidden 契約が `config/`・`common/drivers/`・`common/runner/`・`scenario/` をこれらの extra から遠ざけます（`include_external_packages` により外部 import も検出します）。これは、それらを `bajutsu.serve` から遠ざける periphery 契約の上に重ねたものです。
+- **コアはホスト非依存に保ちます（BE-0129）。** マルチテナントなホスティングの関心事（組織、ロール、テナンシー）と、`db`（SQLAlchemy、Alembic、psycopg、cryptography）や `oauth`（Authlib）の extra は、`bajutsu/serve/` だけが持ちます。組織モデル（`OrgConfig`、`org_for_*`、`targets_for_org`、`load_serve_config`）は `config/` ではなく `bajutsu/serve/orgs.py` にあります。`Config` は `orgs` フィールドを持たず、コアのローダーは検証の前にトップレベルの `orgs:` を取り除くので、組織情報を含む config を読むホスト型構成の run はそのまま動きつつ、コアは組織を一切モデル化しません。同じ仕組みがトップレベルの `ui:` キー（BE-0191）も除去します。serve UI のプレゼンテーション設定（`ui.default_theme`）は serve の関心事であり、`bajutsu/serve/themes/` で読み取られます。`Config` はモデル化しません。import-linter の forbidden 契約が `config/`・`common/drivers/`・`common/runner/`・`scenario/` をこれらの extra から遠ざけます（`include_external_packages` により外部 import も検出します）。これは、それらを `bajutsu.serve` から遠ざける periphery 契約の上に重ねたものです。
 - **シナリオスキーマと `Driver` Protocol は可搬なインナー契約に保ちます。** periphery だけでなく runtime のコア（`common/orchestrator/`、`common/runner/`、`config/` など）からも独立させます。これにより契約は、利用者が runtime を引き込まずに依存できる安定したレイヤになり、バージョンをまたいだスキーマの読み取り（BE-0119）や、将来 periphery をコアから分離する余地を下支えします。
 
 このチェックは import グラフに対する静的解析です。モデルは介在せず、決定的な合否以上のものは `run` / CI の判定経路に載りません。新しいモジュールを追加するときは、そのレイヤが置き場所を決めます。判定と証跡の経路上にあるならコアであり、periphery に到達してはいけません。契約を利用するなら periphery であり、extra の背後に置きます。
@@ -297,7 +297,7 @@ iOS 側の対になるジョブ `pool (xcuitest)` は、Simulator を 2 台起�
 
 - セレクタ解決と曖昧検出（決定性の核）
 - プラットフォーム対応の backend レジストリ: `--backend` / `backend:` は `ios` / `android` / `web` / `fake` トークンを受け取り、それぞれの actuator へ展開します（`common/backends.py`）。`ios` は `xcuitest` に展開します。BE-0290 で idb を撤去して以来、XCUITest が iOS の唯一の actuator です（`--backend ios` と `--backend xcuitest` は等価）。actuator を複数持つプラットフォームであれば**シナリオごと**にコスト順で解決しますが（BE-0240）、iOS が単一 actuator になった今、どのプラットフォームもコスト順と安定度順が食い違いません
-- **XCUITest バックエンド**（`common/drivers/xcuitest.py`）: iOS の唯一の actuator です（BE-0290）。実機上に常駐する runner（`BajutsuKit`）を loopback HTTP 経由で駆動し、semantic（identifier）tap、ネイティブの条件待ち、テキスト選択、`pinch`/`rotate` の multi-touch ジェスチャを提供し、XCTest のオートメーションスナップショットを読み取ります（このスナップショットはグループコンテナの内側まで降りるので、座標系 backend と違って完全に展開された要素ツリーを描き出します）。汎用の runner（`XCUIApplication(bundleIdentifier:)`）はアプリ側の統合なしに任意のアプリを bundle id で駆動し、Xcode の `xcodebuild` を必要とします（BE-0019）。Simulator を対象にした target は runner の設定を必要としません。`xcuitest.testRunner` と `xcuitest.build` のどちらも指定しないときは、wheel にパッケージデータとして同梱された Simulator 用 runner に解決し、初回利用時にコンテンツハッシュ鍵の書き込み可能なキャッシュへ展開します。明示的な `testRunner` や `build` はこの既定より優先し、`deviceType: device` は引き続き署名済みの runner を明示することを必要とします（BE-0292）
+- **XCUITest バックエンド**（`common/drivers/xcuitest`）: iOS の唯一の actuator です（BE-0290）。実機上に常駐する runner（`BajutsuKit`）を loopback HTTP 経由で駆動し、semantic（identifier）tap、ネイティブの条件待ち、テキスト選択、`pinch`/`rotate` の multi-touch ジェスチャを提供し、XCTest のオートメーションスナップショットを読み取ります（このスナップショットはグループコンテナの内側まで降りるので、座標系 backend と違って完全に展開された要素ツリーを描き出します）。汎用の runner（`XCUIApplication(bundleIdentifier:)`）はアプリ側の統合なしに任意のアプリを bundle id で駆動し、Xcode の `xcodebuild` を必要とします（BE-0019）。Simulator を対象にした target は runner の設定を必要としません。`xcuitest.testRunner` と `xcuitest.build` のどちらも指定しないときは、wheel にパッケージデータとして同梱された Simulator 用 runner に解決し、初回利用時にコンテンツハッシュ鍵の書き込み可能なキャッシュへ展開します。明示的な `testRunner` や `build` はこの既定より優先し、`deviceType: device` は引き続き署名済みの runner を明示することを必要とします（BE-0292）
 - `SFSafariViewController` の要素ツリーを、それを描画しているプロセス `com.apple.SafariViewService` から読み取ります
   （BE-0396）: iOS 26 ではアプリ自身の XCTest スナップショットがこのプロセス境界で止まってしまうため、XCUITest
   バックエンドはこのサービスがフォアグラウンドにあるときに限り、サービス自身のハンドルから取得した第 2 のスナップ
@@ -307,8 +307,8 @@ iOS 側の対になるジョブ `pool (xcuitest)` は、Simulator を 2 台起�
   バージョンでは、iOS 26 が使う `Close` を補って報告します。これにより、プロトコルの変更なしに、
   シナリオは `/elements` を通じて
   in-app ブラウザを他の画面と同じように操作できます
-- **Playwright web バックエンド**（`common/drivers/playwright.py`）: ブラウザに対する決定的 `run` を Linux のゲート上で動かせます（`demos/web`）。リッチ寄りの能力モデルまで引き上げ済み（BE-0054）: `page.route()` によるネイティブな `network` の観測とスタブ、共有の `driver_interval` seam を通した `video` と `deviceLog` 相当（console / page-error）の区間証跡、`multiTouch`（ピンチ / 回転）のエミュレーション、N 個の `BrowserContext` レーンにまたがる並列実行、ターゲット単位の `deviceMode`（既定はデスクトップで、Playwright のデバイスプリセットを指定するとモバイルをエミュレーションします。BE-0228）。`appTrace` のみ iOS 専用（`os_log`/simctl 由来）のまま
-- **Android adb バックエンド**（`common/drivers/adb.py` ＋ `common/backend_cli/adb.py`）: `tap`/`long_press`/`double_tap` は解決した要素の
+- **Playwright web バックエンド**（`common/drivers/playwright`）: ブラウザに対する決定的 `run` を Linux のゲート上で動かせます（`demos/web`）。リッチ寄りの能力モデルまで引き上げ済み（BE-0054）: `page.route()` によるネイティブな `network` の観測とスタブ、共有の `driver_interval` seam を通した `video` と `deviceLog` 相当（console / page-error）の区間証跡、`multiTouch`（ピンチ / 回転）のエミュレーション、N 個の `BrowserContext` レーンにまたがる並列実行、ターゲット単位の `deviceMode`（既定はデスクトップで、Playwright のデバイスプリセットを指定するとモバイルをエミュレーションします。BE-0228）。`appTrace` のみ iOS 専用（`os_log`/simctl 由来）のまま
+- **Android adb バックエンド**（`common/drivers/adb` ＋ `common/backend_cli/adb`）: `tap`/`long_press`/`double_tap` は解決した要素の
   identity を resident server の `POST /act` へ送り、server が自身の live なツリーに対して再解決して inject するため、
   ジェスチャは inject する瞬間にデバイスが持つ bounds へ着地します。リトライを使い切るか channel に `/act` エンドポイントが
   ないときは、host 側で計算した frame 中心の座標 tap にフォールバックします（BE-0339）。`AndroidEnvironment` の起動シーケンス、`doctor` の報告、interval 証跡（`video` は `screenrecord`、`deviceLog` は `logcat`。どちらも driver 供給の `driver_interval` seam を通す）とアプリ内の**ネットワーク捕捉** — OkHttp インターセプタ（`BajutsuAndroid`）がホストのコレクタへ報告し、そのコレクタを `adb reverse` でエミュレータへ橋渡しする `request` アサーション（BE-0283。`mocks` は追随の課題）、取得済み XML フィクスチャに対する fast ゲートのユニットテストまで。実機上での actuation fidelity は、システム `back`、deeplink、単一ラウンドトリップの `doubleTap`、スクロールによる要素解決、実行時パーミッションの事前付与を含みます（BE-0210）。デバイス制御は `setLocation` とクリップボードの読み書き / クリアの部分集合を、操作ごとの capability トークンで管理する形で実装済みです（BE-0211 / BE-0212）。クリップボードは Android 10 以降シェルプロセスから到達できないため、アプリ内のレシーバ（`BajutsuAndroid`、BE-0233）を経由します。一方、`push` / `clearKeychain` / ステータスバーの上書き / `background` / `foreground` は、エミュレータ側に相当機能がないため未対応のまま残ります。シナリオ単位の `permissions` フィールド（`pm grant`/`pm revoke`、BE-0276）は権限の語彙全体（API 33 以降の `POST_NOTIFICATIONS` を含む `notifications` も）に対応しており、対応する TCC（Transparency, Consent, and Control）サービスを持たない iOS の `simctl privacy` とは異なります。`pinch`/`rotate` の 2 本指マルチタッチは rooted device 限定で実装済み（protocol-B の `sendevent`、単一タッチへのフォールバックなし。BE-0232）。codegen は UI Automator（Kotlin）ターゲットを実装済み（BE-0209）。Android の e2e CI レーン（KVM 上のエミュレータ、`android-e2e.yml`。BE-0208）は実装済みで、モックネットワーク系を除く共有シナリオ一式を実行します。adb ドライバは、iOS と同じ横断バックエンドのセレクタでネイティブのタブバーを操作し、あらゆるタブに到達できます（クリック可能な `NavigationBarItem` が `button` トレイトを持ち、子要素のテキストを `label` として派生させます。BE-0223）。タブバー操作の欠落こそが、タブに紐づくシナリオをレーンから除外していた唯一の移植性の課題でした。**id の照合**はドライバ内で厳密一致のままです。native な id 構文が SPEC の id を再現できない場合（Android Views の `android:id` は `stable.refresh` を `stable_refresh` に写します）は、シナリオのセレクタが id を**両方の形**で列挙し、共有リゾルバが OR としてどちらにも一致します。ドライバ側の `.`↔`_` 書き換えではなく、シナリオ側の明示的な規約です（BE-0221）。この両方の形の id を支えるアプリ側の仕込みは、独立したライブラリ [`IdentifierTool`](../../IdentifierTool/README.ja.md)（BE-0405）として出荷しています。Compose の `testTagsAsResourceId` と Views の `android:id` 解決を担い、`BajutsuAndroid` への依存は持ちません。
@@ -326,7 +326,7 @@ iOS 側の対になるジョブ `pool (xcuitest)` は、Simulator を 2 台起�
 - アサーション評価（`exists` / `value` / `label` / `count` / `enabled` / `disabled` / `selected` /
   `request` / `requestSequence` / `event` / `responseSchema` / `visual` / `clipboard` / `golden`）
 - Tier 2 run ループ（act → wait → verify）、`FakeDriver` で検証
-- run パイプラインでの**バックエンドクラッシュ復旧**: シナリオ途中でバックエンドがクラッシュした場合（`base.BackendCrashError`、バックエンドに依存しない）、死んだリースを破棄し、新規に再生成したリースでシナリオ全体をやり直します。上限はリトライ回数（`crash_retries`、既定 1）と、再生成に費やす合計時間の任意の wall-clock 上限（`crash_recovery_budget`、既定は無制限）の 2 つで、クラッシュし続けるシナリオや復旧しないランナーを、黙って合格扱いにしたりジョブをハングさせたりせず、はっきりと失敗させます。再試行は、シナリオが `erase: true` を宣言したときにすでに得られるのと同じ `erase` の precondition を強制します。XCUITest バックエンドでは Simulator 自体の再起動（`simctl shutdown → erase → boot`）、adb バックエンドではアプリレベルのクリーンな状態化であり、直前にクラッシュしたそのデバイスへのその場での respawn ではありません。シナリオが `reinstall: overwrite` を宣言してリースをまたいだアプリのデータ保持を求めている場合、および `erase` の precondition をそもそも受け付けない2つの XCUITest 経路（実機、`xcuitest.deviceType: device`／live WebDriver エンドポイント。そこで強制すれば1シナリオの失敗では済まず run 自体が中断してしまいます）では、この強制をスキップします（単なる `erase: false` では不十分です。CLI はどのシナリオの `erase` も、パイプラインに届く前にすでに具体的な bool 値、多くの場合 `false` に解決してしまっているため、その値だけを見るガードでは、この仕組みがまさに対象としている経路そのもので強制再試行が無効になってしまいます）。強制 erase 用のリース自体がデバイスレベルの不具合（`simctl.DeviceError`/`adb.DeviceError`。`BackendCrashError` とは別系統の型であり、その派生ではありません）で失敗したときは、この不具合をこのループの外まで伝播させて run 全体を中断させるのではなく、同じその場での respawn に切り替えます。ただし、不具合がタイムアウト（`device_errors.DeviceTimeout`）であるときは切り替えず、シナリオを失敗させて run をラッチします（BE-0374）。拒否したデバイスは 1 つの操作についての証拠を出していますが、まったく応答しなかったデバイスが示すのは、あらゆる操作の背後にあるサービスが応答をやめたことだけです。そこへ再試行するのは、タイムアウトが否定したことをそのまま前提に置く行為です。もう1つの run 単位の wall-clock 予算（`run_crash_recovery_budget`、こちらも既定は無制限）は、クラッシュ復旧に使う時間をシナリオ単位でリセットせず run 全体を通して上限を設けるもので、劣化し続けるデバイスは、各シナリオが自分の予算を静かに使い切って外部の CI タイムアウトがジョブを打ち切るのを待つ代わりに、run 自体をはっきりと失敗させます。最終的に成功する復旧にこの run 単位の予算を使い切っただけでは、何もラッチされません。それはデバイスがまだ機能していることを示しているにすぎないからです。あるシナリオ自身のクラッシュ再試行ループが、この予算を主因として実際に失敗した後は初めて、以降のどのシナリオも、自身の最初のリースを試す前の時点で即座に失敗します。この確認はクラッシュ再試行ループの中だけでなく、各シナリオの先頭でも行われます。これにより、すでに復旧できないと分かっているデバイスに対して、残る全シナリオが同じ打ち切りに至るまでにコールド起動の試行を1回ずつ余計に払わずに済みます。デバイスの準備がタイムアウトした場合も、同じ限定を要さずに同じラッチを立てます（BE-0374）。ラッチはどちらの原因で立ったかを保持します。そのため、飛ばされたシナリオは予算ではなく固まったホストを報告します。オンデバイスのドライバ適合性スイートはシナリオ単位の判定を共有しており（`common/runner/recovery.py`）、Simulator のインフラ障害が起きても、無関係な PR で必須チェックを赤くすることなく同じように復旧します（BE-0334）。Simulator の XCUITest 経路では、再試行は erase より強い段として**デバイスの置き換え**を持ちます（BE-0354）。消えたデバイスを置き換えるときと同じ手順で新しいデバイスを作り、劣化したデバイスはシャットダウンしてプールから外します。erase が消すのはデバイスのデータであって、固まった画面キャプチャの機構ではありません。そのため、強制 erase 付きの再試行がまたクラッシュした場合はこの段へ進みます。映像の録画が書き込みを始めたことを確認できないまま終わった試行も、この段へ直接進みます。その兆候は、erase の効かない劣化を言い当てているからです。置き換えの試行では強制 erase を外します。これから作成するデバイスには消すものがないからです。この段が働くのは、udid を固定しておらず `appPath` を持つ run にかぎるので、`--udid` で名指しした run はそのデバイス上の erase による再試行を保ちます。置き換えが消すものは erase より多いため、erase の段が尊重する `reinstall: overwrite` と `bajutsu run --no-erase` も同じように尊重します
+- run パイプラインでの**バックエンドクラッシュ復旧**: シナリオ途中でバックエンドがクラッシュした場合（`base.BackendCrashError`、バックエンドに依存しない）、死んだリースを破棄し、新規に再生成したリースでシナリオ全体をやり直します。上限はリトライ回数（`crash_retries`、既定 1）と、再生成に費やす合計時間の任意の wall-clock 上限（`crash_recovery_budget`、既定は無制限）の 2 つで、クラッシュし続けるシナリオや復旧しないランナーを、黙って合格扱いにしたりジョブをハングさせたりせず、はっきりと失敗させます。再試行は、シナリオが `erase: true` を宣言したときにすでに得られるのと同じ `erase` の precondition を強制します。XCUITest バックエンドでは Simulator 自体の再起動（`simctl shutdown → erase → boot`）、adb バックエンドではアプリレベルのクリーンな状態化であり、直前にクラッシュしたそのデバイスへのその場での respawn ではありません。シナリオが `reinstall: overwrite` を宣言してリースをまたいだアプリのデータ保持を求めている場合、および `erase` の precondition をそもそも受け付けない2つの XCUITest 経路（実機、`xcuitest.deviceType: device`／live WebDriver エンドポイント。そこで強制すれば1シナリオの失敗では済まず run 自体が中断してしまいます）では、この強制をスキップします（単なる `erase: false` では不十分です。CLI はどのシナリオの `erase` も、パイプラインに届く前にすでに具体的な bool 値、多くの場合 `false` に解決してしまっているため、その値だけを見るガードでは、この仕組みがまさに対象としている経路そのもので強制再試行が無効になってしまいます）。強制 erase 用のリース自体がデバイスレベルの不具合（`simctl.DeviceError`/`adb.DeviceError`。`BackendCrashError` とは別系統の型であり、その派生ではありません）で失敗したときは、この不具合をこのループの外まで伝播させて run 全体を中断させるのではなく、同じその場での respawn に切り替えます。ただし、不具合がタイムアウト（`device_errors.DeviceTimeout`）であるときは切り替えず、シナリオを失敗させて run をラッチします（BE-0374）。拒否したデバイスは 1 つの操作についての証拠を出していますが、まったく応答しなかったデバイスが示すのは、あらゆる操作の背後にあるサービスが応答をやめたことだけです。そこへ再試行するのは、タイムアウトが否定したことをそのまま前提に置く行為です。もう1つの run 単位の wall-clock 予算（`run_crash_recovery_budget`、こちらも既定は無制限）は、クラッシュ復旧に使う時間をシナリオ単位でリセットせず run 全体を通して上限を設けるもので、劣化し続けるデバイスは、各シナリオが自分の予算を静かに使い切って外部の CI タイムアウトがジョブを打ち切るのを待つ代わりに、run 自体をはっきりと失敗させます。最終的に成功する復旧にこの run 単位の予算を使い切っただけでは、何もラッチされません。それはデバイスがまだ機能していることを示しているにすぎないからです。あるシナリオ自身のクラッシュ再試行ループが、この予算を主因として実際に失敗した後は初めて、以降のどのシナリオも、自身の最初のリースを試す前の時点で即座に失敗します。この確認はクラッシュ再試行ループの中だけでなく、各シナリオの先頭でも行われます。これにより、すでに復旧できないと分かっているデバイスに対して、残る全シナリオが同じ打ち切りに至るまでにコールド起動の試行を1回ずつ余計に払わずに済みます。デバイスの準備がタイムアウトした場合も、同じ限定を要さずに同じラッチを立てます（BE-0374）。ラッチはどちらの原因で立ったかを保持します。そのため、飛ばされたシナリオは予算ではなく固まったホストを報告します。オンデバイスのドライバ適合性スイートはシナリオ単位の判定を共有しており（`common/runner/recovery`）、Simulator のインフラ障害が起きても、無関係な PR で必須チェックを赤くすることなく同じように復旧します（BE-0334）。Simulator の XCUITest 経路では、再試行は erase より強い段として**デバイスの置き換え**を持ちます（BE-0354）。消えたデバイスを置き換えるときと同じ手順で新しいデバイスを作り、劣化したデバイスはシャットダウンしてプールから外します。erase が消すのはデバイスのデータであって、固まった画面キャプチャの機構ではありません。そのため、強制 erase 付きの再試行がまたクラッシュした場合はこの段へ進みます。映像の録画が書き込みを始めたことを確認できないまま終わった試行も、この段へ直接進みます。その兆候は、erase の効かない劣化を言い当てているからです。置き換えの試行では強制 erase を外します。これから作成するデバイスには消すものがないからです。この段が働くのは、udid を固定しておらず `appPath` を持つ run にかぎるので、`--udid` で名指しした run はそのデバイス上の erase による再試行を保ちます。置き換えが消すものは erase より多いため、erase の段が尊重する `reinstall: overwrite` と `bajutsu run --no-erase` も同じように尊重します
 
 #### DSL のオーサリング、制御フロー、データ取得
 
@@ -371,7 +371,7 @@ iOS 側の対になるジョブ `pool (xcuitest)` は、Simulator を 2 台起�
 - config 解決（defaults × targets、redact マージ）と actuator 選択
 - `simctl` コマンド層、XCUITest のオートメーションスナップショットのパーサ、`doctor` スコア + バックエンド別の実行可能ゲート（`preflight.py`: iOS は必須 CLI + 起動済みシミュレータ、web は Playwright とその Chromium ブラウザ）
 - `trace` コマンド（`trace.py`）: 保存済み run のテキストタイムライン（steps + network + appTrace）
-- M4 自己修復トリアージ（`triage/heuristic.py` + `agents/claude_triage.py`）: 失敗 run のコンテキスト組み立て + `TriageAgent` 診断（ルールベース `HeuristicTriageAgent`、または `--ai` の Claude で失敗スクリーンショット込み）。エージェントは構造化 fix（`renameId` / `addIndex` / `raiseTimeout`）を提案でき、`--apply`/`--write` でシナリオ source に適用（diff プレビュー、opt-in）、`--rerun` で再実行検証
+- M4 自己修復トリアージ（`triage/heuristic` + `agents/claude_triage`）: 失敗 run のコンテキスト組み立て + `TriageAgent` 診断（ルールベース `HeuristicTriageAgent`、または `--ai` の Claude で失敗スクリーンショット込み）。エージェントは構造化 fix（`renameId` / `addIndex` / `raiseTimeout`）を提案でき、`--apply`/`--write` でシナリオ source に適用（diff プレビュー、opt-in）、`--rerun` で再実行検証
 
 #### CLI、`serve`、codegen
 
@@ -427,7 +427,7 @@ iOS 側の対になるジョブ `pool (xcuitest)` は、Simulator を 2 台起�
 | 機能 | 現状 | 場所 |
 |---|---|---|
 | `mockServer`（外部モックコマンド） | config スキーマのみ。`cmd`/`port` の外部サーバは**未実装**で、シナリオ `mocks`（宣言的なプロトコル内スタブ、実装済み）で代替する | `config/schema.py` `MockServer` |
-| **web** バックエンドでの `appTrace` 区間証跡 | `appTrace` は `os_log`/simctl 由来（iOS 専用）。Playwright バックエンドは代わりに `video` と `deviceLog` 相当（console / page-error）の区間証跡を実装する（BE-0054）が、`appTrace` に相当するものは持たない | `evidence/intervals.py` · `common/drivers/playwright.py` |
+| **web** バックエンドでの `appTrace` 区間証跡 | `appTrace` は `os_log`/simctl 由来（iOS 専用）。Playwright バックエンドは代わりに `video` と `deviceLog` 相当（console / page-error）の区間証跡を実装する（BE-0054）が、`appTrace` に相当するものは持たない | `evidence/intervals` · `common/drivers/playwright` |
 | **SwiftUI** と **Jetpack Compose** の画面での `nativeZ` | 報告経路は両方とも実装済みだが（BE-0355）、宣言的な UI ツールキットはどちらも自身でアクセシビリティ要素を生成し、位置の測定元となる実体を外に出さない。SwiftUI は支援技術がプロセスに接続したときに初めて要素を実体化するため、アプリ自身のビューツリーに識別子が現れない。Compose はアプリが宣言した追加データキーを自身のノード生成に通さない。opt-in したアプリの UIKit と Android の `View` による画面は値を報告し、SwiftUI と Compose の画面は `null` になる。診断専用のフィールドで、セレクタも重なり判定もこれを読まない | `BajutsuKit/Sources/BajutsuKit/BajutsuZOrder.swift`・`BajutsuAndroid/…/BajutsuZOrder.kt` |
 
 これらはいずれも各機能ページで該当箇所に注記しています。

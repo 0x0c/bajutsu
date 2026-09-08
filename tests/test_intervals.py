@@ -182,7 +182,7 @@ def test_confirming_starters_resolve_the_timeout_per_call(
     record(video_proc.awaited[0][1])
 
     monkeypatch.setattr(
-        intervals,
+        intervals._functions,
         "_await_screenrecord_started",
         lambda serial, run, baseline, timeout: record(timeout),
     )

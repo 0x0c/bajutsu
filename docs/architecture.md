@@ -79,19 +79,19 @@ The `bajutsu/` package (Python 3.13+, pydantic v2 / typer / anthropic / pyyaml /
 
 | Module | Role | Page |
 |---|---|---|
-| `common/drivers/base.py` | Driver Protocol + shared types (`Element`/`Selector`/`Point`) + **selector resolution** (the determinism core) | [selectors](selectors.md) / [drivers](drivers.md) |
-| `common/drivers/actuation.py` | `Actuation`/`ActuationLog` — the concrete-gesture record every driver appends to a step's outcome (coordinate, channel, whether the platform accepted it), backing the `actionLog` evidence kind (BE-0345) | [evidence](evidence.md#actionlog--what-each-step-actually-did-to-the-screen) |
+| `common/drivers/base` | Driver Protocol + shared types (`Element`/`Selector`/`Point`) + **selector resolution** (the determinism core) | [selectors](selectors.md) / [drivers](drivers.md) |
+| `common/drivers/actuation` | `Actuation`/`ActuationLog` — the concrete-gesture record every driver appends to a step's outcome (coordinate, channel, whether the platform accepted it), backing the `actionLog` evidence kind (BE-0345) | [evidence](evidence.md#actionlog--what-each-step-actually-did-to-the-screen) |
 | `common/drivers/coordinate_tree.py` | `CoordinateTreeDriver` — the shared transient-empty retry / stable-key settle / `_resolve` / `wait_for` base class the coordinate backend (adb) inherits (BE-0254) | [drivers](drivers.md#adb-android) |
-| `common/drivers/fake.py` | In-memory `FakeDriver` (for tests without a device) | [drivers](drivers.md#fakedriver) |
-| `common/drivers/xcuitest.py` | XCUITest backend (iOS; the sole iOS backend since BE-0290 retired idb — semantic tap, native condition-wait, text selection, and multi-touch via a resident on-device runner; BE-0019) | [drivers](drivers.md#xcuitest-ios) |
-| `common/drivers/adb.py` | adb backend (Android; `tap`/`long_press`/`double_tap` resolve and inject device-side via the resident server's `POST /act`, falling back to a `uiautomator dump` frame-center coordinate tap when that channel is unavailable, BE-0339) | [drivers](drivers.md#adb-android) |
-| `common/drivers/playwright.py` | Playwright web backend (browser; first slice — deterministic run) | [drivers](drivers.md#playwright-web) |
-| `common/drivers/xcuitest_live.py` | The live-route XCUITest driver: W3C WebDriver (Appium's XCUITest driver) against a reserved device-cloud iOS device, in place of the resident-runner channel, for the `appium` device provider (BE-0238) — session lifecycle, query/tap/screenshot/readiness, gestures, and text entry are wired; `selectAll`/`copy` fail loudly (no Appium XCUITest equivalent); verification against a real device-cloud grid is still open ([BE-0303](../roadmaps/BE-0303-xcuitest-live-real-grid-verification/BE-0303-xcuitest-live-real-grid-verification.md)) | — |
+| `common/drivers/fake` | In-memory `FakeDriver` (for tests without a device) | [drivers](drivers.md#fakedriver) |
+| `common/drivers/xcuitest` | XCUITest backend (iOS; the sole iOS backend since BE-0290 retired idb — semantic tap, native condition-wait, text selection, and multi-touch via a resident on-device runner; BE-0019) | [drivers](drivers.md#xcuitest-ios) |
+| `common/drivers/adb` | adb backend (Android; `tap`/`long_press`/`double_tap` resolve and inject device-side via the resident server's `POST /act`, falling back to a `uiautomator dump` frame-center coordinate tap when that channel is unavailable, BE-0339) | [drivers](drivers.md#adb-android) |
+| `common/drivers/playwright` | Playwright web backend (browser; first slice — deterministic run) | [drivers](drivers.md#playwright-web) |
+| `common/drivers/xcuitest_live` | The live-route XCUITest driver: W3C WebDriver (Appium's XCUITest driver) against a reserved device-cloud iOS device, in place of the resident-runner channel, for the `appium` device provider (BE-0238) — session lifecycle, query/tap/screenshot/readiness, gestures, and text entry are wired; `selectAll`/`copy` fail loudly (no Appium XCUITest equivalent); verification against a real device-cloud grid is still open ([BE-0303](../roadmaps/BE-0303-xcuitest-live-real-grid-verification/BE-0303-xcuitest-live-real-grid-verification.md)) | — |
 | `common/drivers/elements.py` | Platform-neutral predicates/geometry over a normalized element tree (`screen_size_from_elements`, `shows_app_ui`), shared by assertions, the crawl, the runner pipeline, and record | [drivers](drivers.md) |
 | `common/drivers/dom.py` | DOM → `Element` normalization shared by the Playwright backend and the WebView bridge | [drivers](drivers.md#playwright-web) |
 | `common/drivers/web_network.py` | Web network observation: the Playwright-side `Collector` (hooks `requestfinished` into the same `NetworkExchange` model the iOS path uses) + in-process mock stubbing via `page.route` | [drivers](drivers.md#playwright-web) |
-| `common/drivers/webview.py` | WebView bridge client — the Python side of the BajutsuKit WebView channel (DOM query + tap dispatch over HTTP) | [drivers](drivers.md) |
-| `common/drivers/zorder.py` | Z-order responder client — the Python side of the BajutsuKit `nativeZ` channel (BE-0355) | [drivers](drivers.md) |
+| `common/drivers/webview` | WebView bridge client — the Python side of the BajutsuKit WebView channel (DOM query + tap dispatch over HTTP) | [drivers](drivers.md) |
+| `common/drivers/zorder` | Z-order responder client — the Python side of the BajutsuKit `nativeZ` channel (BE-0355) | [drivers](drivers.md) |
 | `common/scenario/` | Scenario schema (strict pydantic validation) + YAML load / dump (package: `models` / `load` / `load_expanded` / `expand` / `select` / `serialize` / `edit`) | [scenarios](scenarios.md) |
 | `common/assertions/` | Machine assertion evaluation (total function — never raises) (package: `evaluate` / `network` / `visual` / `schema` / `_common`, BE-0250) | [selectors](selectors.md#assertion-evaluation) |
 | `common/orchestrator/` | The deterministic Tier 2 run loop (act → wait → verify) (package: `loop` / `waits` / `substitution` / `evidence_rules` / `actions` / `control_channel`) | [run-loop](run-loop.md) |
@@ -102,18 +102,18 @@ The `bajutsu/` package (Python 3.13+, pydantic v2 / typer / anthropic / pyyaml /
 | `common/mailbox.py` | Pure, network-free matching/extraction logic for the `email` step (BE-0046): normalize a mailbox provider's messages, match on `to`/`subject`/`subjectMatches`, select only a message that arrived after the step started, and extract a value by regex into `${vars.*}` | [scenarios](scenarios.md) |
 | `common/totp.py` | RFC 6238 time-based one-time password (TOTP) for the `totp` step (BE-0046): a pure, deterministic function of the shared secret and the time, so a code is derivable with no network and no device | [scenarios](scenarios.md) |
 | `common/config/` | Team defaults × per-target resolution (`Effective`) (package: `schema` / `effective` / `resolve` / `accessors`) | [configuration](configuration.md) |
-| `common/config_source.py` | Acquire a config (and its scenario tree) from a Git source at an immutable commit SHA into a content-addressed cache (BE-0063) — where a config comes from, distinct from `common/config/`'s schema and resolution | [configuration](configuration.md) |
+| `common/config_source/` | Acquire a config (and its scenario tree) from a Git source at an immutable commit SHA into a content-addressed cache (BE-0063) — where a config comes from, distinct from `common/config/`'s schema and resolution | [configuration](configuration.md) |
 | `common/backends.py` | Backend availability check · actuator selection (platform-aware registry: `ios` / `android` / `web` / `fake`) · driver construction | [drivers](drivers.md#backend-selection-and-the-actuator) |
 | `common/devices/` | Device-identity helpers shared across backends (package): `os.py` (the parsed device OS — platform/major/minor — read from the `device_runtime` label, BE-0358), `id.py` (the device-id validator every backend's `--udid`/config path shares, guarding against argv option injection), `errors.py` (the platform-neutral `DeviceError` base `simctl`/`adb` subclass, BE-0260, plus the `DeviceTimeout` beneath it that every backend raises when a device operation exceeded its deadline rather than failing, BE-0374) | [drivers](drivers.md) |
 | `common/backend_cli/` | Backend command-line wrappers (package): `simctl.py` (`simctl` wrapper — erase/boot/launch/openurl/io), `adb.py` (the adb command-builder half of the Android backend — clean-state/launch/deeplink/input/screencap, the twin of `simctl`), `adb_resident.py` (the resident UI Automator server channel's Python side, BE-0245) | [drivers](drivers.md#environment-management-simctl) |
 | `common/platform_lifecycle/` | The `Environment` seam (BE-0009): one `RunEnvironment`/`CrawlEnvironment` Protocol per platform for per-run app bring-up, readiness, relaunch, device control, and teardown, so `common/runner/` and `crawl/cli.py` drive iOS/Android/web through one interface instead of branching on the actuator name (package: `protocols` / `factories` / `readiness` / `relaunchers` / `device_control` / `read_session`, plus `environments/` — `ios` / `xcuitest` / `xcuitest_live` / `android` / `web` / `fake`) | — |
 | `common/capability/preflight.py` · `common/capability/capability_preflight.py` · `common/capability/capabilities.py` | Runnability gate, per backend (iOS: required CLIs + a booted Simulator; web: Playwright + its Chromium browser), plus a scenario step's declared-capability preflight and the capability set each backend actually supports | [configuration](configuration.md) |
-| `common/provisioning/requirements.py` | One declarative mapping: backend/capability → pip extra + external-tool probe + install method (BE-0164), shared by `preflight` and `provision` | — |
-| `common/provisioning/provision.py` | Config-aware environment installer (BE-0164): resolve a config's backends + AI provider, install only their extras/tools idempotently (`make install`, `python -m bajutsu.common.provisioning.provision`) | — |
+| `common/provisioning/requirements` | One declarative mapping: backend/capability → pip extra + external-tool probe + install method (BE-0164), shared by `preflight` and `provision` | — |
+| `common/provisioning/provision` | Config-aware environment installer (BE-0164): resolve a config's backends + AI provider, install only their extras/tools idempotently (`make install`, `python -m bajutsu.common.provisioning.provision`) | — |
 | `common/runner/` | config + scenarios → report; device pool + launch sequence; `device_provider` seam resolves where the run's devices come from — the built-in `local` pass-through, plus an `appium` provider driving a reserved iOS device end to end behind a live Appium/WebDriver endpoint (BE-0238); a further cloud-vendor kind (e.g. Firebase Device Streaming) stays a future addition; `recovery` holds the backend-crash retry-count/wall-clock-budget decision shared with the on-device driver conformance suite (BE-0334), plus the two predicates that classify a failure for it — `recovers_by_respawn` decides a retry, `is_host_fault` diagnoses a failure the host caused, and a wedged device answers the two differently (BE-0378) — the latter naming the platform-neutral `DeviceTimeout` so every backend that adopts it is covered (BE-0374); `recovery` also holds the run-level latch that stops later scenarios, carrying *why* recovery was abandoned (a spent budget or a wedged host), and the guarded-teardown policy that the pool's teardown sites, `launch_driver`, and the on-device suites' lease discard all share (BE-0342); `mailbox` resolves the `email` step's transport by a registry keyed on `kind` (the shipped `http` JSON adapter; BE-0186), mirroring `common/ai/registry.py`'s shape (package: `pipeline` / `pool` / `launch` / `device_provider` / `recovery` / `mailbox`) | [run-loop](run-loop.md#runner-the-run-pipeline) |
 | `common/run_meta/` | Run-metadata helpers shared across features (package): `files.py` (the runs-root name + path-free reads of a run directory — listing, manifests), `id.py` (run id generation/parsing), `root.py` (the run directory's write provider, BE-0331 — see the import contract below), `artifact_perms.py` (owner-only `0700`/`0600` permissions for a run's artifacts, BE-0131), `object_store.py` (a backend-agnostic `ObjectStore` — local/S3/GCS — for evidence upload and server storage, BE-0110/BE-0204) | [configuration](configuration.md) |
-| `run/notify.py` | Run-completion notifications (e.g. Slack), sent after `bajutsu run` finishes | — |
-| `common/doctor.py` | Convention score (id coverage, etc.) | [configuration](configuration.md#doctor-the-convention-score) |
+| `run/notify` | Run-completion notifications (e.g. Slack), sent after `bajutsu run` finishes | — |
+| `common/doctor/` | Convention score (id coverage, etc.) | [configuration](configuration.md#doctor-the-convention-score) |
 | `common/agents/` | AI / authoring-agent periphery (BE-0257), moved under `common/` (reorg successor to BE-0257): `protocols` + `factory` (the `Observation`/`Proposal`/`Agent` abstraction + construction of the one SDK-backed agent), `claude` (the authoring agent), `claude_backed` (shared base, BE-0246), `claude_enrich`, `claude_triage`, `ai_config` (provider/model/effort/language resolution), `anthropic_client` (SDK client construction), `availability` (credential-gap messaging), `enrich` (the enrichment loop), `alerts` (system-alert guard) | [recording](recording.md) |
 | `common/ai/` | Vendor-neutral AI backend seam (BE-0104), moved under `common/` (reorg successor to BE-0257): `AiBackend` protocol + normalized request/response types (`base`), provider registry (`registry`) covering the Anthropic API and Amazon Bedrock via the reference adapter over `common.agents.anthropic_client` (`anthropic`), the Anthropic CLI `ant` (also via the `anthropic` adapter, BE-0163), the Claude Code CLI (`claude_code`, BE-0176), and the `none` switch whose factory raises so no AI path can construct a backend (`disabled`, BE-0394) | [configuration](configuration.md#ai-provider-ai-be-0047) |
 | `run/` | `bajutsu run`'s CLI command (`cli.py`): target/backend resolution, device leasing, plan construction, and the deterministic run/report dispatch | [cli](cli.md) |
@@ -130,7 +130,7 @@ The `bajutsu/` package (Python 3.13+, pydantic v2 / typer / anthropic / pyyaml /
 | `analysis/` | Read-only advisory analysis (BE-0257), no device/AI, never gates CI: `audit` (determinism/flakiness audit, BE-0049), `coverage` (scenario id-namespace coverage, BE-0050), `impact` (test impact analysis — affected steps from a diff, BE-0321), `stats` (the aggregate run-stats dashboard, BE-0102), cross-run flakiness ranking (`flakiness`, BE-0220), and the `trace` timeline (`trace.py`, the `bajutsu trace` command's core) — each with its own Typer command in `cli/` (one file per command, feature-colocated) | [cli](cli.md) |
 | `cli/` | Typer app assembly: mounts each feature's own CLI (`run`/`crawl`/`record`/`triage`/`mcp`/`codegen`/`serve`/`analysis`) plus the feature-less `commands/` (`doctor`/`lint`/`schema`/`report`) and the `.env` loader (`dotenv.py`) | [cli](cli.md) |
 | `common/screenshots.py` | Screenshot capture + pixel-coordinate helpers shared across the AI paths (`screenshot_bytes`, `png_size`, `fraction`, BE-0246) | [recording](recording.md) |
-| `common/handoff.py` | The human-in-the-loop handoff contract (Tier 1, BE-0179): the transport-neutral request/response `record` (terminal stdin) and `serve` (SSE) implement the same way | [recording](recording.md) |
+| `common/handoff/` | The human-in-the-loop handoff contract (Tier 1, BE-0179): the transport-neutral request/response `record` (terminal stdin) and `serve` (SSE) implement the same way | [recording](recording.md) |
 | `common/deprecations.py` | One-time deprecation notices (`warn_once`) and hard rejections for removed authoring/CLI spellings (`reject_renamed_key`) | — |
 | `common/diagnostics.py` | Process-wide logging configuration: what a run says about itself while it happens, and how loud | — |
 | `common/stall_diagnostics.py` | Bounded, best-effort state capture at the moment a backend stalls (BE-0361/BE-0367) | — |
@@ -138,7 +138,7 @@ The `bajutsu/` package (Python 3.13+, pydantic v2 / typer / anthropic / pyyaml /
 
 ## Dependencies (layers)
 
-Lower layers are more stable; upper layers depend on lower ones. The core is `common/drivers/base.py`
+Lower layers are more stable; upper layers depend on lower ones. The core is `common/drivers/base`
 (selector resolution), which every execution path depends on.
 
 ![Dependency-layer diagram: cli/ is the user entry point, from which runner/, record.py/crawl/, codegen/, trace.py, and triage.py descend directly (codegen/ and trace.py have no further dependencies drawn). runner/ depends on orchestrator/; record.py/crawl/ depends on the AI agent helpers; triage.py depends on the serve/CI helpers. orchestrator/ and the agent helpers depend on assertions/ and evidence/, and orchestrator/ additionally depends on config.py, backends.py, and simctl.py. assertions/ depends on scenario/ and evidence/ depends on report/; scenario/, report/, config.py, backends.py, and simctl.py all converge on drivers/base.py, the determinism core, from which drivers/fake, the iOS and Android drivers (xcuitest, adb), and the Playwright driver all derive.](assets/diagrams/architecture-dependency-layers.svg)
@@ -155,7 +155,7 @@ flowchart TB
     record["record.py / crawl/<br/>(Tier 1 / AI)"]
     codegen["codegen/<br/>(structural)"]
     trace["trace.py<br/>(timeline)"]
-    triage["triage.py / agents/claude_triage.py<br/>(self-heal · advisory)"]
+    triage["triage.py / agents/claude_triage<br/>(self-heal · advisory)"]
 
     orch["orchestrator/"]
     agentStuff["agents/<br/>(protocols · factory · claude · alerts · …)"]
@@ -170,7 +170,7 @@ flowchart TB
     backends["backends.py"]
     simctl["simctl.py"]
 
-    base["drivers/base.py<br/>the determinism core (Element / Selector / resolve_unique)"]
+    base["drivers/base<br/>the determinism core (Element / Selector / resolve_unique)"]
 
     fake["drivers/fake"]
     ios["drivers/xcuitest · adb"]
@@ -214,7 +214,7 @@ flowchart TB
   loop drives XCUITest (iOS) or playwright (web).
 - `common/runner/` provides the factory that launches the app and returns a ready driver,
   decoupling the loop from a real device.
-- `scenario/` (the pydantic authoring model) and `common/drivers/base.py` (the runtime TypedDict)
+- `scenario/` (the pydantic authoring model) and `common/drivers/base` (the runtime TypedDict)
   are different things. `Selector.as_selector()` converts the former to the latter.
 
 ### Enforced layer boundaries (BE-0112)
@@ -226,15 +226,15 @@ notices. The configuration lives in `[tool.importlinter]` in `pyproject.toml`. T
 declared:
 
 1. **Deterministic core** — the path that derives a verdict and evidence with no model and no
-   periphery stack: `common/orchestrator/`, `common/runner/`, `common/drivers/base.py`, `assertions/`, `evidence/`,
+   periphery stack: `common/orchestrator/`, `common/runner/`, `common/drivers/base`, `assertions/`, `evidence/`,
    `report/`, `config/`, `scenario/`, `preflight.py` / `capability_preflight.py` /
-   `capabilities.py`, `common/doctor.py`, `common/lint.py`. It carries the prime directives.
+   `capabilities.py`, `common/doctor/`, `common/lint.py`. It carries the prime directives.
 2. **Contract** — the stable surfaces a consumer depends on: the scenario schema (`scenario/`) and
-   the `Driver` Protocol (`common/drivers/base.py`).
+   the `Driver` Protocol (`common/drivers/base`).
 3. **Periphery** — the consumers of the contract, each removable behind an optional extra:
    `serve/`, `mcp/`, the codegen emitters, the AI / agent paths (`agents/` — `protocols`, `ai_config`,
-   `anthropic_client`, `enrich`, `alerts`, … — plus `record/`, `triage/`, `crawl/guide.py`, …),
-   and the `github/actions.py` / `run/notify.py` helpers (the rest of `github/` — `app` / `errors` — is
+   `anthropic_client`, `enrich`, `alerts`, … — plus `record/`, `triage/`, `crawl/guide`, …),
+   and the `github/actions.py` / `run/notify` helpers (the rest of `github/` — `app` / `errors` — is
    core-safe, so `config_source` reaches it without pulling the periphery in).
 
 Three contracts are enforced:
@@ -253,7 +253,7 @@ Three contracts are enforced:
   in the hosted topology (which reads an org-bearing config) keeps working while the core never
   models orgs. The same mechanism also drops a top-level `ui:` key (BE-0191) — the serve UI's
   presentation settings (`ui.default_theme`) are a serve concern and are parsed in
-  `bajutsu/serve/themes.py`, not modeled in `Config`. A forbidden import-linter contract keeps `config/`, `common/drivers/`, `common/runner/`, and
+  `bajutsu/serve/themes/`, not modeled in `Config`. A forbidden import-linter contract keeps `config/`, `common/drivers/`, `common/runner/`, and
   `scenario/` off those extras (`include_external_packages` lets it see the external import), on top
   of the periphery contract that already keeps them off `bajutsu.serve`.
 - **The scenario schema and `Driver` Protocol stay a portable inner contract** — independent of the
@@ -445,7 +445,7 @@ Android; on iOS it rests on the fast suite's bookkeeping proof alone.
   sole iOS actuator since BE-0290 retired idb (`--backend ios` and `--backend xcuitest` are
   equivalent). A platform with more than one actuator would resolve **per scenario** in cost order
   (BE-0240); with iOS now single-actuator, no platform's cost order differs from its stability order
-- The **XCUITest backend** (`common/drivers/xcuitest.py`): the sole iOS actuator (BE-0290) — a resident
+- The **XCUITest backend** (`common/drivers/xcuitest`): the sole iOS actuator (BE-0290) — a resident
   on-device runner (`BajutsuKit`) driven over a loopback HTTP channel, providing semantic
   (identifier) tap, a native condition-wait, text selection, and the `pinch`/`rotate` multi-touch
   gestures, and reading the XCTest automation snapshot (which descends into group containers, so it
@@ -464,14 +464,14 @@ Android; on iOS it rests on the fast suite's bookkeeping proof alone.
   `XCUIElement`'s own call, which the browser's chrome silently drops, and the dismiss control's
   identifier is normalized to `Close` on the iOS versions that leave it unidentified — so a scenario
   drives the in-app browser through `/elements` like any other screen, with no protocol change
-- The **Playwright web backend** (`common/drivers/playwright.py`): a deterministic `run` against a browser
+- The **Playwright web backend** (`common/drivers/playwright`): a deterministic `run` against a browser
   on the Linux gate (`demos/web`), raised to the rich end of the capability model (BE-0054) — native
   `network` observation + stubbing (`page.route()`), `video` and `deviceLog`-equivalent console /
   page-error interval evidence through the shared `driver_interval` seam, emulated `multiTouch`
   (pinch / rotate), parallel runs across N `BrowserContext` lanes, and a target-level `deviceMode`
   (desktop default, or a Playwright device preset for mobile emulation; BE-0228); `appTrace` stays
   iOS-only (`os_log`/simctl-based)
-- The **Android adb backend** (`common/drivers/adb.py` + `common/backend_cli/adb.py`): `tap`/`long_press`/`double_tap` send
+- The **Android adb backend** (`common/drivers/adb` + `common/backend_cli/adb`): `tap`/`long_press`/`double_tap` send
   the resolved element's identity to the resident server's `POST /act`, which re-resolves and
   injects device-side so the gesture lands on the bounds the device holds at inject time, falling
   back to a host-computed frame-center coordinate tap once retries exhaust or the channel has no
@@ -553,7 +553,7 @@ Android; on iOS it rests on the fast suite's bookkeeping proof alone.
   cold-spawn attempt apiece on the way to the same cancellation. A device preparation that timed out
   sets the same latch with no such qualification (BE-0374), and the latch carries whichever cause set
   it, so a skipped scenario reports the wedge rather than a budget the run may never have had.
-  The on-device driver conformance suite shares the per-scenario decision (`common/runner/recovery.py`)
+  The on-device driver conformance suite shares the per-scenario decision (`common/runner/recovery`)
   so a Simulator infrastructure fault there recovers the same way, rather than reddening the
   required check on an unrelated PR (BE-0334). On
   the Simulator XCUITest route the retry has one rung above the erase (BE-0354): a **replacement
@@ -820,7 +820,7 @@ Android; on iOS it rests on the fast suite's bookkeeping proof alone.
   gate (`preflight.py`: iOS needs the required CLIs + a booted Simulator; web needs Playwright + its
   Chromium browser)
 - The `trace` command (`trace.py`): a text timeline over a saved run (steps + network + appTrace)
-- M4 self-healing triage (`triage/heuristic.py` + `agents/claude_triage.py`): assemble a failed run's context +
+- M4 self-healing triage (`triage/heuristic` + `agents/claude_triage`): assemble a failed run's context +
   a `TriageAgent` diagnosis (rule-based `HeuristicTriageAgent`, or `--ai` Claude with the failure
   screenshot). An agent can propose a structured fix (`renameId` / `addIndex` / `raiseTimeout`);
   `--apply`/`--write` patches the scenario source (diff-previewed, opt-in) and `--rerun` re-runs it
@@ -941,7 +941,7 @@ Android; on iOS it rests on the fast suite's bookkeeping proof alone.
 | Feature | Status | Location |
 |---|---|---|
 | `mockServer` (external mock command) | config schema only; the `cmd`/`port` external server is **not implemented** — superseded by scenario `mocks` (declarative in-protocol stubs, implemented) | `config/schema.py` `MockServer` |
-| `appTrace` interval evidence on the **web** backend | `appTrace` is `os_log`/simctl-based (iOS only); the Playwright backend implements the `video` and `deviceLog`-equivalent (console / page-error) interval kinds instead (BE-0054), but has no `appTrace` analogue | `common/evidence/intervals.py` · `common/drivers/playwright.py` |
+| `appTrace` interval evidence on the **web** backend | `appTrace` is `os_log`/simctl-based (iOS only); the Playwright backend implements the `video` and `deviceLog`-equivalent (console / page-error) interval kinds instead (BE-0054), but has no `appTrace` analogue | `common/evidence/intervals` · `common/drivers/playwright` |
 | `nativeZ` on a **SwiftUI** or **Jetpack Compose** screen | Both reporting paths are shipped (BE-0355), but each declarative toolkit generates its own accessibility elements and exposes no underlying one to measure: SwiftUI materializes its elements only for an assistive technology attached to the process, so the app's own view tree carries no identifiers, and Compose forwards no app-declared extra-data key through its node generation. UIKit and Android `View` screens in an opted-in app report a position; SwiftUI and Compose screens read `None`. Diagnostic only — no selector or occlusion check reads it | `BajutsuKit/Sources/BajutsuKit/BajutsuZOrder.swift` · `BajutsuAndroid/…/BajutsuZOrder.kt` |
 
 Every feature above is also flagged inline on its relevant feature page.

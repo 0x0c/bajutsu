@@ -341,4 +341,6 @@ def test_redaction_happens_before_the_adapter(fake_provider: RecordingBackend) -
 def test_module_reexports_the_neutral_types() -> None:
     # The package surface is Bajutsu's own types, not a vendor SDK re-export.
     assert base.MessageRequest is MessageRequest
-    assert base.AiBackend.__module__ == "bajutsu.common.ai.base"
+    # `startswith`, not equality: BE-0411 moved each type into its own module inside the package,
+    # so what this pins is still that the type is Bajutsu's own and not a vendor SDK's.
+    assert base.AiBackend.__module__.startswith("bajutsu.common.ai.base")

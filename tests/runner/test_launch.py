@@ -45,7 +45,8 @@ def _xcuitest_eff(tmp_path: Path, **ios_kwargs: object) -> Effective:
 def _mock_runner_spawn(monkeypatch: pytest.MonkeyPatch) -> None:
     """Stub the `xcodebuild` runner spawn and its driver so a launch exercises only the simctl prep."""
     monkeypatch.setattr(
-        "bajutsu.common.platform_lifecycle.environments.xcuitest._allocate_port", lambda: 54321
+        "bajutsu.common.platform_lifecycle.environments.xcuitest.xcuitest_environment._allocate_port",
+        lambda: 54321,
     )
 
     class _FakePopen:
@@ -259,8 +260,8 @@ def test_await_ready_uses_exponential_backoff(monkeypatch: pytest.MonkeyPatch) -
         sleeps.append(s)
         clock += s
 
-    monkeypatch.setattr("bajutsu.common.drivers.base.time.sleep", fake_sleep)
-    monkeypatch.setattr("bajutsu.common.drivers.base.time.monotonic", lambda: clock)
+    monkeypatch.setattr("bajutsu.common.drivers.base._functions.time.sleep", fake_sleep)
+    monkeypatch.setattr("bajutsu.common.drivers.base._functions.time.monotonic", lambda: clock)
 
     query_count = 0
 
@@ -307,8 +308,8 @@ def test_await_ready_respects_timeout_on_sleep(monkeypatch: pytest.MonkeyPatch) 
         sleeps.append(s)
         clock += s
 
-    monkeypatch.setattr("bajutsu.common.drivers.base.time.sleep", fake_sleep)
-    monkeypatch.setattr("bajutsu.common.drivers.base.time.monotonic", lambda: clock)
+    monkeypatch.setattr("bajutsu.common.drivers.base._functions.time.sleep", fake_sleep)
+    monkeypatch.setattr("bajutsu.common.drivers.base._functions.time.monotonic", lambda: clock)
 
     class NeverReadyDriver:
         name = "never"
@@ -332,8 +333,8 @@ def test_await_ready_caps_poll_init_to_poll_max(monkeypatch: pytest.MonkeyPatch)
         sleeps.append(s)
         clock += s
 
-    monkeypatch.setattr("bajutsu.common.drivers.base.time.sleep", fake_sleep)
-    monkeypatch.setattr("bajutsu.common.drivers.base.time.monotonic", lambda: clock)
+    monkeypatch.setattr("bajutsu.common.drivers.base._functions.time.sleep", fake_sleep)
+    monkeypatch.setattr("bajutsu.common.drivers.base._functions.time.monotonic", lambda: clock)
 
     query_count = 0
 
@@ -376,8 +377,8 @@ def _install_bounded_clock(monkeypatch: pytest.MonkeyPatch) -> None:
         nonlocal clock
         clock += s
 
-    monkeypatch.setattr("bajutsu.common.drivers.base.time.sleep", fake_sleep)
-    monkeypatch.setattr("bajutsu.common.drivers.base.time.monotonic", lambda: clock)
+    monkeypatch.setattr("bajutsu.common.drivers.base._functions.time.sleep", fake_sleep)
+    monkeypatch.setattr("bajutsu.common.drivers.base._functions.time.monotonic", lambda: clock)
 
 
 def test_await_ready_waits_for_ready_selector(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -19,6 +19,10 @@ from typing import Any
 import pytest
 
 import bajutsu.common.drivers.adb as adb_driver_mod
+
+# `AdbDriver`'s clock reads live in its own module since BE-0411 split the package, so patching the
+# package's re-export would rebind a name the driver never resolves.
+import bajutsu.common.drivers.adb.adb_driver as adb_driver_impl
 from bajutsu.common import stall_diagnostics
 from bajutsu.common.backend_cli import adb
 from bajutsu.common.drivers import base
@@ -1414,7 +1418,7 @@ def test_settle_keeps_polling_past_the_old_count_until_frames_stop(
     # old 3-poll cap, then rests, must settle on the RESTING frame — the old count-bound would have
     # returned a still-moving frame (the 4th read) and tapped a stale coordinate.
     clock = _Clock()
-    monkeypatch.setattr(adb_driver_mod, "time", clock)
+    monkeypatch.setattr(adb_driver_impl, "time", clock)
     # cache baseline, then move for 5 reads (past the old cap of 3) before two equal resting reads.
     run, _ = _scripted([FIXTURE, _moved(110), _moved(130), _moved(150), _moved(165), _moved(170), _moved(170)])  # fmt: skip
     driver = AdbDriver("U", run=run)  # type: ignore[arg-type]
@@ -1433,7 +1437,7 @@ def test_settle_gives_up_at_the_wall_clock_deadline_when_never_stable(
     # A screen that never stops moving must not spin forever: the poll is bounded by a wall-clock
     # deadline (independent of read cost), after which _settle returns the latest tree.
     clock = _Clock()
-    monkeypatch.setattr(adb_driver_mod, "time", clock)
+    monkeypatch.setattr(adb_driver_impl, "time", clock)
     reads = [0]
 
     def run(args: list[str]) -> str:
@@ -1496,7 +1500,7 @@ def test_settled_key_resets_when_the_poll_never_converges(
     # without ever seeing two consecutive reads agree, so a later bare match against wherever it landed
     # is exactly the coincidence the fix above guards against.
     clock = _Clock()
-    monkeypatch.setattr(adb_driver_mod, "time", clock)
+    monkeypatch.setattr(adb_driver_impl, "time", clock)
     reads = [0]
 
     def run(args: list[str]) -> str:
@@ -1521,7 +1525,7 @@ def test_catchup_dwell_close_sets_the_settled_key(
     # keeps `test_reads_the_runner_already_takes_close_the_barrier_for_free` free of extra polling)
     # (BE-0351).
     clock = _Clock()
-    monkeypatch.setattr(adb_driver_mod, "time", clock)
+    monkeypatch.setattr(adb_driver_impl, "time", clock)
     run, _ = _capturing_run([FIXTURE, _scrolled(_SCROLLED_BY)])
     driver = AdbDriver("U", run=run)
     driver.query()
@@ -1541,7 +1545,7 @@ def test_catchup_mark_postdate_close_does_not_set_the_settled_key(
     # that postdates the actuation mark. Crediting it as "proven" here would resurrect the `gestures`
     # flake on the resident channel specifically, which is the path the real regression ran on.
     clock = _Clock()
-    monkeypatch.setattr(adb_driver_mod, "time", clock)
+    monkeypatch.setattr(adb_driver_impl, "time", clock)
     driver, _ = _resident_driver(
         reads=[(FIXTURE, 1000.0), (FIXTURE, 1000.0), (FIXTURE, 1001.0)],
         clocks=[1000.0],
@@ -1626,7 +1630,7 @@ def test_long_press_waits_for_the_tree_to_catch_up_with_the_pan(
     # must be aimed at the published centre. The stale reads agree with each other, so the
     # two-consecutive-equal-reads settle alone accepts them — this is what the catch-up wait adds.
     clock = _Clock()
-    monkeypatch.setattr(adb_driver_mod, "time", clock)
+    monkeypatch.setattr(adb_driver_impl, "time", clock)
     run, calls = _capturing_run([FIXTURE, FIXTURE, FIXTURE, _scrolled(_SCROLLED_BY)])
     driver = AdbDriver("U", run=run)
     driver.query()  # the tree the pan was aimed at
@@ -1645,7 +1649,7 @@ def test_settle_rides_out_the_torn_read_the_catch_up_passes_through(
     # consecutive reads, so a two-equal-reads check inside the tear would agree with itself and return
     # `stable.submit` at its pre-pan y — only the dwell rides this out.
     clock = _Clock()
-    monkeypatch.setattr(adb_driver_mod, "time", clock)
+    monkeypatch.setattr(adb_driver_impl, "time", clock)
     torn_reads = [_TORN] * 4
     run, _ = _capturing_run([FIXTURE, FIXTURE, *torn_reads, _scrolled(_SCROLLED_BY)])
     driver = AdbDriver("U", run=run)
@@ -1666,7 +1670,7 @@ def test_settled_query_is_the_settle_a_directional_swipe_anchors_on(
     # barrier did not cover. `settled_query` is the seam that closes it, so it must wait the barrier
     # out exactly as `_settle` does rather than return the stale tree.
     clock = _Clock()
-    monkeypatch.setattr(adb_driver_mod, "time", clock)
+    monkeypatch.setattr(adb_driver_impl, "time", clock)
     run, _ = _capturing_run([FIXTURE, FIXTURE, FIXTURE, _scrolled(_SCROLLED_BY)])
     driver = AdbDriver("U", run=run)
     assert isinstance(driver, base.SettledReadProvider)
@@ -1683,7 +1687,7 @@ def test_reads_the_runner_already_takes_close_the_barrier_for_free(
     # post-step capture) are spread over real time, so they satisfy the dwell themselves and the next
     # `_settle` has nothing pending: no extra reads, no wall-clock burned inside the actuator.
     clock = _Clock()
-    monkeypatch.setattr(adb_driver_mod, "time", clock)
+    monkeypatch.setattr(adb_driver_impl, "time", clock)
     run, _ = _capturing_run([FIXTURE, _scrolled(_SCROLLED_BY)])
     driver = AdbDriver("U", run=run)
     driver.query()
@@ -1705,7 +1709,7 @@ def test_an_external_torn_read_does_not_close_the_barrier(
     # ride the tear out, and `_settle`'s two-equal-reads poll would accept it — the same failure this
     # fix exists to stop, reached by another door. So a torn read must leave the barrier open.
     clock = _Clock()
-    monkeypatch.setattr(adb_driver_mod, "time", clock)
+    monkeypatch.setattr(adb_driver_impl, "time", clock)
     run, calls = _capturing_run([FIXTURE, _TORN, _TORN, _scrolled(_SCROLLED_BY)])
     driver = AdbDriver("U", run=run)
     driver.query()
@@ -1724,7 +1728,7 @@ def test_a_degenerate_read_does_not_close_the_barrier(
     # itself still retrying and the actuator resolves against pre-pan frames. Two such reads spaced
     # past the dwell are what the dwell alone cannot reject — hence the explicit degenerate skip.
     clock = _Clock()
-    monkeypatch.setattr(adb_driver_mod, "time", clock)
+    monkeypatch.setattr(adb_driver_impl, "time", clock)
     empties = [NULL_ROOT] * 14  # enough to outlive the transient-empty retries on both reads
     run, calls = _capturing_run([FIXTURE, *empties, *([FIXTURE] * 12), _scrolled(_SCROLLED_BY)])
     driver = AdbDriver("U", run=run)
@@ -1778,7 +1782,7 @@ def test_a_marked_read_closes_the_catch_up_the_instant_it_postdates_the_actuatio
     # update was published: mark 1000 → 1000 is still stale, and 1001 postdates the actuation and is
     # caught up at once, with no dwell.
     clock = _Clock()
-    monkeypatch.setattr(adb_driver_mod, "time", clock)
+    monkeypatch.setattr(adb_driver_impl, "time", clock)
     driver, _ = _resident_driver(
         reads=[(FIXTURE, 1000.0), (FIXTURE, 1000.0), (FIXTURE, 1001.0)],
         clocks=[1000.0],
@@ -1800,7 +1804,7 @@ def test_a_marked_read_that_never_postdates_falls_through_at_the_budget(
     # (Unit 3). But if the device never publishes — every read keeps the stale mark — the ceiling still
     # bounds the wait and gives up loudly, exactly as the dump path does when a pan moved no frame.
     clock = _Clock()
-    monkeypatch.setattr(adb_driver_mod, "time", clock)
+    monkeypatch.setattr(adb_driver_impl, "time", clock)
     driver, _ = _resident_driver(reads=[(FIXTURE, 1000.0)], clocks=[1000.0])
     driver._READ_LAG_S = 0.5
     driver.query()
@@ -1818,7 +1822,7 @@ def test_the_actuation_mark_is_taken_before_the_gesture_fires(
     # The mark must anchor a "before the gesture" instant: taken after the actuation, a read the gesture
     # itself triggered could postdate it and release the barrier on a still-pre-gesture tree.
     clock = _Clock()
-    monkeypatch.setattr(adb_driver_mod, "time", clock)
+    monkeypatch.setattr(adb_driver_impl, "time", clock)
     driver, events = _resident_driver(reads=[(FIXTURE, 1000.0)], clocks=[1000.0])
     driver.query()
     driver.swipe((10, 300), (10, 100))
@@ -1832,7 +1836,7 @@ def test_read_postdates_actuation_confirms_only_a_genuine_postdate(
     # the gesture's device mark, then true, and reset false by the next actuation. It is a confirmation,
     # not "is the barrier quiet" — so a fresh driver reads false before any actuation at all.
     clock = _Clock()
-    monkeypatch.setattr(adb_driver_mod, "time", clock)
+    monkeypatch.setattr(adb_driver_impl, "time", clock)
     driver, _ = _resident_driver(
         reads=[(FIXTURE, 1000.0), (FIXTURE, 1000.0), (FIXTURE, 1001.0)],
         clocks=[1000.0],
@@ -1856,7 +1860,7 @@ def test_read_postdates_actuation_stays_false_when_the_actuation_armed_no_mark_b
     # read as a confirmed order — otherwise a mutating `extract` step on one of these actuators would
     # bypass the Unit 1 wall-clock barrier it depends on. A later read must not flip it true either.
     clock = _Clock()
-    monkeypatch.setattr(adb_driver_mod, "time", clock)
+    monkeypatch.setattr(adb_driver_impl, "time", clock)
     driver, _ = _resident_driver(reads=[(FIXTURE, 1000.0), (FIXTURE, 2000.0)], clocks=[1000.0])
     driver.query()
     driver.back()
@@ -1872,7 +1876,7 @@ def test_read_source_requests_the_pending_actuation_mark_as_since(
     # it which mark to wait past — the pending catch-up's actuation mark. A read with no gesture pending
     # requests none, so the device returns at once.
     clock = _Clock()
-    monkeypatch.setattr(adb_driver_mod, "time", clock)
+    monkeypatch.setattr(adb_driver_impl, "time", clock)
     seen: list[float | None] = []
 
     def fetch(since: float | None) -> HierarchyRead:
@@ -1895,7 +1899,7 @@ def test_a_pan_with_no_fresh_read_takes_its_baseline_from_the_screen(
     # first post-pan read differs from it, the barrier credits the pan as published, and the pan's own
     # lag goes unwaited. The baseline is therefore re-read when something has actuated since.
     clock = _Clock()
-    monkeypatch.setattr(adb_driver_mod, "time", clock)
+    monkeypatch.setattr(adb_driver_impl, "time", clock)
     before, after = _moved(150), _scrolled(_SCROLLED_BY)
     # FIXTURE: the read taken before the earlier tap. `before`: that tap's published effect, still
     # pre-pan. `after`: the pan finally published. `before` is held for more reads than a wrongly
@@ -1919,7 +1923,7 @@ def test_a_second_pan_waits_for_the_first_to_publish_before_taking_its_baseline(
     # still shows the pre-first-pan screen, so seeding from it makes the first pan's publish look like
     # the second pan landing, and the actuator resolves a tree missing the second pan's delta.
     clock = _Clock()
-    monkeypatch.setattr(adb_driver_mod, "time", clock)
+    monkeypatch.setattr(adb_driver_impl, "time", clock)
     first, both = _scrolled(-100), _scrolled(-173)  # the first pan's delta, then both pans'
     run, calls = _capturing_run([FIXTURE, *([FIXTURE] * 3), *([first] * 16), both])
     driver = AdbDriver("U", run=run)
@@ -1973,7 +1977,7 @@ def test_tap_then_long_press_resolves_against_the_published_tree(
     # centre, not the pre-tap one — the same guarantee a pan already has, now for a tap (BE-0332 Unit
     # 2). stable.submit is [0,200][200,300] before, so centre y 250; after the -73 pan, centre y 177.
     clock = _Clock()
-    monkeypatch.setattr(adb_driver_mod, "time", clock)
+    monkeypatch.setattr(adb_driver_impl, "time", clock)
     run, calls = _capturing_run([FIXTURE, FIXTURE, FIXTURE, FIXTURE, _scrolled(_SCROLLED_BY)])
     driver = AdbDriver("U", run=run)
     driver.query()  # the tree the tap was aimed at
@@ -2030,7 +2034,7 @@ def test_catch_up_gives_up_loudly_at_the_lag_budget_when_the_pan_changed_nothing
     # wait is bounded by wall-clock and spent once, rather than blocking the run forever — and it says
     # so, because the alternative is the bare `expect` mismatch that cost a full artifact investigation.
     clock = _Clock()
-    monkeypatch.setattr(adb_driver_mod, "time", clock)
+    monkeypatch.setattr(adb_driver_impl, "time", clock)
     run, _ = _capturing_run([FIXTURE])
     driver = AdbDriver("U", run=run)
     driver._READ_LAG_S = 0.5
@@ -2060,7 +2064,7 @@ def test_the_read_lag_warning_reports_the_marks_it_waited_on(
     # causes and no evidence. On the mark path the numbers are decisive: a newest read mark that never
     # passed the actuation mark means the device published no accessibility event at all.
     clock = _Clock()
-    monkeypatch.setattr(adb_driver_mod, "time", clock)
+    monkeypatch.setattr(adb_driver_impl, "time", clock)
     run, _ = _capturing_run([FIXTURE])
     driver = AdbDriver(
         "U",
@@ -2083,7 +2087,7 @@ def test_a_tree_that_never_settles_says_so(
     # Falling through the settle deadline hands the next actuator a screen that was still moving. That
     # was silent, so a coordinate resolved off a mid-animation frame looked exactly like a good one.
     clock = _Clock()
-    monkeypatch.setattr(adb_driver_mod, "time", clock)
+    monkeypatch.setattr(adb_driver_impl, "time", clock)
     moving = [FIXTURE.replace("0,100][200,200", f"0,{100 + n}][200,{200 + n}") for n in range(200)]
     run, _ = _capturing_run(moving)
     driver = AdbDriver("U", run=run)
@@ -2102,7 +2106,7 @@ def test_a_non_resolving_actuator_does_not_arm_the_catch_up_wait(
     # postdates *every* actuation (BE-0332 Unit 3). Arming here would only steal a following pan's
     # fresh baseline. The center-resolving taps that *do* arm are covered by the `_arms_` tests above.
     clock = _Clock()
-    monkeypatch.setattr(adb_driver_mod, "time", clock)
+    monkeypatch.setattr(adb_driver_impl, "time", clock)
     run, _ = _capturing_run([FIXTURE])
     driver = AdbDriver("U", run=run)
     driver.query()

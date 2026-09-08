@@ -1013,7 +1013,7 @@ def test_xcuitest_runner_summary_warns_on_a_bundled_toolchain_mismatch(
     # mismatch warning when the host Xcode major differs from the toolchain the bundle recorded.
     from bajutsu.cli.commands import doctor
     from bajutsu.common.config import XcuitestConfig
-    from bajutsu.common.platform_lifecycle.environments import xcuitest as xc
+    from bajutsu.common.platform_lifecycle.environments.xcuitest import _functions as xc
     from bajutsu.common.scenario import Redact
 
     # A non-None products dir makes `runner_source` report the bundled tier for the first line; the

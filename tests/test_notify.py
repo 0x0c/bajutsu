@@ -397,7 +397,7 @@ def test_deliver_retry_on_error(monkeypatch: Any) -> None:
         return resp
 
     monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
-    monkeypatch.setattr("bajutsu.run.notify._RETRY_DELAY", 0.0)
+    monkeypatch.setattr("bajutsu.run.notify._functions._RETRY_DELAY", 0.0)
     assert _deliver("https://hook", {"text": "hi"}, masked="https://hook/***") is True
     assert call_count == 2
 
@@ -407,7 +407,7 @@ def test_deliver_never_raises(monkeypatch: Any) -> None:
         raise OSError("network down")
 
     monkeypatch.setattr(urllib.request, "urlopen", explode)
-    monkeypatch.setattr("bajutsu.run.notify._RETRY_DELAY", 0.0)
+    monkeypatch.setattr("bajutsu.run.notify._functions._RETRY_DELAY", 0.0)
     assert _deliver("https://hook", {"text": "hi"}, masked="https://hook/***") is False
 
 
@@ -615,7 +615,7 @@ def test_deliver_exhausts_all_retries(monkeypatch: Any) -> None:
         raise urllib.error.HTTPError("https://hook", 500, "ISE", {}, None)  # type: ignore[arg-type]
 
     monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
-    monkeypatch.setattr("bajutsu.run.notify._RETRY_DELAY", 0.0)
+    monkeypatch.setattr("bajutsu.run.notify._functions._RETRY_DELAY", 0.0)
     assert _deliver("https://hook", {"text": "hi"}, masked="https://hook/***") is False
     assert call_count == 3  # initial + 2 retries
 
@@ -625,7 +625,7 @@ def test_emit_delivery_failure_returns_false(monkeypatch: Any) -> None:
         raise OSError("network down")
 
     monkeypatch.setattr(urllib.request, "urlopen", explode)
-    monkeypatch.setattr("bajutsu.run.notify._RETRY_DELAY", 0.0)
+    monkeypatch.setattr("bajutsu.run.notify._functions._RETRY_DELAY", 0.0)
     results = [_res("s", False, "err")]
     fired = emit(
         results,
@@ -721,7 +721,7 @@ def test_emit_failure_logs_never_contain_resolved_secret(monkeypatch: Any, caplo
         raise OSError("network down")
 
     monkeypatch.setattr(urllib.request, "urlopen", explode)
-    monkeypatch.setattr("bajutsu.run.notify._RETRY_DELAY", 0.0)
+    monkeypatch.setattr("bajutsu.run.notify._functions._RETRY_DELAY", 0.0)
 
     secret_url = "https://hooks.slack.com/services/T00/B00/SECRETVALUE"
     results = [_res("s", False, "err")]
@@ -752,7 +752,7 @@ def test_emit_unexpected_error_log_names_endpoint_once(monkeypatch: Any, caplog:
     def explode(summary: Any) -> Any:
         raise RuntimeError("renderer blew up")
 
-    monkeypatch.setattr("bajutsu.run.notify._render_slack", explode)
+    monkeypatch.setattr("bajutsu.run.notify._functions._render_slack", explode)
 
     secret_url = "https://hooks.slack.com/services/T00/B00/SECRETVALUE"
     results = [_res("s", False, "err")]
@@ -784,7 +784,7 @@ def test_emit_start_failure_logs_never_contain_resolved_secret(
         raise OSError("network down")
 
     monkeypatch.setattr(urllib.request, "urlopen", explode)
-    monkeypatch.setattr("bajutsu.run.notify._RETRY_DELAY", 0.0)
+    monkeypatch.setattr("bajutsu.run.notify._functions._RETRY_DELAY", 0.0)
 
     secret_url = "https://hooks.slack.com/services/T00/B00/SECRETVALUE"
     with caplog.at_level(logging.WARNING, logger="bajutsu.run.notify"):

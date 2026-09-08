@@ -292,7 +292,9 @@ def test_configure_from_ai_config_disables_on_empty_path() -> None:
     usage_ledger.configure_from_ai_config(AiConfig(usage_ledger=""))
     try:
         # An explicit empty path opts out: no sink, so recording only touches the in-memory total.
-        assert usage_ledger._ACTIVE_LEDGER is None
+        # Read through `_functions`, which owns the binding `configure` rebinds with `global`: the
+        # package's own copy would freeze at import time and make this assertion unconditional.
+        assert usage_ledger._functions._ACTIVE_LEDGER is None
     finally:
         usage_ledger.reset()
 

@@ -1096,7 +1096,9 @@ def test_relaunch_stops_playwright_even_if_browser_close_fails(
     class _PwError(Exception):
         pass
 
-    monkeypatch.setattr(sys.modules["bajutsu.common.drivers.playwright"], "_PW_ERRORS", (_PwError,))
+    monkeypatch.setattr(
+        sys.modules["bajutsu.common.drivers.playwright._functions"], "_PW_ERRORS", (_PwError,)
+    )
 
     class _DeadBrowser(_FakeBrowser):
         def close(self) -> None:
@@ -1130,7 +1132,9 @@ def test_close_stops_playwright_even_if_browser_close_fails(
     class _PwError(Exception):
         pass
 
-    monkeypatch.setattr(sys.modules["bajutsu.common.drivers.playwright"], "_PW_ERRORS", (_PwError,))
+    monkeypatch.setattr(
+        sys.modules["bajutsu.common.drivers.playwright._functions"], "_PW_ERRORS", (_PwError,)
+    )
 
     class _DeadBrowser(_FakeBrowser):
         def close(self) -> None:
@@ -1201,7 +1205,9 @@ def test_wedge_surfaces_as_device_error_but_selection_errors_pass_through(
     # Playwright isn't installed in the gate env, so stand in its error types (the cached module
     # global). Patch via sys.modules to keep this file's single `from bajutsu.common.drivers.playwright`
     # import style (no second `import … as` of the same module).
-    monkeypatch.setattr(sys.modules["bajutsu.common.drivers.playwright"], "_PW_ERRORS", (_PwError,))
+    monkeypatch.setattr(
+        sys.modules["bajutsu.common.drivers.playwright._functions"], "_PW_ERRORS", (_PwError,)
+    )
 
     class _WedgedPage(_FakePage):
         def evaluate(self, expression: str) -> Any:

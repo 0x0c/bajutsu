@@ -304,7 +304,7 @@ def test_upload_route_rejects_body_exceeding_cap_mid_stream(
     # a distinct guard from the upfront Content-Length check exercised by the stdlib suite.
     from bajutsu.serve import uploads as uploads_mod
 
-    monkeypatch.setattr(uploads_mod, "MAX_UPLOAD_BYTES", 4)
+    monkeypatch.setattr(uploads_mod.bounded_zip_receiver, "MAX_UPLOAD_BYTES", 4)
     state = srv.ServeState(runs_dir=tmp_path / "runs", cwd=tmp_path, root=tmp_path)
     (tmp_path / "runs").mkdir()
     resp = _client(state).post("/api/upload?name=x.zip", content=b"more than four bytes")
