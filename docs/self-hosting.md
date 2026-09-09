@@ -293,7 +293,7 @@ backend sets `hosted: true`.
 |---|---|---|
 | **Config** | File browser + Git + upload; own filesystem, paths unconfined | Git + upload only; file browser disabled, 403 (BE-0108) |
 | **Scenario and run artifacts** | `scenarios/` and `runs/` on disk; soft-delete moves to `runs/.trash/` | Object store (S3/GCS) + Postgres; soft-delete sets `deleted_at` (BE-0239) |
-| **App binary** | `appPath` on disk; build only when missing | Worker builds from checkout/bundle; remote build gated (BE-0121) |
+| **App binary** | `appPath` on disk; build only when missing | An uploaded bundle's binary ships to the worker via presigned URLs, no build runs (BE-0413); a Git-sourced config still has the worker build from the checkout, remote build gated (BE-0121) |
 | **Authoring against a live screen** | Capture mode and Edit's live picker both hold a driver open in the `serve` process | Neither is offered: both controls are disabled, each carrying the reason (#1721) |
 
 - **Config.** Both sides bind from up to three sources, but the file browser disappears the moment
@@ -321,9 +321,14 @@ backend sets `hosted: true`.
   rather than the deployment, since the devices are on the machine after all. The Record tab keeps
   working: `POST /api/record` dispatches a job the way a run does, so a recording made through the
   AI path still runs hosted.
-- **App binary.** Neither side has a generic binary-upload endpoint: both resolve `appPath` from the
-  bound config and, if it's missing, run the config's `build:` command. Hosted, a Mac worker builds
-  from the same checkout or bundle materials the control plane resolved for the job, exchanging bytes
+- **App binary.** An uploaded bundle already carries a prebuilt binary, so its `build:` never runs
+  regardless of tier (`_governed_build`, DESIGN §1 "Bajutsu does not build the app"). Hosted, the
+  worker still needs the bytes: the job lease response's `bundle_urls` field carries one presigned
+  GET URL per stored object the bundle is made of, and the worker fetches them over plain HTTP and
+  reassembles its own workspace before the run starts (BE-0413) — no shared filesystem, and no
+  build. A Git-sourced (or, locally, file-browser-sourced) config instead resolves `appPath` from
+  the bound config and, if it's missing, runs the config's `build:` command; hosted, a Mac worker
+  builds from the same checkout materials the control plane resolved for the job, exchanging bytes
   over presigned URLs rather than a shared filesystem (BE-0160, above). The remote-build gate is
   orthogonal to the tier: any config bound later through the UI's "from Git" picker has its `build:`
   suppressed by default, whether the UI sits on a laptop's Tier A or Tier B's control plane — only a
