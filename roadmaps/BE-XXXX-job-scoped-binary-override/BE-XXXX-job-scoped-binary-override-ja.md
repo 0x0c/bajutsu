@@ -147,6 +147,22 @@ workerはBE-0413のストリーミングダウンロード
 本来そこに置くはずだったものを上書きします。そして、`bundle`を一切持たない`materials`ベースのジョブが、
 ディスク上にまだ持っていないbinaryを受け取る経路として初めて機能します。
 
+ここまでが、テスト対象のアプリについての話です。iOSでは、runがインストールする成果物はアプリだけでは
+ありません。XCUITestはrunnerも必要とします。上書きはrunnerを運びませんが、多くの場合それは不要です。
+runnerはアプリに依存しないためです。1つのビルド済み`.xctestrun`とその成果物が、runの対象がどのアプリで
+あっても駆動します（[BE-0019](../BE-0019-xcuitest-backend/BE-0019-xcuitest-backend-ja.md)）。つまりビルドが変わってもrunnerは変わりません。`xcuitest.testRunner`を
+指定しないSimulatorターゲットは、Bajutsuのwheelに同梱されたrunnerへ解決されます（[BE-0292](../BE-0292-xcuitest-bundled-runner/BE-0292-xcuitest-bundled-runner-ja.md)）。wheelを
+インストールしたworkerはすでにそれを持っているため、runnerに関するものはジョブごとには一切運ばれません。
+`xcuitest.testRunner`を指定するターゲットでは、そのパスが自身のconfigのディレクトリを基準にrebaseされ、
+BE-0051によって閉じ込められます。アップロードされたbundleが自分のrunnerをツリー内に載せられるのは、この
+仕組みによります。そのツリーはBE-0413がすでに配送します。
+
+1つだけ、本項目では閉じない case が残ります。実機ターゲット（`xcuitest.deviceType: device`）は、Bajutsu
+が同梱できない署名済みrunnerを指定しなければなりません（[BE-0288](../BE-0288-ios-device-signing-batch-build/BE-0288-ios-device-signing-batch-build-ja.md)）。そのため、実機に対する`materials`
+ベースのジョブには、そのrunnerの配送経路が依然としてありません。本項目がapp binaryについて閉じるのと
+同じギャップです。runnerはビルドではなくデプロイに属するため、ジョブ単位の上書きは形として適していま
+せん。署名済みrunnerの配送はそれ自体が別の問題であり、その規模を見積もれる項目に委ねます。
+
 workerのワークスペースは、ジョブより長く生き続けます。`work`はworkerの生涯全体を通じて1つのディレクトリ
 のままです。そのため、`appPath`への上書きの配置だけを行い、今日のワークスペースキーを変えずにおくと、
 同じworker上で次にリースされるジョブへそれが持ち越されてしまいます。上書きを持たないジョブや、同じ
@@ -231,6 +247,7 @@ serveは、そこに配置を隔離するためのワークスペースを持ち
 | 今日の2つの経路と同じように、すべてのdispatchの前に差し替え（`bind`/`compose`）を要求する | orgのアクティブな設定を変更の単位にしてしまいます。すべてのセッションを持たないCIの呼び出し元は、自分のジョブが求めたbinaryを得る代わりに、1つのデプロイのフォールバックバインディングを取り合うことになります。加えて、この差し替えはorgの記憶された設定も書き込むため、あるメンバーの次のセッションがそれを引き継ぎます。 |
 | アーティファクト用のpresigned PUTアップロードエンドポイントを、唯一サポートする転送手段として追加する | 動機となっているギャップを閉じるためには不要です。`POST /api/artifacts/binary`と`GET /api/artifacts/exists`は、すでに呼び出し元の重複排除とアップロードを今日可能にしています。presigned PUT版は、大きなbinaryについてコントロールプレーン自身のディスクを経由する往復を1回省けますが、それは後続の最適化であり、この項目を妨げるものではありません。この項目がdispatch時に交わす契約は、結果としてのsha256であって、それがどう届いたかではありません。 |
 | 上書きを一切持たないすべてのジョブについて、bundle/Gitツリーから`appPath`を再配置する（または持ち越しを削除する） | materialsベースのジョブには、再配置の元になるソースツリーがありません。そのため、この経路には削除の手順とトポロジーごとの分岐が必要になりますが、ワークスペースをキー付けする方法なら分離が構造的になり、どちらも必要ありません。 |
+| XCUITestのrunnerを、binaryと並ぶ2つ目の上書きレッグとして運ぶ | runnerはアプリに依存せず、ビルドが変わっても変わりません（[BE-0019](../BE-0019-xcuitest-backend/BE-0019-xcuitest-backend-ja.md)）。つまりrunnerはジョブではなくデプロイに属します。Simulatorターゲットはwheel同梱のrunnerへすでに解決され（[BE-0292](../BE-0292-xcuitest-bundled-runner/BE-0292-xcuitest-bundled-runner-ja.md)）、アップロードされたbundleは指定済みの`xcuitest.testRunner`を自分のツリー内に載せられます。本当に欠けているのは、実機かつmaterialsベースのジョブ向けの署名済みrunner（[BE-0288](../BE-0288-ios-device-signing-batch-build/BE-0288-ios-device-signing-batch-build-ja.md)）ですが、これはデプロイ単位の配送の問題であり、ジョブ単位の上書きでは解決しません。 |
 
 ## 進捗
 
@@ -262,3 +279,5 @@ serveは、そこに配置を隔離するためのワークスペースを持ち
   ——本項目がなければ、`materials`ベースのジョブ自身のbinary取得が今日頼ることになる`build:`の統治。
 - [BE-0106 — 完了後方式のworkerモデル](../BE-0106-post-completion-worker-model/BE-0106-post-completion-worker-model-ja.md)
   ——`binary_url`が`bundle_urls`や`baseline_urls`と並んで参加する、リースのプロトコル。
+- [BE-0292 — XCUITest ランナーを同梱して testRunner を省略可能にする](../BE-0292-xcuitest-bundled-runner/BE-0292-xcuitest-bundled-runner-ja.md)
+  ——Simulatorのrunにrunnerの配送が不要な理由。本項目の上書きがアプリだけを対象にできる根拠。

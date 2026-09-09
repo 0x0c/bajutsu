@@ -142,6 +142,23 @@ an `Upload`'s tree, or a Git checkout, would otherwise have placed there. And it
 path a materials-based job — one with no `bundle` at all — has ever had for a binary it does not
 already carry on disk.
 
+That covers the app under test, and on iOS the app is not the only product a run installs: XCUITest
+also needs a runner. The override does not carry one, and for the common case it does not need to.
+The runner is app-agnostic — one built `.xctestrun` and its products drive whatever app a run
+targets ([BE-0019](../BE-0019-xcuitest-backend/BE-0019-xcuitest-backend.md)) — so it does not change when a build changes, and a Simulator target that names
+no `xcuitest.testRunner` resolves to the runner shipped inside the Bajutsu wheel ([BE-0292](../BE-0292-xcuitest-bundled-runner/BE-0292-xcuitest-bundled-runner.md)). A
+worker that installed the wheel already holds it, so nothing about the runner travels per job. A
+target that does pin `xcuitest.testRunner` has that path rebased against its own config's directory,
+confined by BE-0051, which is how an uploaded bundle carries its own runner inside the tree BE-0413
+already delivers.
+
+One case stays open, and this item does not close it: a real-device target
+(`xcuitest.deviceType: device`) must pin a signed runner Bajutsu cannot ship ([BE-0288](../BE-0288-ios-device-signing-batch-build/BE-0288-ios-device-signing-batch-build.md)), so a
+materials-based job against a real device still has no delivery path for that runner — the same gap
+this item closes for the app binary. The runner belongs to the deployment rather than to the build,
+so a per-job override is the wrong shape for it; delivering a signed runner is its own problem, left
+to an item that can size it.
+
 The worker's workspace outlives the job — `work` is one directory for the worker's whole lifetime — so
 placing an override at `appPath` and leaving today's workspace key unchanged would let it contaminate
 the next job leased on that worker: one with no override, or one off the same bundle, would start
@@ -220,6 +237,7 @@ The gate covers each seam without a network or a Simulator:
 | Require a rebind (`bind`/`compose`) before every dispatch, as today's two paths do | Makes the org's active config the unit of change: every sessionless CI caller contends for the one deployment fallback binding instead of each getting the binary its own job asked for, and the bind additionally writes the org's remembered configuration, which a member's next session inherits. |
 | Add a presigned-PUT upload endpoint for artifacts, as the one supported transport | Not needed to close the motivating gap: `POST /api/artifacts/binary` plus `GET /api/artifacts/exists` already let a caller dedupe and upload today. A presigned-PUT variant would save a round trip through the control plane's own disk for a large binary, but that is a follow-on optimization, not a blocker — this item's dispatch-time contract is the resulting sha256, not how it arrived. |
 | Re-place `appPath` from the bundle/Git tree (or delete the leftover) for every job that carries no override | A materials-based job has no source tree to re-place *from*, so that path needs a delete step and a per-topology branch, where keying the workspace makes the isolation structural and needs neither. |
+| Carry the XCUITest runner as a second override leg, beside the binary | The runner is app-agnostic and does not change when a build changes ([BE-0019](../BE-0019-xcuitest-backend/BE-0019-xcuitest-backend.md)), so it belongs to the deployment, not to the job: a Simulator target already resolves the wheel-bundled runner ([BE-0292](../BE-0292-xcuitest-bundled-runner/BE-0292-xcuitest-bundled-runner.md)), and an uploaded bundle carries a pinned `xcuitest.testRunner` inside its own tree. What is genuinely missing — a signed runner for a real-device, materials-based job ([BE-0288](../BE-0288-ios-device-signing-batch-build/BE-0288-ios-device-signing-batch-build.md)) — is a per-deployment delivery problem a per-job override would not solve. |
 
 ## Progress
 
@@ -252,3 +270,5 @@ The gate covers each seam without a network or a Simulator:
   — the `build:` governance a materials-based job's own binary fetch relies on today, absent this item.
 - [BE-0106 — Post-completion worker model](../BE-0106-post-completion-worker-model/BE-0106-post-completion-worker-model.md)
   — the lease protocol `binary_url` joins alongside `bundle_urls` and `baseline_urls`.
+- [BE-0292 — Bundle the XCUITest runner so testRunner is optional](../BE-0292-xcuitest-bundled-runner/BE-0292-xcuitest-bundled-runner.md)
+  — why a Simulator run's runner needs no delivery, so this item's override covers the app alone.
