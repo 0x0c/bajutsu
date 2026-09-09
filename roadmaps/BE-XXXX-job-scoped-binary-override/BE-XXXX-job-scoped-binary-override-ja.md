@@ -10,7 +10,7 @@
 | 状態 | **提案** |
 | トラッキング Issue | [検索](https://github.com/bajutsu-e2e/bajutsu/issues?q=is%3Aissue+label%3Aroadmap-tracking+in%3Atitle+"BE-XXXX") |
 | トピック | config の取得元 |
-| 関連 | [BE-0393](../BE-0393-per-org-config-memory/BE-0393-per-org-config-memory-ja.md)、[BE-0413](../BE-0413-worker-app-binary-delivery/BE-0413-worker-app-binary-delivery-ja.md)、[BE-0268](../BE-0268-composable-upload-artifacts/BE-0268-composable-upload-artifacts-ja.md)、[BE-0160](../BE-0160-worker-credential-free-uploads/BE-0160-worker-credential-free-uploads-ja.md) |
+| 関連 | [BE-0393](../BE-0393-per-org-config-memory/BE-0393-per-org-config-memory-ja.md)、[BE-0413](../BE-0413-worker-app-binary-delivery/BE-0413-worker-app-binary-delivery-ja.md)、[BE-0268](../BE-0268-composable-upload-artifacts/BE-0268-composable-upload-artifacts-ja.md)、[BE-0160](../BE-0160-worker-credential-free-uploads/BE-0160-worker-credential-free-uploads-ja.md)、[BE-0336](../BE-0336-serve-device-farm-bounded-fan-out/BE-0336-serve-device-farm-bounded-fan-out-ja.md) |
 <!-- /BE-METADATA -->
 
 ## はじめに
@@ -26,10 +26,10 @@ binaryをジョブに使わせる唯一の方法は、orgの**アクティブな
 [BE-0413](../BE-0413-worker-app-binary-delivery/BE-0413-worker-app-binary-delivery-ja.md)が、バインド先の
 ツリーのbinaryを、ジョブをリースしたworkerへ配送します。
 
-本項目は、**ジョブ単位のbinaryアーティファクト上書き**を追加します。`run`（または`record`/`crawl`）への
-リクエストが、すでに保存済みの`binary`種別のアーティファクトをsha256で名指すと、そのジョブだけが
-それを`appPath`にインストールします。orgのアクティブな設定や、それに対して動く他のジョブ・セッションは
-変わりません。
+本項目は、**ジョブ単位のbinaryアーティファクト上書き**を追加します。`run`、またはクラウドバッチのファンアウト
+である`run-set`へのリクエストが、すでに保存済みの`binary`種別のアーティファクトをsha256で名指します。
+すると、そのリクエストがdispatchするすべてのジョブが、それだけを解決の対象とします。orgのアクティブな
+設定や、それに対して動く他のジョブ・セッションは変わりません。
 
 ## 動機
 
@@ -42,9 +42,11 @@ binaryをジョブに使わせる唯一の方法は、orgの**アクティブな
 1つ目は、すべてのCIリクエストがセッションを持たないことです（ログイン用のクッキーを一切運びません）。
 そのため、すべてのCIによる差し替えは、同じ**デプロイのフォールバック**バインディング
 （[BE-0393](../BE-0393-per-org-config-memory/BE-0393-per-org-config-memory-ja.md)）を置き換えます。
-1つのデプロイに対する2つの並行したCIのdispatchは、この1つのレコードを取り合います。最後に着地した
-差し替えが、もう一方の呼び出し元がすでにキューに積んでいた、まだdispatchされていないジョブが解決する
-対象になります。どちらの呼び出し元も、相手のジョブに触れるつもりはなかったにもかかわらずです。
+1つのデプロイに対する2つの並行したCIのdispatchは、この1つのレコードを取り合います。
+`_register_and_dispatch`は、登録の時点でジョブの`cwd`と`bundle`を確定させます。そのため、損失が生じるのは
+呼び出し元自身の差し替えとその`run`との間の窓です。そこへもう一方の呼び出し元の差し替えが割り込むと、
+runはそちらを解決の対象にしてしまいます。どちらの呼び出し元も、相手のジョブに触れるつもりはなかったにも
+かかわらずです。
 
 2つ目は、CIによる差し替えがCIの呼び出し元だけにとどまらないことです。同じ差し替えは、orgの
 **記憶された設定**（BE-0393単位6）も書き込むため、同僚の次のセッションが最初の利用時にそれを
@@ -93,8 +95,8 @@ dispatchします。それぞれ、呼び出し元が少し前にアップロー
 [BE-0268](../BE-0268-composable-upload-artifacts/BE-0268-composable-upload-artifacts-ja.md)は、
 `binary`アーティファクトを単体でアップロードし、そのsha256でコンテンツアドレス方式のまま保存すること
 （何のアクティブな設定にもバインドせずに、`bind_artifact`が書き込んで終える処理）をすでに可能にして
-います。本項目は、この保存先へのジョブ単位の参照を追加します。`start_run`、`start_record`、
-`start_crawl`が、任意項目`binaryArtifact`を受け付けます。これは、呼び出し元のorgにすでに保存されている
+います。本項目は、この保存先へのジョブ単位の参照を追加します。`start_run`と`start_run_set`が、任意項目
+`binaryArtifact`を受け付けます。これは、呼び出し元のorgにすでに保存されている
 `binary`アーティファクトを名指すsha256の16進ダイジェストです。`valid_sha256`がその形式を検証します。
 dispatch側のゲートは、`artifact_exists`をそのままでは再利用できません。このヘルパーは、ストアの
 エラーを意図的に「存在が確認できない」として扱い、本物のミスと
@@ -149,11 +151,13 @@ editorロールを、`POST /api/artifacts/binary`はadminロールを要求し�
 it」）。こうしてworkerは、インストール時になって初めて判明する、不透明なジョブ失敗にはしません。
 workerはBE-0413のストリーミングダウンロード
 兼検証の経路を再利用してそれを取得・ハッシュ検証したうえで、構成済みの`binary`レッグに対してすでに
-行っているのと同じ方法でバイトを配置します。`appPath`は、`materialize_composition`が解決するのと
-同じ方法で、ジョブ自身のconfigから解決します。この解決はプラットフォームを問わないため、Android
-ターゲットの`appPath`もiOSターゲットと同じように扱われ、iOSに限られません。書き込みは`_place_binary`の
-「unzipするか、コピーするか」という分岐を通ります。この分岐は、`validate_bundle_config`が構成済み
-ツリーに与えるのと同じBE-0051の経路閉じ込めのもとで動きます。この書き込みは、`Upload`のツリーやGit
+行っているのと同じ方法でバイトを配置します。`appPath`は、ジョブ自身のconfigから解決します。ただし、
+ジョブが名指す1つのターゲットに限られ、configが宣言するすべてのターゲットには及びません。
+`materialize_composition`の配置ループ（`_place_scenarios_and_binaries_and_check_coherence`）は、web以外の
+すべてのターゲットの`appPath`にbinaryを1つずつ書き込むからです。この解決はプラットフォームを問わないため、
+Androidターゲットの`appPath`もiOSターゲットと同じように扱われ、iOSに限られません。バイト列は
+`_place_binary`の「unzipするか、コピーするか」という分岐を通ります。この分岐は、`validate_bundle_config`が
+構成済みツリーに与えるのと同じBE-0051の経路閉じ込めのもとで動きます。この書き込みは、`Upload`のツリーやGit
 チェックアウトが
 本来そこに置くはずだったものを上書きします。そして、`bundle`を一切持たない`materials`ベースのジョブが、
 ディスク上にまだ持っていないbinaryを受け取る経路として初めて機能します。
@@ -184,7 +188,7 @@ bundleを使うジョブは、それと知らされないまま、その持ち�
 |---|---|
 | bundleジョブ、上書きなし | `.bundles/<org>/<bundle id>`（今日と同じキーのまま、変わりません） |
 | bundleジョブ、上書きXあり | `(bundle id, 上書きのsha)`でキー付けされた、専用のツリー |
-| materialsベースのジョブ、上書きXあり | workerの共有作業ディレクトリの代わりに、上書きのshaでキー付けされたディレクトリ |
+| materialsベースのジョブ、上書きXあり | workerの共有作業ディレクトリの代わりに、`(materials identity, 上書きのsha)`でキー付けされたディレクトリ |
 | materialsベースのジョブ、上書きなし | workerの共有作業ディレクトリ（今日と同じまま、変わりません） |
 
 上書きを名指さないジョブは、今日のキーをそのまま保ちます。そのため、既存の挙動は何も変わりません。
@@ -194,11 +198,12 @@ bundleを使うジョブは、それと知らされないまま、その持ち�
 BE-0413のディスクコストも引き継ぎます。`docs/self-hosting.md`は、bundleキャッシュを刈り込むことで
 それを管理するよう、運用者にすでに案内しています。
 
-シングルプロセスのローカル`serve`は、別のトポロジーです。本項目は、そこでは上書きを配送せず、拒否
-します。`file`バインディングやGitバインディングを使うジョブでは、job.cwdが運用者のプロジェクト
-ディレクトリになります（`_register_and_dispatch`）。運用者自身がバインドしたこのツリーで動くジョブ
-は、`binaryArtifact`を明確なエラーとともに**拒否**します。`appPath`にある運用者のビルド出力を上書き
-することはありません。
+シングルプロセスのローカル`serve`は、別のトポロジーです。そこでは、serve自身がジョブを実行し、運用者
+自身のプロジェクトディレクトリで動きます。`_register_and_dispatch`は、どのトポロジーでも
+バインディングから`job.cwd`を確定させます。そのため、判別の基準はバインディングの種類ではなく、
+executor（`LocalExecutor`か、ホスティングされたデプロイのBE-0106の`DbQueueExecutor`か）です。そこで
+本項目は、`LocalExecutor`のデプロイでは`binaryArtifact`を明確なエラーとともに**拒否**します。
+`appPath`にある運用者のビルド出力を上書きすることはありません。
 
 serveは、そこに配置を隔離するためのワークスペースを持ちません。そのため、workerでは配置をワークスペース
 キーが解決している汚染の問題に、ローカルでは同等の答えがありません。運用者のプロジェクトディレクトリを
@@ -208,6 +213,15 @@ serveは、そこに配置を隔離するためのワークスペースを持ち
 
 これにより、本項目は、それが解決しようとしている問題が生じるトポロジーだけにスコープを保ちます。worker
 がジョブを実行し、serveがワークスペースを持つ、ホスティングされた分離構成です。
+
+`run-set`によるファンアウト（[BE-0336](../BE-0336-serve-device-farm-bounded-fan-out/BE-0336-serve-device-farm-bounded-fan-out-ja.md)）は、
+3つ目の分岐です。`start_run_set`は、`appPath`をserveのプロセス自身の上で解決済みです。それを
+`BatchRequest.app_path`としてクラウドバッチのproviderに渡します。ジョブが`binaryArtifact`を持つ場合、
+そのパスは代わりに、serve自身のコンテンツアドレス方式のアーティファクトキャッシュ内にある上書きの場所へ
+解決されます。そこは、`bind_artifact`がすでに`local_artifact_dir`へ書き込んだ場所です。providerはそこから
+プロセス内で読み取ります。configの`appPath`には何も配置されないため、この分岐はどのツリーも書き換えません。これは、
+上記の`LocalExecutor`による拒否がこの分岐には当てはまらない理由でもあります。ジョブが`BatchRequest`を
+持つかどうかは、そのexecutorに基づく拒否より前に決まり、後には決まりません。
 
 取得の404/410は、BE-0413が扱う「bundle不在」と同じ方法でジョブを終了させます。本項目は、ハッシュ
 不一致もBE-0413と同じく一時的な扱いに分類します。そのためリースが失効し、次の試行で成功できます。
@@ -221,7 +235,7 @@ serveは、そこに配置を隔離するためのワークスペースを持ち
 
 ゲートは、ネットワークとSimulatorのどちらも使わずに各接続点をカバーします。
 
-- `start_run`/`start_record`/`start_crawl`は、ジョブを登録する前に、orgのアーティファクトストアが
+- `start_run`/`start_run_set`は、ジョブを登録する前に、orgのアーティファクトストアが
   保持していない`binaryArtifact`を拒否します。
 - `binaryArtifact`の存在確認でdispatchゲートに一時的なストアのエラーが起きた場合は、アーティファクトが
   一度もアップロードされていないと断定する400ではなく503を返します。
@@ -232,19 +246,25 @@ serveは、そこに配置を隔離するためのワークスペースを持ち
 - `bundle`を持たない`materials`ベースのジョブが、取得したアーティファクトをconfigの`appPath`へ配置して
   実行します。
 - Androidターゲットの上書きは、iOSターゲットと同じ接続点を使って、自分自身の`appPath`に配置されます。
+- iOSターゲットとAndroidターゲットの両方を宣言するconfigに対する上書きは、ジョブ自身のターゲットの
+  `appPath`にだけ配置され、もう一方のターゲットの`appPath`は変わりません。
 - `.app`のzipバンドルアーティファクトは、zipファイルのまま配置されるのではなく、ディレクトリへ展開
   されます。
 - バインド済みの`Upload`と`binaryArtifact`の両方を持つジョブは、バインドされたツリー自身のbinaryでは
   なく、上書きをインストールします。
 - 異なるアーティファクトを名指す2つの並行ジョブは、それぞれ自分のものをインストールし、どちらもorgの
   アクティブな設定バインディングを変えません。
+- 同じ上書きを名指す2つのmaterialsベースのジョブは、それぞれのconfigが異なる`appPath`を名指す場合、
+  別々のワークスペースを得ます。
 - `binaryArtifact`を持たないジョブが、それを持っていたジョブの後に同じworker上でリースされることが
   あります。この場合も、持ち越された上書きではなく自分自身の`appPath`のbinaryに対して実行されます。
   これは、既存の「並行する2つのジョブ」の箇条書きではカバーされない、1つのworker上での逐次的な失敗です。
 - 上書き取得時の404はジョブを失敗させます。この場合、インストール済みのbinaryは残りません。一方で
   ハッシュ不一致は、ジョブを失敗させることなくリースだけ失効させ、再試行に委ねます。
-- 運用者自身がバインドしたツリーで動くジョブ（シングルプロセスの`serve`上の`file`バインディングやGit
-  バインディング）の`binaryArtifact`は拒否され、運用者の`appPath`のbinaryはそのまま残ります。
+- `LocalExecutor`のデプロイでdispatchされたジョブ（運用者自身がバインドしたツリーで動くジョブ）の
+  `binaryArtifact`は拒否され、運用者の`appPath`のbinaryはそのまま残ります。
+- 上書きを伴う`run-set`のファンアウトは、configから導かれるパスではなく、アーティファクトキャッシュの
+  パスをproviderに渡し、configの`appPath`は変わりません。
 
 `docs/self-hosting.md`、`docs/cli.md`、およびそれぞれの日本語ミラーに、`binaryArtifact`フィールドと、
 それに対してジョブのマニフェストが何を記録するかについての段落を追加します。
@@ -259,6 +279,7 @@ serveは、そこに配置を隔離するためのワークスペースを持ち
 | アーティファクト用のpresigned PUTアップロードエンドポイントを、唯一サポートする転送手段として追加する | 動機となっているギャップを閉じるためには不要です。`POST /api/artifacts/binary`と`GET /api/artifacts/exists`は、すでに呼び出し元の重複排除とアップロードを今日可能にしています。presigned PUT版は、大きなbinaryについてコントロールプレーン自身のディスクを経由する往復を1回省けますが、それは後続の最適化であり、この項目を妨げるものではありません。この項目がdispatch時に交わす契約は、結果としてのsha256であって、それがどう届いたかではありません。 |
 | 上書きを一切持たないすべてのジョブについて、bundle/Gitツリーから`appPath`を再配置する（または持ち越しを削除する） | materialsベースのジョブには、再配置の元になるソースツリーがありません。そのため、この経路には削除の手順とトポロジーごとの分岐が必要になりますが、ワークスペースをキー付けする方法なら分離が構造的になり、どちらも必要ありません。 |
 | XCUITestのrunnerを、binaryと並ぶ2つ目の上書きレッグとして運ぶ | runnerはアプリに依存せず、ビルドが変わっても変わりません（[BE-0019](../BE-0019-xcuitest-backend/BE-0019-xcuitest-backend-ja.md)）。つまりrunnerはジョブではなくデプロイに属します。Simulatorターゲットはwheel同梱のrunnerへすでに解決され（[BE-0292](../BE-0292-xcuitest-bundled-runner/BE-0292-xcuitest-bundled-runner-ja.md)）、アップロードされたbundleは指定済みの`xcuitest.testRunner`を自分のツリー内に載せられます。本当に欠けているのは、実機かつmaterialsベースのジョブ向けの署名済みrunner（[BE-0288](../BE-0288-ios-device-signing-batch-build/BE-0288-ios-device-signing-batch-build-ja.md)）ですが、これはデプロイ単位の配送の問題であり、ジョブ単位の上書きでは解決しません。 |
+| `record`と`crawl`にも上書きを提供する | 動機は、すべてが判定に向かうCIのdispatchであり、`run`とその`run-set`バッチファンアウトが応えるものです。2つのTier-1オーサリング経路のどちらも、根拠になりません。`record`は自然言語のゴールに向けてAIとともに探索し、scenarioを書きます。`crawl`は幅優先で探索し、画面マップを書きますが、`docs/cli.md`はこれが決して合否判定のゲートではないと述べています。`record`の出力は、そのジョブより長く残ることも理由です。オーサリングされたscenarioはorgのscenarioストアへ永続化されます（`Job.record_save`、`out_path`）。一時的なジョブ単位のbinaryに対してオーサリングされた永続的なアーティファクトは、どのbinaryがそれを形作ったかの記録を持ちません。一方、`run`のマニフェストは上書きしたsha256を刻みます。この経路は、後の項目がそれ自身の根拠とともに追加できます。 |
 
 ## 進捗
 
@@ -268,8 +289,9 @@ serveは、そこに配置を隔離するためのワークスペースを持ち
 
 - [ ] 単位1 — `binaryArtifact`リクエストフィールド。検証と存在確認を行い、`Job.bundle`とは独立に
       `Job`へ運びます。
-- [ ] 単位2 — 本項目は、workerのトポロジーで上書きに署名・配送します。シングルプロセスのローカル
-      `serve`では拒否します。runのマニフェストには、プロベナンスを記録します。
+- [ ] 単位2 — 本項目は、workerのトポロジーで上書きに署名・配送します。`run-set`のファンアウトでは
+      serve自身のアーティファクトキャッシュから解決します。`LocalExecutor`のデプロイでは拒否します。
+      runのマニフェストには、プロベナンスを記録します。
 - [ ] 単位3 — 各接続点のテストと、`self-hosting`/`cli`ドキュメント。
 
 ## 参考
@@ -292,3 +314,6 @@ serveは、そこに配置を隔離するためのワークスペースを持ち
   ——`binary_url`が`bundle_urls`や`baseline_urls`と並んで参加する、リースのプロトコル。
 - [BE-0292 — XCUITest ランナーを同梱して testRunner を省略可能にする](../BE-0292-xcuitest-bundled-runner/BE-0292-xcuitest-bundled-runner-ja.md)
   ——Simulatorのrunにrunnerの配送が不要な理由。本項目の上書きがアプリだけを対象にできる根拠。
+- [BE-0336 — serve から Device Farm へ投入する、デバイス数を制限したシナリオ単位の分割実行](../BE-0336-serve-device-farm-bounded-fan-out/BE-0336-serve-device-farm-bounded-fan-out-ja.md)
+  ——`start_run_set`が駆動するクラウドバッチのファンアウト。本項目の上書きが`appPath`への配置ではなく、
+  serve自身のアーティファクトキャッシュへ解決する、3つ目の分岐です。
