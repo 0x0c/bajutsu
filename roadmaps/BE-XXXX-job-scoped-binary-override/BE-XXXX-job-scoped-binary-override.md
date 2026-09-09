@@ -122,6 +122,17 @@ transport that put the bytes there. `GET /api/artifacts/exists` still answers wh
 already stored, whichever path wrote it. A caller with its own credentials and all four inputs gets the
 same upload-skip it would through the API.
 
+One prerequisite this item does not supply: a credential a continuous-integration job can present.
+Writing the bytes has an answer that needs no serve credential at all — the direct-to-key write
+above. Naming the sha256 at dispatch does not: `POST /api/run` requires the *editor* role and
+`POST /api/artifacts/binary` the *admin* role, and on a deployment with GitHub OAuth configured the
+shared token narrows to worker traffic alone, so a raw bearer token reaches neither
+(`docs/self-hosting.md`). Such a deployment has no machine identity to offer a CI job today. This
+item assumes whatever credential the deployment already trusts for `POST /api/run` — the shared
+token on a token-authenticated deployment — and adds one field to that request. Giving a CI job an
+identity of its own on an OAuth deployment is a separate decision about authentication, with its own
+threat model, and belongs in its own item rather than riding in on a delivery mechanism.
+
 ### Unit 2 — Deliver the override to wherever the job runs
 
 At lease, `worker_lease` signs a presigned GET for the override, the same way it already signs
