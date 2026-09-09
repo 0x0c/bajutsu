@@ -93,10 +93,11 @@ down.
 `bind_artifact` writes it without binding it as anything's active config. This item adds a per-job
 reference to that store. `start_run`, `start_record`, and `start_crawl` accept an optional
 `binaryArtifact` field: a sha256 hex digest naming a `binary` artifact already stored for the caller's
-org. `valid_sha256` validates its shape. The dispatch-side gate cannot reuse `artifact_exists` as it stands:
-that helper deliberately reads a store error as "not confirmed present" and returns the same
-`200 {"exists": false}` a real miss returns, so reused unchanged a transient error would read as a
-confirmed miss and yield exactly the 400 this item forbids. So this item extracts the three-state probe (present / confirmed absent / unconfirmed) behind
+org. `valid_sha256` validates its shape. The dispatch-side gate cannot reuse `artifact_exists` as it
+stands: that helper deliberately reads a store error as "not confirmed present" and returns the same
+`200 {"exists": false}` a real miss returns, so a gate built on it unchanged would read a transient
+error as a confirmed miss and return exactly the 400 this item forbids. This item therefore extracts
+the three-state probe (present / confirmed absent / unconfirmed) behind
 `artifact_exists`, leaving `artifact_exists` as the thin `GET /api/artifacts/exists` handler that
 narrows it back to today's two states. The dispatch gate reads that three-state result directly: a confirmed absent fails the
 request with 400 before any job is registered — never a job that fails later, opaquely, once a worker
