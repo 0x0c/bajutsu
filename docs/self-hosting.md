@@ -293,7 +293,7 @@ backend sets `hosted: true`.
 |---|---|---|
 | **Config** | File browser + Git + upload; own filesystem, paths unconfined | Git + upload only; file browser disabled, 403 (BE-0108) |
 | **Scenario and run artifacts** | `scenarios/` and `runs/` on disk; soft-delete moves to `runs/.trash/` | Object store (S3/GCS) + Postgres; soft-delete sets `deleted_at` (BE-0239) |
-| **App binary** | `appPath` on disk; build only when missing | An uploaded bundle's binary ships to the worker via presigned URLs, no build runs (BE-0413); a Git-sourced config still has the worker build from the checkout, remote build gated (BE-0121) |
+| **App binary** | `appPath` on disk; build only when missing — never for an uploaded bundle, which ships its binary prebuilt | An uploaded bundle's binary ships to the worker via presigned URLs, no build runs (BE-0413); a Git-sourced config still has the worker build from the checkout, remote build gated (BE-0121) |
 | **Authoring against a live screen** | Capture mode and Edit's live picker both hold a driver open in the `serve` process | Neither is offered: both controls are disabled, each carrying the reason (#1721) |
 
 - **Config.** Both sides bind from up to three sources, but the file browser disappears the moment
