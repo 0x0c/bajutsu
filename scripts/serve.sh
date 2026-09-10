@@ -14,10 +14,11 @@
 # a local file) fall back to the iOS backend: serve's historical iOS-first default.
 #
 # On macOS it also stages the wheel-bundled XCUITest Simulator runner (BE-0292) when a source
-# checkout ships none, so a serve-launched XCUITest run resolves to it with no per-target
-# `testRunner`. This runs only when the serve actually drives the XCUITest backend (the no-config
-# iOS default, or a config with an iOS target) — a web-only serve stays free of the toolchain build.
-# Set BAJUTSU_SKIP_RUNNER_BUNDLE=1 to skip it regardless.
+# checkout ships none or has drifted from it
+# (docs/specs/xcuitest-bundled-runner-auto-refresh.md), so a serve-launched XCUITest run resolves to
+# a current one with no per-target `testRunner`. This runs only when the serve actually drives the
+# XCUITest backend (the no-config iOS default, or a config with an iOS target) — a web-only serve
+# stays free of the toolchain build. Set BAJUTSU_SKIP_RUNNER_BUNDLE=1 to skip it regardless.
 #
 # Usage: scripts/serve.sh [bajutsu serve flags…]   e.g. scripts/serve.sh --config demos/web/demo.config.yaml
 set -euo pipefail
@@ -62,42 +63,33 @@ PY
 }
 
 # Stage the bundled XCUITest Simulator runner so `make serve` on a Mac makes XCUITest work out of
-# the box (BE-0292). The bundled products live under `bajutsu/_xcuitest_runner/`, populated by `make
-# runner-bundle` (an `xcodebuild build-for-testing`); a source checkout ships none, and without them
-# the environment cannot fall back to the bundled runner. Build when absent OR stale — a warm,
-# current bundle is reused, so this pays `xcodebuild` only on the first XCUITest serve of a fresh
-# clone and again whenever a runner-affecting source changes; without the staleness half, a bundle
-# built before a runner change (e.g. a new Router.swift endpoint) would silently keep serving that
-# change's scenarios with the old runner. A build failure only warns, leaving serve to start for
-# other backends.
-runner_bundle="bajutsu/_xcuitest_runner/BajutsuRunner.xctestrun"
-runner_build_info="bajutsu/_xcuitest_runner/build-info.json"
-
-runner_bundle_stale() {
-  [ ! -f "$runner_bundle" ] && return 0
-  [ ! -f "$runner_build_info" ] && return 0
-  recorded="$(sed -n 's/.*"sourceHash": *"\([^"]*\)".*/\1/p' "$runner_build_info")"
-  [ -z "$recorded" ] && return 0
-  [ "$recorded" != "$(./scripts/xcuitest-runner-hash.sh)" ]
-}
-
+# the box (BE-0292), and keeps working as BajutsuKit's own source changes
+# (docs/specs/xcuitest-bundled-runner-auto-refresh.md). Delegates the staleness check and rebuild to
+# `ensure_bundled_runner_fresh` — the same function every other xcuitest entry point calls through
+# `_resolve_runner` — so the algorithm lives in one place instead of a second, bash copy that could
+# drift from it. That function itself no-ops on a wheel install (no BajutsuKit source to compare
+# against) and honors BAJUTSU_SKIP_RUNNER_BUNDLE=1; a stale or missing bundle it cannot rebuild
+# (Xcode/xcodegen missing, or the build itself failing) raises, which aborts serve before it starts —
+# the same "never keep a stale bundle" contract every other entry point gets, rather than the silent
+# per-target testRunner fallback this script used to degrade to.
 if [ "${BAJUTSU_SKIP_RUNNER_BUNDLE:-}" != "1" ] &&
   [ "$(uname)" = "Darwin" ] &&
-  runner_bundle_stale &&
   serve_uses_xcuitest; then
-  if command -v xcodebuild >/dev/null 2>&1 && command -v xcodegen >/dev/null 2>&1; then
-    echo "serve: staging bundled XCUITest runner (make runner-bundle)…" >&2
-    if ! make runner-bundle; then
-      echo "serve: WARNING: could not build the bundled XCUITest runner; XCUITest targets will need an explicit xcuitest.testRunner" >&2
-    fi
-  else
-    # Name the specific missing tool with its own remedy: `make deps` installs xcodegen (via brew
-    # bundle) but never Xcode, so conflating the two would misdirect whoever is missing xcodebuild.
-    missing=""
-    command -v xcodebuild >/dev/null 2>&1 || missing="Xcode (xcodebuild) — install Xcode"
-    command -v xcodegen >/dev/null 2>&1 || missing="${missing:+$missing; }xcodegen — run 'make deps'"
-    echo "serve: skipping bundled XCUITest runner staging — $missing" >&2
-  fi
+  echo "serve: checking the bundled XCUITest runner…" >&2
+  uv run python -c '
+import sys
+
+from bajutsu.common.backend_cli.simctl import DeviceError
+from bajutsu.common.platform_lifecycle.environments._bundled_runner import (
+    ensure_bundled_runner_fresh,
+)
+
+try:
+    ensure_bundled_runner_fresh()
+except DeviceError as exc:
+    print(f"serve: {exc}", file=sys.stderr)
+    sys.exit(1)
+'
 fi
 
 if [ -n "$config" ] && [ -f "$config" ]; then
