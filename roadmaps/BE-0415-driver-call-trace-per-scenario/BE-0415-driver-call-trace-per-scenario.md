@@ -1,14 +1,14 @@
-**English** · [日本語](BE-XXXX-driver-call-trace-per-scenario-ja.md)
+**English** · [日本語](BE-0415-driver-call-trace-per-scenario-ja.md)
 
-# BE-XXXX — Trace Python↔driver calls per scenario, permanently
+# BE-0415 — Trace Python↔driver calls per scenario, permanently
 
 <!-- BE-METADATA -->
 | Field | Value |
 |---|---|
-| Proposal | [BE-XXXX](BE-XXXX-driver-call-trace-per-scenario.md) |
+| Proposal | [BE-0415](BE-0415-driver-call-trace-per-scenario.md) |
 | Author | [@0x0c](https://github.com/0x0c) |
 | Status | **Proposal** |
-| Tracking issue | [Search](https://github.com/bajutsu-e2e/bajutsu/issues?q=is%3Aissue+label%3Aroadmap-tracking+in%3Atitle+"BE-XXXX") |
+| Tracking issue | [Search](https://github.com/bajutsu-e2e/bajutsu/issues?q=is%3Aissue+label%3Aroadmap-tracking+in%3Atitle+"BE-0415") |
 | Topic | Driver & backend architecture |
 | Related | [BE-0407](../BE-0407-step-latency-driver-internal-tuning/BE-0407-step-latency-driver-internal-tuning.md) |
 <!-- /BE-METADATA -->
