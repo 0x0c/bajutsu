@@ -97,9 +97,12 @@ a run over an interruption it can clear.
 
 Add a driver action that swipes the banner away, anchored to the frame Unit 2 reports rather than a
 fixed screen coordinate, so the gesture holds across device sizes. The direction matches how a person
-dismisses a real banner: upward, off the top of the screen. The action reuses the coordinate machinery
-`swipe`'s existing driver implementation already has, rather than adding a second gesture primitive.
-Because Unit 2 always reports at most one banner — the topmost, when several are stacked — the action
+dismisses a real banner: upward, toward the top of the screen, ending at an on-screen point above the
+banner's own frame rather than past the screen's edge. The action reuses the coordinate machinery
+`swipe`'s existing driver implementation already has, rather than adding a second gesture primitive;
+because that machinery resolves a point as an offset from the application's own origin, this unit also
+states how the frame Unit 2 reports — measured in the banner-owning process's coordinate space —
+converts into it. Because Unit 2 always reports at most one banner — the topmost, when several are stacked — the action
 always dismisses the single frame it receives; a guard that finds more than one banner clears them one
 poll at a time rather than in a single action.
 
@@ -113,9 +116,12 @@ Unit 1 confirms that the handler can swipe the banner away and see it gone befor
 the guard answers through that monitor, mirroring how BE-0399's
 monitor answers an interrupting alert. In every other case — including when Unit 1 cannot confirm that
 guarantee — the guard instead polls and clears the banner immediately before each act step's own
-actuation. That pre-actuation check issues its own presence query at the step boundary rather than
-reusing the interval-bounded poll's last answer, since acting on a remembered probe result is the
-defect BE-0399 measured. That fallback carries a known, accepted limitation: a banner arriving in the gap between the
+actuation, then re-issues the presence query once more after its own swipe and waits for it to report
+the banner gone before letting the step's tap fire: a swipe is not instantaneous, and a tap synthesized
+the moment the drag lifts can still land on a banner whose dismissal animation is still running. That
+pre-actuation check issues its own presence query at the step boundary rather than reusing the
+interval-bounded poll's last answer, since acting on a remembered probe result is the defect BE-0399
+measured. That fallback carries a known, accepted limitation: a banner arriving in the gap between the
 poll and the tap's own synthesis can still intercept the tap, so this item does not claim the tap always
 lands, only that it lands far more reliably than today. Closing that residual gap is left to a
 follow-up rather than blocking this item. Either branch records the dismissal on the step it
