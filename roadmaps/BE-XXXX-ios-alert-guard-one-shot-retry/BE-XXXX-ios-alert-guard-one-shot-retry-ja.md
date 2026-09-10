@@ -3,14 +3,14 @@
 # BE-XXXX — ステップ終了時のアラートガードで複数件のアラートを解消できるようにし、当たらなかったタップを許容する
 
 <!-- BE-METADATA -->
-| Field | Value |
+| 項目 | 値 |
 |---|---|
-| Proposal | [BE-XXXX](BE-XXXX-ios-alert-guard-one-shot-retry-ja.md) |
-| Author | [@0x0c](https://github.com/0x0c) |
-| Status | **Proposal** |
-| Tracking issue | 未定（BE 番号の割り当て後に作成） |
-| Topic | Platform support |
-| Related | [BE-0269](../BE-0269-ios-alert-guard-early-wait-intervention/BE-0269-ios-alert-guard-early-wait-intervention-ja.md), [BE-0315](../BE-0315-ios-native-system-alert-handling/BE-0315-ios-native-system-alert-handling-ja.md), [BE-0399](../BE-0399-ios-system-alert-interruption-policy/BE-0399-ios-system-alert-interruption-policy-ja.md), [BE-0402](../BE-0402-run-alert-guard-drop-vision-fallback/BE-0402-run-alert-guard-drop-vision-fallback-ja.md), [BE-0406](../BE-0406-system-alert-declared-prompts/BE-0406-system-alert-declared-prompts-ja.md) |
+| 提案 | [BE-XXXX](BE-XXXX-ios-alert-guard-one-shot-retry-ja.md) |
+| 提案者 | [@0x0c](https://github.com/0x0c) |
+| 状態 | **提案** |
+| トラッキング Issue | [検索](https://github.com/bajutsu-e2e/bajutsu/issues?q=is%3Aissue+label%3Aroadmap-tracking+in%3Atitle+"BE-XXXX") |
+| トピック | Platform support |
+| 関連 | [BE-0269](../BE-0269-ios-alert-guard-early-wait-intervention/BE-0269-ios-alert-guard-early-wait-intervention-ja.md), [BE-0315](../BE-0315-ios-native-system-alert-handling/BE-0315-ios-native-system-alert-handling-ja.md), [BE-0399](../BE-0399-ios-system-alert-interruption-policy/BE-0399-ios-system-alert-interruption-policy-ja.md), [BE-0402](../BE-0402-run-alert-guard-drop-vision-fallback/BE-0402-run-alert-guard-drop-vision-fallback-ja.md), [BE-0406](../BE-0406-system-alert-declared-prompts/BE-0406-system-alert-declared-prompts-ja.md) |
 <!-- /BE-METADATA -->
 
 ## はじめに
@@ -192,7 +192,7 @@ docstring には、シートの登場アニメーションが終わるまでボ�
 
 まだありません。
 
-## 参考文献
+## 参考
 
 - [BE-0269](../BE-0269-ios-alert-guard-early-wait-intervention/BE-0269-ios-alert-guard-early-wait-intervention-ja.md)
   — `wait` 中のガード自身の介入を扱った項目です。iOS のパスワード保存プロンプトが `wait` を止めて
