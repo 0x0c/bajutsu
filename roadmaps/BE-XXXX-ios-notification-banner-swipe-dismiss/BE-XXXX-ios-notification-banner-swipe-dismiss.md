@@ -31,12 +31,12 @@ a banner the scenario never declared.
 ## Motivation
 
 A foreground notification banner can appear at any point in a run, and it can sit directly over the
-element a step is about to tap. The banner has no fixed trigger a scenario can place a check after:
-a push notification's arrival depends on a server, and even a local notification an app schedules for
-itself lands relative to wall-clock time, not relative to any step. A step whose target happens to sit
-under the banner's frame can therefore tap the banner instead of the target, or resolve against
-whichever element XCUITest's own hit-testing picks once the overlap is present — a defect that reads
-as flakiness, since nothing in the run's report records that a banner ever appeared.
+element a step is about to tap. In a real run, the banner has no fixed trigger a scenario can place a
+check after: a push notification's arrival depends on a server, and even a local notification an app
+schedules for itself lands relative to wall-clock time, not relative to any step. A step whose target
+happens to sit under the banner's frame can therefore tap the banner instead of the target, or resolve
+against whichever element XCUITest's own hit-testing picks once the overlap is present — a defect that
+reads as flakiness, since nothing in the run's report records that a banner ever appeared.
 
 The gap is structural, not incidental. A process outside the application under test draws the banner,
 the same separation BE-0315's motivation measured for a SpringBoard alert, so the `interrupts` field's
@@ -48,11 +48,11 @@ gesture this proposal needs already exists in Bajutsu — `swipe` (documented in
 [`docs/scenarios.md`](../../docs/scenarios.md) in both a directional and a coordinate form) — but no
 existing mechanism knows where the banner is or when to reach for it.
 
-A later reader can tell whether this proposal arrived by running a scenario that arms a local
-notification to go off mid-flow, timed so the banner's measured frame overlaps the scenario's next tap
-target. Before this proposal, that tap is unreliable: where it lands depends on how the two frames
-overlap at the moment XCUITest resolves it. After this proposal, the banner clears itself before the
-tap executes, and the tap lands on the target every time.
+A later reader can tell whether this proposal arrived by running a scenario that raises the banner with
+a `push` step immediately before a tap, so the banner's measured frame overlaps that tap's target by
+construction rather than by timing. Before this proposal, that tap is unreliable: where it lands
+depends on how the two frames overlap at the moment XCUITest resolves it. After this proposal, the
+guard clears the banner before the tap executes, and the tap lands on the target.
 
 ## Detailed design
 
@@ -72,7 +72,12 @@ units 2 through 4 currently leave open.
 
 Add a driver method that reports whether a notification banner is currently showing and, when one is,
 the on-screen frame the swipe in Unit 3 needs. This mirrors the shape of BE-0315's
-`system_alert_labels()`: a thin, non-blocking read that reports a fact and decides nothing.
+`system_alert_labels()`: a thin, non-blocking read that reports a fact and decides nothing. The method
+sits behind its own capability token, the way `HANDLE_SYSTEM_ALERT` gates BE-0315's query: only the iOS
+XCUITest backend advertises it at first, and a backend without it reports absence rather than an error.
+When more than one banner is on screen at once, the query resolves to exactly one through the
+`resolve_unique` / `AmbiguousSelector` contract (prime directive 2), failing loudly on more than one
+match rather than swiping whichever banner XCUITest happens to report first.
 
 ### Unit 3 — a deterministic swipe-dismiss action
 
@@ -80,6 +85,8 @@ Add a driver action that swipes the banner away, anchored to the frame Unit 2 re
 fixed screen coordinate, so the gesture holds across device sizes. The direction matches how a person
 dismisses a real banner: upward, off the top of the screen. The action reuses the coordinate machinery
 `swipe`'s existing driver implementation already has, rather than adding a second gesture primitive.
+Because Unit 2 already resolves the presence query to at most one banner, the action always dismisses
+the single frame it receives; it never chooses among several.
 
 ### Unit 4 — reactive wiring
 
@@ -88,30 +95,36 @@ interval BE-0315 already established for the SpringBoard probe, and dismisses th
 Unit 3's action the moment one is found. When Unit 1 finds that XCUITest's own interruption monitor
 treats an overlapping banner the way it treats a system alert, the guard answers through that monitor
 too, mirroring how BE-0399's monitor answers an interrupting alert. When Unit 1 finds otherwise, a
-poll-and-clear immediately before each act step's own actuation is the fallback. The toggle follows the
-same config-then-scenario, flag-overridable precedence
-([BE-0177](../BE-0177-run-behavior-target-config/BE-0177-run-behavior-target-config.md)) `dismissAlerts`
-already established.
+poll-and-clear immediately before each act step's own actuation is the fallback. Either branch records
+the dismissal on the step it interrupted, folded into that step's `AlertEvent`s the same way BE-0399's
+drained labels are, so a banner dismissal reaches the run's report instead of staying silent. The guard
+is armed only on a backend that advertises the capability Unit 2 and Unit 3 gate their driver calls
+behind; on a backend without it, the toggle has no effect and today's behavior is unchanged. The toggle
+follows the same config-then-scenario, flag-overridable precedence
+([BE-0177](../BE-0177-run-behavior-target-config/BE-0177-run-behavior-target-config.md))
+`systemAlertHandling` already established.
 
 ### Unit 5 — showcase fixture and on-device verification
 
-Add a showcase scenario that arms a local notification to go off mid-flow, timed so the banner's measured
-frame overlaps the scenario's next tap target, and assert that the tap still lands on that target. The
-off-Simulator gate cannot prove a native swipe against a real banner; the unit that lands the driver
-methods must exercise this scenario on a booted Simulator.
+Add a showcase scenario that raises the banner with a `push` step
+([`docs/scenarios.md`](../../docs/scenarios.md), `simctl push`) placed immediately before the tap under
+test, so the banner's arrival is pinned to a step boundary rather than to wall-clock timing, and assert
+that the tap still lands on that target. The off-Simulator gate cannot prove a native swipe against a
+real banner; the unit that lands the driver methods must exercise this scenario on a booted Simulator.
 
 ### Unit 6 — docs
 
 Document the new toggle in [`docs/scenarios.md`](../../docs/scenarios.md) and its `docs/ja/` mirror,
-alongside `interrupts` and `dismissAlerts`/`systemAlertHandling`, extending BE-0314's existing
-comparison of when to reach for each mechanism.
+alongside `interrupts` and `systemAlertHandling`, extending BE-0314's existing comparison of when to
+reach for each mechanism.
 
 ### Unit 7 — tests
 
 Schema parse/validate for the new toggle; a fake driver whose presence query flips between polls; the
-guard dismissing the banner before a step's own actuation; the config-then-scenario precedence
-layering; and, if Unit 1 finds the interruption-monitor path is needed, coverage for that path the way
-BE-0399's own test suite covers the alert monitor.
+guard dismissing the banner before a step's own actuation; the dismissal reaching the step's
+`AlertEvent`s; the capability gate leaving a backend without it unchanged; the config-then-scenario
+precedence layering; and, if Unit 1 finds the interruption-monitor path is needed, coverage for that
+path the way BE-0399's own test suite covers the alert monitor.
 
 ### Prime directives preserved
 
@@ -170,7 +183,7 @@ BE-0399's own test suite covers the alert monitor.
 - [BE-0177](../BE-0177-run-behavior-target-config/BE-0177-run-behavior-target-config.md) — the
   config-then-scenario, flag-overridable precedence Unit 4's toggle follows.
 - [`docs/scenarios.md`](../../docs/scenarios.md) — the existing `swipe` step whose coordinate machinery
-  Unit 3 reuses.
+  Unit 3 reuses, and the `push` step Unit 5's fixture uses to raise the banner deterministically.
 - Apple, [`XCTestCase.addUIInterruptionMonitor(withDescription:handler:)`](https://developer.apple.com/documentation/xctest/xctestcase/adduiinterruptionmonitor(withdescription:handler:)) —
   the monitor Unit 4's interruption path would reuse, cited in BE-0314 and BE-0399 as the same prior
   art.
