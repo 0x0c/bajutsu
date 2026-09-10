@@ -60,13 +60,17 @@ guard clears the banner before the tap executes, and the tap lands on the target
 
 Before any driver method is added, measure how a foreground notification banner actually appears to
 XCUITest, on a booted Simulator, across the iOS versions the existing system-alert work already covers
-(18.6, 26.3, 26.4, 26.5). Three facts decide the shape of every later unit: which process's element
+(18.6, 26.3, 26.4, 26.5). Four facts decide the shape of every later unit: which process's element
 tree exposes the banner — SpringBoard, as with a system alert, or a distinct process; what frame or
-identifier it offers, if any; and whether an ordinary `tap`/`type` step already receives XCUITest's own
+identifier it offers, if any; whether an ordinary `tap`/`type` step already receives XCUITest's own
 interruption-monitor treatment when its target sits under the banner's frame, the treatment BE-0399
 measured for a system alert, or whether hit-testing instead resolves the overlap silently, with no
-interruption dispatched at all. This unit produces no code; the measurement fixes the design questions
-units 2 through 4 currently leave open.
+interruption dispatched at all; and, only if the monitor is invoked, whether a swipe issued from inside
+its handler can be verified cleared by XCUITest before the handler returns. BE-0399's own motivation
+measured what happens when a monitor claims an interruption it cannot confirm cleared: XCUITest
+re-invokes the monitor on every following interaction, and that looped until the runner died in every
+measured attempt. This unit produces no code; the measurement fixes the design questions Unit 4
+currently leaves open.
 
 ### Unit 2 — a deterministic presence query
 
@@ -92,15 +96,21 @@ the single frame it receives; it never chooses among several.
 
 A config- and scenario-level toggle arms a guard that polls Unit 2's presence query on the bounded
 interval BE-0315 already established for the SpringBoard probe, and dismisses the banner through
-Unit 3's action the moment one is found. When Unit 1 finds that XCUITest's own interruption monitor
-treats an overlapping banner the way it treats a system alert, the guard answers through that monitor
-too, mirroring how BE-0399's monitor answers an interrupting alert. When Unit 1 finds otherwise, a
-poll-and-clear immediately before each act step's own actuation is the fallback. Either branch records
-the dismissal on the step it interrupted, folded into that step's `AlertEvent`s the same way BE-0399's
-drained labels are, so a banner dismissal reaches the run's report instead of staying silent. The guard
-is armed only on a backend that advertises the capability Unit 2 and Unit 3 gate their driver calls
-behind; on a backend without it, the toggle has no effect and today's behavior is unchanged. The toggle
-follows the same config-then-scenario, flag-overridable precedence
+Unit 3's action the moment one is found. Unit 1's fourth measurement decides which of two paths the
+guard takes, and the choice is not symmetric: only one of them is safe to take unconditionally. When
+Unit 1 confirms that a swipe issued from inside XCUITest's interruption-monitor handler is verified
+cleared before the handler returns, the guard answers through that monitor, mirroring how BE-0399's
+monitor answers an interrupting alert. In every other case — including when Unit 1 cannot confirm that
+guarantee — the guard instead polls and clears the banner immediately before each act step's own
+actuation. That fallback carries a known, accepted limitation: a banner arriving in the gap between the
+poll and the tap's own synthesis can still intercept the tap, so this item does not claim the tap always
+lands, only that it lands far more reliably than today. Closing that residual gap is left to a
+follow-up rather than blocking this item. Either branch records the dismissal on the step it
+interrupted, folded into that step's `AlertEvent`s the same way BE-0399's drained labels are, so a
+banner dismissal reaches the run's report instead of staying silent. The guard is armed only on a
+backend that advertises the capability Unit 2 and Unit 3 gate their driver calls behind; on a backend
+without it, the toggle has no effect and today's behavior is unchanged. The toggle follows the same
+config-then-scenario, flag-overridable precedence
 ([BE-0177](../BE-0177-run-behavior-target-config/BE-0177-run-behavior-target-config.md))
 `systemAlertHandling` already established.
 
@@ -166,6 +176,8 @@ path the way BE-0399's own test suite covers the alert monitor.
 - [ ] Unit 5 — showcase fixture and on-device verification.
 - [ ] Unit 6 — docs (`docs/scenarios.md` + ja).
 - [ ] Unit 7 — tests.
+- [ ] Follow-up — close the poll-and-clear fallback's residual race window, once Unit 1's measurement
+      settles which path Unit 4 takes.
 
 ## References
 
