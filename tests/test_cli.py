@@ -615,6 +615,63 @@ def test_run_zip_writes_artifact_after_the_verdict(
     assert (manifest.parent.parent / f"{manifest.parent.name}.zip").is_file()
 
 
+def test_run_trace_driver_flag_reaches_run_and_report(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # `--trace-driver` (BE-0415) threads through `_RunPlan` to `run_and_report`'s own `trace_driver`
+    # kwarg. `_stub_execution` replaces `run_and_report` outright (see its own docstring), so the
+    # only way to prove the flag actually reaches it — rather than just being parsed — is to swap in
+    # a fake that records its kwargs, the way `tests/runner/test_pipeline.py`'s own trace_driver
+    # tests prove the pipeline side end to end without any CLI stubbing.
+    from bajutsu.common.orchestrator import RunResult
+
+    manifest = _manifest_at(tmp_path)
+    calls: list[dict[str, Any]] = []
+
+    def _fake_run_and_report(*_args: object, **kwargs: object) -> tuple[list[RunResult], Path]:
+        calls.append(kwargs)
+        return [RunResult("demo", True, [])], manifest
+
+    monkeypatch.setattr(
+        "bajutsu.common.backend_cli.simctl.resolve_udid", lambda u, run=None: "FAKE-UDID"
+    )
+    monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
+    monkeypatch.setattr("bajutsu.run.cli.device_pool", lambda *a, **k: (object(), lambda: None))
+    monkeypatch.setattr("bajutsu.run.cli.run_and_report", _fake_run_and_report)
+
+    cfg, scn = _fake_run(tmp_path)
+    r = runner.invoke(
+        app, _run_argv(cfg, scn, tmp_path, "--trace-driver", "--no-system-alert-handling")
+    )
+    assert r.exit_code == 0
+    assert calls[0]["trace_driver"] is True
+
+
+def test_run_without_trace_driver_flag_defaults_to_off(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from bajutsu.common.orchestrator import RunResult
+
+    manifest = _manifest_at(tmp_path)
+    calls: list[dict[str, Any]] = []
+
+    def _fake_run_and_report(*_args: object, **kwargs: object) -> tuple[list[RunResult], Path]:
+        calls.append(kwargs)
+        return [RunResult("demo", True, [])], manifest
+
+    monkeypatch.setattr(
+        "bajutsu.common.backend_cli.simctl.resolve_udid", lambda u, run=None: "FAKE-UDID"
+    )
+    monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
+    monkeypatch.setattr("bajutsu.run.cli.device_pool", lambda *a, **k: (object(), lambda: None))
+    monkeypatch.setattr("bajutsu.run.cli.run_and_report", _fake_run_and_report)
+
+    cfg, scn = _fake_run(tmp_path)
+    r = runner.invoke(app, _run_argv(cfg, scn, tmp_path, "--no-system-alert-handling"))
+    assert r.exit_code == 0
+    assert calls[0]["trace_driver"] is False
+
+
 @pytest.mark.parametrize(
     ("provider", "key"),
     [(None, None), (None, "sk-test"), ("bedrock", None)],

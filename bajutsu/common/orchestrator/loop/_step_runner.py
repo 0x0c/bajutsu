@@ -9,7 +9,7 @@ from functools import partial
 
 from bajutsu.common.assertions import AssertionResult
 from bajutsu.common.cancellation import RunCancelled
-from bajutsu.common.drivers import base
+from bajutsu.common.drivers import base, tracing
 from bajutsu.common.drivers.webview import WebContextDriver
 from bajutsu.common.evidence import Artifact, NullSink, intervals, start_after_screenshot
 from bajutsu.common.orchestrator.actions import _action_of, _step_label
@@ -104,13 +104,17 @@ class _StepRunner:
         # from `video_anchor_s` at render time, so it stays recomputable after the run.
         outcome.started_at = start + self.cfg.wall_offset_s
 
-        if kind == "if_":
-            return self._handle_if(step, active_driver, idx, kind, outcome, start)
-        if kind == "for_each":
-            return self._handle_for_each(step, active_driver, idx, kind, outcome, start)
-        if kind == "web":
-            return self._handle_web(step, active_driver, idx, kind, outcome, start)
-        return self._handle_action(step, active_driver, idx, kind, outcome, start)
+        # `bajutsu run --trace-driver` (BE-0415): attributes every driver/transport/subprocess
+        # record made while this step runs to `f"{idx:02d}:{kind}"`, matching `trace_run.py`'s own
+        # step key, and a no-op when no trace is open.
+        with tracing.traced_step(f"{idx:02d}:{kind}"):
+            if kind == "if_":
+                return self._handle_if(step, active_driver, idx, kind, outcome, start)
+            if kind == "for_each":
+                return self._handle_for_each(step, active_driver, idx, kind, outcome, start)
+            if kind == "web":
+                return self._handle_web(step, active_driver, idx, kind, outcome, start)
+            return self._handle_action(step, active_driver, idx, kind, outcome, start)
 
     def _drain_step_interruptions(self, driver: base.Driver, outcome: StepOutcome) -> None:
         """Drain what interrupted this step, and fail it unconditionally on an undeclared one.

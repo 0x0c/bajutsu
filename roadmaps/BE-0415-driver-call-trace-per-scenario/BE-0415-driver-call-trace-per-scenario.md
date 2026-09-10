@@ -7,8 +7,9 @@
 |---|---|
 | Proposal | [BE-0415](BE-0415-driver-call-trace-per-scenario.md) |
 | Author | [@0x0c](https://github.com/0x0c) |
-| Status | **Proposal** |
+| Status | **Implemented** |
 | Tracking issue | [Search](https://github.com/bajutsu-e2e/bajutsu/issues?q=is%3Aissue+label%3Aroadmap-tracking+in%3Atitle+"BE-0415") |
+| Implementing PR | [#1966](https://github.com/bajutsu-e2e/bajutsu/pull/1966) |
 | Topic | Driver & backend architecture |
 | Related | [BE-0407](../BE-0407-step-latency-driver-internal-tuning/BE-0407-step-latency-driver-internal-tuning.md) |
 <!-- /BE-METADATA -->
@@ -98,12 +99,16 @@ Three categories, matching what actually varies host-device round trips within o
   (`adb_driver.py:1148,1159,1190`). iOS's `simctl`/`xcodebuild` process spawns happen once at device
   lease, before any scenario's steps run, so they carry no per-step signal and are not measured.
 
-Every record carries `{category, step, name, started_at, elapsed_s}`: `step` is the step index and
-kind (`f"{i:02d}:{kind}"`, matching `trace_run.py`'s own key) the call happened during, `started_at`
-is a wall-clock Unix timestamp (so a record can be cross-referenced against `device.log` or the
-step's own `started_at` in `manifest.json`), and `elapsed_s` is the call's own duration. A
-`transport` record for a POST round trip carries one further field, `response` — the small
-structured outcome described above — that a GET (a read) never carries.
+Every record carries `{category, step, name, started_at, elapsed_s, attempt}`: `step` is the step
+index and kind (`f"{i:02d}:{kind}"`, matching `trace_run.py`'s own key) the call happened during,
+`started_at` is a wall-clock Unix timestamp (so a record can be cross-referenced against
+`device.log` or the step's own `started_at` in `manifest.json`), `elapsed_s` is the call's own
+duration, and `attempt` is which crash-recovery attempt (1 for the first) made it — one
+`driver_trace.json` spans every attempt a scenario takes, so a step key alone cannot tell a
+crashed attempt's records apart from the one that recovered. Every `steps` entry carries an
+`attempt` too, for the same reason. A `transport` record for a POST round trip carries one further
+field, `response` — the small structured outcome described above — that a GET (a read) never
+carries.
 
 ### Composition over monkey-patching
 
@@ -216,10 +221,10 @@ itself:
 ```json
 {
   "scenario": "<scenario name>",
-  "steps": [{"step": "00:tap", "wall_s": 1.02}],
+  "steps": [{"step": "00:tap", "wall_s": 1.02, "attempt": 1}],
   "records": [
-    {"category": "driver", "step": "00:tap", "name": "tap", "started_at": 1234567890.1, "elapsed_s": 0.69},
-    {"category": "transport", "step": "00:tap", "name": "POST /tap", "started_at": 1234567890.1, "elapsed_s": 0.62, "response": {"status": "ok"}}
+    {"category": "driver", "step": "00:tap", "name": "tap", "started_at": 1234567890.1, "elapsed_s": 0.69, "attempt": 1},
+    {"category": "transport", "step": "00:tap", "name": "POST /tap", "started_at": 1234567890.1, "elapsed_s": 0.62, "response": {"status": "ok"}, "attempt": 1}
   ]
 }
 ```
@@ -245,31 +250,43 @@ beyond the flag check itself.
 > *Detailed design* (one box per unit of work); the log records what changed and when
 > (oldest first), linking the PRs.
 
-- [ ] Unit 1 — `TracingDriver`, a `base.Driver`-conforming delegating proxy that declares no
-      protocol methods of its own (`__getattr__` only), timing a call only when the wrapped driver
-      actually has it, so `isinstance` against a capability protocol (`InterruptionPolicyTarget`,
-      `SettledReadProvider`, …) still reads the wrapped driver's real capability set.
-- [ ] Unit 2 — The shared thread-local trace context `make_driver` and `AdbDriver`'s `run=` wrap
-      consult, set by unit 6's `_ScenarioRunner.run_one` hook.
-- [ ] Unit 3 — `transport`-category timing on iOS: a new optional constructor argument on
-      `XcuitestDriver`, wrapping `self._transport` a second time alongside the existing
-      `_tracking_transport` wrap, recording `_Reply.status` for a POST; `backends.make_driver`'s
-      `xcuitest` branch passes it when unit 2's context says tracing is on.
-- [ ] Unit 4 — `transport`- and `subprocess`-category timing on Android, both inside
-      `backends.make_driver`'s `adb` branch: wrap `fetch_hierarchy` / `fetch_clock` / `act`
-      (`transport`, the `act` wrap also recording `ActOutcome.acted` / `.published_mark`) and pass a
-      timed `adb.real_run` as `AdbDriver`'s `run=` (`subprocess`); also
-      substitute `AdbDriver._run_text`'s class-level attribute for the one call `run=` does not
-      reach. No monkey-patch of `subprocess` in any module.
-- [ ] Unit 5 — The `driver`-category wrap: `device_pool`'s `lease()` closure wraps the value
-      `launch_driver(...)` returns in a `TracingDriver`, before storing it on `Lease.driver`
-      (teardown never reads that argument, confirmed in Detailed design unit 5).
-- [ ] Unit 6 — Scenario and step boundary hooks in `_ScenarioRunner.run_one` and
+- [x] Unit 1 — `TracingDriver`, a `base.Driver`-conforming delegating proxy. It installs every
+      member of every capability protocol the wrapped driver actually satisfies as a real instance
+      attribute (derived via `typing.get_protocol_members`), keeping `__getattr__` only as a
+      fallback: an `__getattr__`-only proxy — this item's original premise — can never pass a
+      *positive* `isinstance` check, because a `@runtime_checkable` protocol resolves through
+      `inspect.getattr_static`, which never calls `__getattr__`. `isinstance` against a capability
+      protocol (`InterruptionPolicyTarget`, `SettledReadProvider`, …) still reads the wrapped
+      driver's real capability set, in both directions.
+- [x] Unit 2 — The shared trace context `XcuitestDriver`'s and `AdbDriver`'s own wraps consult, set
+      by unit 6's `_ScenarioRunner.run_one` hook. A `contextvars.ContextVar` rather than a
+      `threading.local`, matching this repo's existing ambient state (`analytics/ledger`,
+      `serve/oplog`) and staying correct under `ThreadPoolExecutor` worker reuse.
+- [x] Unit 3 — `transport`-category timing on iOS, inside `XcuitestDriver.__init__` itself (checked
+      once, at construction, against whether a trace is already open): wraps `self._transport` a
+      second time alongside the existing `_tracking_transport` wrap, recording `_Reply.status` for
+      a POST.
+- [x] Unit 4 — `transport`- and `subprocess`-category timing on Android, inside `AdbDriver.__init__`
+      itself (same construction-time check as unit 3): wraps `fetch_hierarchy` / `fetch_clock` /
+      `act` (`transport`, the `act` wrap also recording `ActOutcome.acted` / `.published_mark`) and
+      the `run` callable (`subprocess`); `_run_text` is a plain `@staticmethod`, so the same wrap
+      cannot reach it — it reads the ambient trace context directly instead. No monkey-patch of
+      `subprocess` in any module.
+- [x] Unit 5 — The `driver`-category wrap: `_ScenarioRunner._run_one_impl` mutates the already-
+      returned `Lease.driver` in place with a `TracingDriver`, right after each lease call succeeds
+      — not inside `device_pool`'s `lease()` closure, whose warm-driver cache stores the raw driver
+      separately and would double-wrap it on reuse.
+- [x] Unit 6 — Scenario and step boundary hooks in `_ScenarioRunner.run_one` and
       `_StepRunner._run_one`: open/flush the trace context (unit 2) and `driver_trace.json` write
-      through `RunArtifactWriter.write_json`.
-- [ ] Unit 7 — The `bajutsu run --trace-driver` CLI flag, threaded through `_RunPlan` to
+      through `RunArtifactWriter.write_json`, in a `finally` so a scenario that raises still leaves
+      its partial trace on disk; an `except OSError` around that write logs a warning instead of
+      raising, so a write that raises can't end the run either — diagnostic only, like `--zip` /
+      `--evidence-store`. `TraceContext` also carries an `attempt` number, stamped once per
+      crash-recovery retry, so a recovered scenario's trace does not merge
+      the crashed attempt's records onto the same step keys as the one that passed.
+- [x] Unit 7 — The `bajutsu run --trace-driver` CLI flag, threaded through `_RunPlan` to
       `_ScenarioRunner`.
-- [ ] Unit 8 — Tests: a `TracingDriver` unit test against `FakeDriver`, including that wrapping
+- [x] Unit 8 — Tests: a `TracingDriver` unit test against `FakeDriver`, including that wrapping
       preserves a capability-protocol negative (`isinstance(traced, base.SettledReadProvider)`
       stays False); an `XcuitestDriver` built with a stub `transport`, asserting a `transport`
       record per round trip; an `AdbDriver` built with a fake `run`, asserting a `subprocess`
@@ -277,8 +294,24 @@ beyond the flag check itself.
       written file's shape; a no-flag run asserting no `driver_trace.json` is written. The `fake`
       backend alone would leave units 3–4 (the iOS and Android wraps) with no fast-suite coverage,
       since it produces no `transport` or `subprocess` records.
-- [ ] Unit 9 — Documentation: the CLI reference for `bajutsu run`'s flags, in both languages, gains
+- [x] Unit 9 — Documentation: the CLI reference for `bajutsu run`'s flags, in both languages, gains
       `--trace-driver`.
+
+Log:
+
+- [#1966](https://github.com/bajutsu-e2e/bajutsu/pull/1966) — All 9 units, completing the item.
+  `TracingDriver` (unit 1) installs every member of every capability protocol the wrapped driver
+  actually satisfies as a real instance attribute, derived via `typing.get_protocol_members`, rather
+  than the `__getattr__`-only proxy this item's own text describes — `isinstance()` against a
+  `@runtime_checkable` protocol resolves via `inspect.getattr_static`, which never calls
+  `__getattr__`, so that design could never pass a positive `isinstance` check for any protocol. The
+  shared trace context (unit 2) is a `contextvars.ContextVar`, not `threading.local`, matching this
+  repo's existing ambient-state convention. The `driver`-category wrap (unit 5) happens in
+  `pipeline.py`'s `_run_one_impl`, mutating the returned `Lease.driver`, rather than inside
+  `pool.py`'s `device_pool().lease()` closure — that closure's warm-driver cache stores the raw
+  driver separately, so wrapping there would leak a wrapped driver into it and double-wrap on reuse.
+  Units 3–4's transport/subprocess timing lives inside `XcuitestDriver`/`AdbDriver`'s own
+  constructors rather than `backends.make_driver`'s branches.
 
 ## References
 
