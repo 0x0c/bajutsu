@@ -324,7 +324,6 @@ UI 操作は **最も安定する選択手段から順に試し、成立した�
 | simctl / device | `xcrun simctl` 可用、`device` / `udid` が boot 可能 |
 | app | `bundleId` がインストール済み・起動可能 |
 | deeplink | `deeplinkScheme` が Info.plist に登録（openurl で確認） |
-| mock | `mockServer` 設定時、起動 & port 到達可能 |
 | config | `targets.<name>` が pydantic スキーマ妥当 |
 
 **(2) §7 充足度スコア（`query()` 解析、決定的）**：操作可能要素（traits ∈ button / link / textField / searchField 等）を母数に測ります。
