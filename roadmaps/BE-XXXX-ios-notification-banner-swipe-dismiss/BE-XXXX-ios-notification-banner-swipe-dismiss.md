@@ -60,19 +60,26 @@ guard clears the banner before the tap executes, and the tap lands on the target
 
 Before any driver method is added, measure how a foreground notification banner actually appears to
 XCUITest, on a booted Simulator, across the iOS versions the existing system-alert work already covers
-(18.6, 26.3, 26.4, 26.5). Four facts decide the shape of every later unit: which process's element
+(18.6, 26.3, 26.4, 26.5). Five facts decide the shape of every later unit: which process's element
 tree exposes the banner — SpringBoard, as with a system alert, or a distinct process; what frame or
 identifier it offers, if any; whether an ordinary `tap`/`type` step already receives XCUITest's own
 interruption-monitor treatment when its target sits under the banner's frame, the treatment BE-0399
 measured for a system alert, or whether hit-testing instead resolves the overlap silently, with no
-interruption dispatched at all; and, only if the monitor is invoked, whether a swipe issued from inside
-its handler can be confirmed to have cleared the banner before the handler returns `true` — XCUITest
-checks the interruption only after the handler returns, and re-invokes the monitor when it finds the
-banner still up. BE-0399's own motivation
-measured what happens when a monitor claims an interruption it cannot confirm cleared: XCUITest
-re-invokes the monitor on every following interaction, and that looped until the runner died in every
-measured attempt. This unit produces no code; the measurement fixes the design questions Unit 4
-currently leaves open.
+interruption dispatched at all; only if the monitor is invoked, whether a swipe issued from inside its
+handler can be confirmed to have cleared the banner before the handler returns `true` — XCUITest checks
+the interruption only after the handler returns, and re-invokes the monitor when it finds the banner
+still up; and a fifth, independent of this proposal, detailed below.
+
+BE-0399's monitor is already installed on every run with `systemAlertHandling` on, and its decline of
+an interruption it cannot match hands the alert to XCUITest's own default handler, which clears it by
+pressing the alert's default button. A banner has no button for that handler to press. So, if the third
+fact confirms a banner reaches the monitor, the fifth fact is whether that already reproduces BE-0399's
+own measured reinvocation loop today, with no code from this proposal involved: a monitor that claims
+an interruption it cannot confirm cleared gets re-invoked on every following interaction, and that
+looped until the runner died in every attempt BE-0399 measured. A confirmed loop there is an existing
+defect this item did not create, and it should be reported on its own regardless of whether this item
+proceeds. This unit produces no code; the measurement fixes the design questions Unit 4 currently
+leaves open.
 
 ### Unit 2 — a deterministic presence query
 
@@ -81,9 +88,10 @@ the on-screen frame the swipe in Unit 3 needs. This mirrors the shape of BE-0315
 `system_alert_labels()`: a thin, non-blocking read that reports a fact and decides nothing. The method
 sits behind its own capability token, the way `HANDLE_SYSTEM_ALERT` gates BE-0315's query: only the iOS
 XCUITest backend advertises it at first, and a backend without it reports absence rather than an error.
-When more than one banner is on screen at once, the query resolves to exactly one through the
-`resolve_unique` / `AmbiguousSelector` contract (prime directive 2), failing loudly on more than one
-match rather than swiping whichever banner XCUITest happens to report first.
+When more than one banner is on screen at once, the query reports the topmost one by its measured
+frame — a stated, deterministic order (prime directive 2) rather than whichever banner XCUITest happens
+to report first — so the guard in Unit 4 can dismiss it and re-poll for the next, rather than aborting
+a run over an interruption it can clear.
 
 ### Unit 3 — a deterministic swipe-dismiss action
 
@@ -91,8 +99,9 @@ Add a driver action that swipes the banner away, anchored to the frame Unit 2 re
 fixed screen coordinate, so the gesture holds across device sizes. The direction matches how a person
 dismisses a real banner: upward, off the top of the screen. The action reuses the coordinate machinery
 `swipe`'s existing driver implementation already has, rather than adding a second gesture primitive.
-Because Unit 2 already resolves the presence query to at most one banner, the action always dismisses
-the single frame it receives; it never chooses among several.
+Because Unit 2 always reports at most one banner — the topmost, when several are stacked — the action
+always dismisses the single frame it receives; a guard that finds more than one banner clears them one
+poll at a time rather than in a single action.
 
 ### Unit 4 — reactive wiring
 
