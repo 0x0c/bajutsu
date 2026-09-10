@@ -94,7 +94,8 @@ def _matrix(results: list[RunResult]) -> dict[str, object] | None:
     *within each engine's own ordering* — a `--browsers` pass runs every engine over the identical
     ordered scenario list, so the Nth "login" on chromium and the Nth "login" on webkit are the same
     source scenario. The first occurrence of a name keeps the bare name as its row label; a later
-    occurrence gets a "(N)" suffix so it gets its own row instead of colliding with the first.
+    occurrence gets a "(N)" suffix, bumped past any label already taken — including one a *different*
+    scenario's literal name happens to equal — so it never collides with an already-assigned row.
     """
     if not any(r.engine for r in results):
         return None
@@ -102,7 +103,8 @@ def _matrix(results: list[RunResult]) -> dict[str, object] | None:
 
     occurrence: dict[tuple[str, str], int] = {}  # (engine, name) -> next occurrence index
     label_of_occurrence: dict[tuple[str, int], str] = {}  # (name, occurrence index) -> row label
-    name_count: dict[str, int] = {}  # name -> distinct occurrences seen so far
+    used_labels: set[str] = set()  # every label already handed out, so a synthesized "(N)" suffix
+    # can't collide with another scenario whose literal name happens to equal that suffixed string
     scenarios: list[str] = []
     cells: dict[str, dict[str, dict[str, object]]] = {}
     for r in results:
@@ -111,9 +113,12 @@ def _matrix(results: list[RunResult]) -> dict[str, object] | None:
         occurrence_key = (r.scenario, idx)
         label = label_of_occurrence.get(occurrence_key)
         if label is None:
-            name_count[r.scenario] = name_count.get(r.scenario, 0) + 1
-            n = name_count[r.scenario]
-            label = r.scenario if n == 1 else f"{r.scenario} ({n})"
+            label = r.scenario
+            n = 1
+            while label in used_labels:
+                n += 1
+                label = f"{r.scenario} ({n})"
+            used_labels.add(label)
             label_of_occurrence[occurrence_key] = label
             scenarios.append(label)
             cells[label] = {}

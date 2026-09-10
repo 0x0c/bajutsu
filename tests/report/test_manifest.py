@@ -163,6 +163,24 @@ def test_manifest_matrix_keeps_both_cells_for_same_named_scenarios() -> None:
     assert cells["login (2)"]["webkit"]["failure"] == "failed on webkit"
 
 
+def test_manifest_matrix_disambiguated_label_skips_a_colliding_literal_name() -> None:
+    # A third scenario whose literal name is "login (2)" must not collide with the synthesized
+    # label already handed to the second "login" — that would silently wipe the second "login"'s
+    # cell and render two identical "login (2)" rows (both bugs the disambiguation exists to avoid).
+    results = [
+        _engine_result("login", "chromium", ok=True),
+        _engine_result("login", "chromium", ok=False),
+        _engine_result("login (2)", "chromium", ok=True),
+    ]
+    m = manifest_dict("r", results)
+    matrix = _json_obj(m["matrix"])
+    assert matrix["scenarios"] == ["login", "login (2)", "login (2) (2)"]
+    cells = matrix["cells"]
+    assert cells["login"]["chromium"]["ok"] is True
+    assert cells["login (2)"]["chromium"]["ok"] is False
+    assert cells["login (2) (2)"]["chromium"]["ok"] is True
+
+
 def test_manifest_matrix_keeps_flat_engine_tagged_scenarios() -> None:
     # The v1 shape is kept: `scenarios` stays the flat, engine-tagged result list.
     results = [
