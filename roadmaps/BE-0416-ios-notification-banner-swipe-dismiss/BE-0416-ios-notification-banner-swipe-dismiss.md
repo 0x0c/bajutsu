@@ -1,14 +1,14 @@
-**English** · [日本語](BE-XXXX-ios-notification-banner-swipe-dismiss-ja.md)
+**English** · [日本語](BE-0416-ios-notification-banner-swipe-dismiss-ja.md)
 
-# BE-XXXX — Swipe away an interrupting iOS notification banner reactively
+# BE-0416 — Swipe away an interrupting iOS notification banner reactively
 
 <!-- BE-METADATA -->
 | Field | Value |
 |---|---|
-| Proposal | [BE-XXXX](BE-XXXX-ios-notification-banner-swipe-dismiss.md) |
+| Proposal | [BE-0416](BE-0416-ios-notification-banner-swipe-dismiss.md) |
 | Author | [@0x0c](https://github.com/0x0c) |
 | Status | **Proposal** |
-| Tracking issue | [Search](https://github.com/bajutsu-e2e/bajutsu/issues?q=is%3Aissue+label%3Aroadmap-tracking+in%3Atitle+"BE-XXXX") |
+| Tracking issue | [Search](https://github.com/bajutsu-e2e/bajutsu/issues?q=is%3Aissue+label%3Aroadmap-tracking+in%3Atitle+"BE-0416") |
 | Topic | Platform support |
 | Related | [BE-0177](../BE-0177-run-behavior-target-config/BE-0177-run-behavior-target-config.md), [BE-0314](../BE-0314-scenario-interrupt-handlers/BE-0314-scenario-interrupt-handlers.md), [BE-0315](../BE-0315-ios-native-system-alert-handling/BE-0315-ios-native-system-alert-handling.md), [BE-0399](../BE-0399-ios-system-alert-interruption-policy/BE-0399-ios-system-alert-interruption-policy.md), [BE-0406](../BE-0406-system-alert-declared-prompts/BE-0406-system-alert-declared-prompts.md) |
 <!-- /BE-METADATA -->
