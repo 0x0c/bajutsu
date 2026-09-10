@@ -1,14 +1,14 @@
-[English](BE-XXXX-ci-oidc-machine-identity.md) · **日本語**
+[English](BE-0414-ci-oidc-machine-identity.md) · **日本語**
 
-# BE-XXXX — GitHub Actions の OIDC トークンで CI のジョブを serve に認証させる
+# BE-0414 — GitHub Actions の OIDC トークンで CI のジョブを serve に認証させる
 
 <!-- BE-METADATA -->
 | 項目 | 値 |
 |---|---|
-| 提案 | [BE-XXXX](BE-XXXX-ci-oidc-machine-identity-ja.md) |
+| 提案 | [BE-0414](BE-0414-ci-oidc-machine-identity-ja.md) |
 | 提案者 | [@paihu](https://github.com/paihu) |
 | 状態 | **提案** |
-| トラッキング Issue | [検索](https://github.com/bajutsu-e2e/bajutsu/issues?q=is%3Aissue+label%3Aroadmap-tracking+in%3Atitle+"BE-XXXX") |
+| トラッキング Issue | [検索](https://github.com/bajutsu-e2e/bajutsu/issues?q=is%3Aissue+label%3Aroadmap-tracking+in%3Atitle+"BE-0414") |
 | トピック | Web UI のホスティング |
 | 関連 | [BE-0313](../BE-0313-github-org-team-rbac/BE-0313-github-org-team-rbac-ja.md)、[BE-0051](../BE-0051-serve-hardening-for-hosting/BE-0051-serve-hardening-for-hosting-ja.md)、[BE-0015](../BE-0015-web-ui-public-hosting/BE-0015-web-ui-public-hosting-ja.md) |
 <!-- /BE-METADATA -->

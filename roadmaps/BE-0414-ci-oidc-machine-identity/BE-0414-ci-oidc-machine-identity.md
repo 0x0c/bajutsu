@@ -1,14 +1,14 @@
-**English** · [日本語](BE-XXXX-ci-oidc-machine-identity-ja.md)
+**English** · [日本語](BE-0414-ci-oidc-machine-identity-ja.md)
 
-# BE-XXXX — Authenticate a CI job to serve with a GitHub Actions OIDC token
+# BE-0414 — Authenticate a CI job to serve with a GitHub Actions OIDC token
 
 <!-- BE-METADATA -->
 | Field | Value |
 |---|---|
-| Proposal | [BE-XXXX](BE-XXXX-ci-oidc-machine-identity.md) |
+| Proposal | [BE-0414](BE-0414-ci-oidc-machine-identity.md) |
 | Author | [@paihu](https://github.com/paihu) |
 | Status | **Proposal** |
-| Tracking issue | [Search](https://github.com/bajutsu-e2e/bajutsu/issues?q=is%3Aissue+label%3Aroadmap-tracking+in%3Atitle+"BE-XXXX") |
+| Tracking issue | [Search](https://github.com/bajutsu-e2e/bajutsu/issues?q=is%3Aissue+label%3Aroadmap-tracking+in%3Atitle+"BE-0414") |
 | Topic | Hosting the web UI |
 | Related | [BE-0313](../BE-0313-github-org-team-rbac/BE-0313-github-org-team-rbac.md), [BE-0051](../BE-0051-serve-hardening-for-hosting/BE-0051-serve-hardening-for-hosting.md), [BE-0015](../BE-0015-web-ui-public-hosting/BE-0015-web-ui-public-hosting.md) |
 <!-- /BE-METADATA -->
