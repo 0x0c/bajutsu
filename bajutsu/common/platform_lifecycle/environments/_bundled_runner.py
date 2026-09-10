@@ -251,6 +251,20 @@ def _bundle_matches(digest: str) -> bool:
     )
 
 
+def bundled_runner_is_stale() -> bool:
+    """Whether a dev checkout's staged bundle no longer matches BajutsuKit's own source.
+
+    Disclosure only (`doctor`'s `xcuitest_runner_summary`) — never rebuilds. True only when this
+    checkout ships BajutsuKit's source (a wheel install has nothing to compare against, so it can
+    never be "stale" in this sense) and a bundle is already staged but was built from a different
+    source tree. A checkout with no staged bundle yet reports False here; `runner_source`'s own "no
+    bundle" line already covers that case.
+    """
+    if not runner_source_present() or bundled_products_dir() is None:
+        return False
+    return not _bundle_matches(source_hash())
+
+
 def ensure_bundled_runner_fresh() -> None:
     """Rebuild the wheel-bundled runner when this checkout's BajutsuKit source has moved past it.
 
