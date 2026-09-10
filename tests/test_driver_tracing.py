@@ -110,7 +110,7 @@ def test_tracing_covers_every_runtime_checkable_protocol_under_drivers() -> None
     import importlib
     import pkgutil
 
-    import bajutsu.common.drivers as drivers_pkg
+    drivers_pkg = importlib.import_module(tracing.__package__)
 
     found: set[type] = set()
     for _finder, name, _ispkg in pkgutil.walk_packages(
@@ -279,3 +279,20 @@ def test_adb_run_text_reads_the_ambient_trace_directly(monkeypatch: Any) -> None
         driver.type_text("hi")
     subprocess_records = [r for r in ctx.records if r.category == "subprocess"]
     assert subprocess_records
+
+
+def test_adb_background_screenshot_records_its_own_subprocess_entry(monkeypatch: Any) -> None:
+    # `screenshot_in_background` defers the real capture to a worker thread, so `TracingDriver`'s
+    # generic per-call wrap (which can only time the near-instant call that starts the thread and
+    # returns `join`) cannot see it — this records from inside the thread instead, and must still
+    # see the caller's open trace despite `threading.Thread` starting with a fresh, empty context.
+    from bajutsu.common.backend_cli.adb.env import Env
+
+    monkeypatch.setattr(Env, "_run_capture", staticmethod(lambda cmd, path: None))
+    driver = AdbDriver("U", run=lambda _args: _DUMP)
+    with tracing.open_trace() as ctx:
+        join = driver.screenshot_in_background("/tmp/be0415-test-shot.png")
+        join()
+    records = [r for r in ctx.records if r.name == "screenshot_in_background"]
+    assert records
+    assert records[0].category == "subprocess"

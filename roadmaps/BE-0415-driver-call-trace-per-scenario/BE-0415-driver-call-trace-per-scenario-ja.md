@@ -106,13 +106,16 @@ BE-0407 はステップの遅延を大きく削減しました。ただしその
   デバイスのリース時、つまりどのシナリオのステップも始まる前に一度きり発生するだけです。
   ステップ単位の手がかりを持たないため、計測対象にしません。
 
-各レコードは `{category, step, name, started_at, elapsed_s}` を持ちます。`step` は
+各レコードは `{category, step, name, started_at, elapsed_s, attempt}` を持ちます。`step` は
 その呼び出しが発生したステップの番号と種別（`trace_run.py` と同じ形式の
 `f"{i:02d}:{種別}"`）です。`started_at` は壁時計の Unix エポック秒で、`device.log` や
 `manifest.json` 内のステップ自身の `started_at` と突き合わせられます。`elapsed_s` は
-その呼び出し自体の所要時間です。POST の往復を表す `transport` レコードだけは、もう1つ
-`response` フィールドを持ちます。これが前述の小さな構造化結果で、GET（読み取り）のレコードは
-これを持ちません。
+その呼び出し自体の所要時間です。`attempt` は、どのクラッシュリカバリの試行がその呼び出しを
+行ったか（最初の試行なら1）を示します。1つの `driver_trace.json` はシナリオの全試行に
+またがるため、ステップキーだけではクラッシュした試行の記録とリカバリした試行の記録を
+区別できません。`steps` の各エントリも同じ理由で `attempt` を持ちます。POST の往復を表す
+`transport` レコードだけは、もう1つ `response` フィールドを持ちます。これが前述の小さな
+構造化結果で、GET（読み取り）のレコードはこれを持ちません。
 
 ### モンキーパッチではなく合成で実現する
 
@@ -233,10 +236,10 @@ BE-0407 はステップの遅延を大きく削減しました。ただしその
 ```json
 {
   "scenario": "<シナリオ名>",
-  "steps": [{"step": "00:tap", "wall_s": 1.02}],
+  "steps": [{"step": "00:tap", "wall_s": 1.02, "attempt": 1}],
   "records": [
-    {"category": "driver", "step": "00:tap", "name": "tap", "started_at": 1234567890.1, "elapsed_s": 0.69},
-    {"category": "transport", "step": "00:tap", "name": "POST /tap", "started_at": 1234567890.1, "elapsed_s": 0.62, "response": {"status": "ok"}}
+    {"category": "driver", "step": "00:tap", "name": "tap", "started_at": 1234567890.1, "elapsed_s": 0.69, "attempt": 1},
+    {"category": "transport", "step": "00:tap", "name": "POST /tap", "started_at": 1234567890.1, "elapsed_s": 0.62, "response": {"status": "ok"}, "attempt": 1}
   ]
 }
 ```
@@ -262,29 +265,45 @@ BE-0407 はステップの遅延を大きく削減しました。ただしその
 > MECE な作業分解を写したもの（作業単位1つにつき1つのチェックボックス）で、
 > ログには変更内容と日時を古い順に記録し、関連する PR へリンクします。
 
-- [x] 作業単位 1 — `base.Driver` を満たす委譲プロキシ `TracingDriver`。自前のプロトコル
-      メソッドは1つも宣言せず（`__getattr__` のみ）、包んでいるドライバが実際にその呼び出しを
-      持つときだけ計測する。これにより、能力プロトコル（`InterruptionPolicyTarget`、`SettledReadProvider` など）への `isinstance` は、
-      包んでいるドライバの本当の能力をそのまま反映し続ける。
-- [x] 作業単位 2 — `make_driver` と `AdbDriver` の `run=` ラップが読む、共有のスレッドローカルな
-      トレース文脈。作業単位6の `_ScenarioRunner.run_one` フックがセットする。
-- [x] 作業単位 3 — iOS側の `transport` カテゴリの計測。`XcuitestDriver` に新しい
-      任意のコンストラクタ引数を追加し、既存の `_tracking_transport` ラップと並べて
-      `self._transport` をもう1段ラップし、POSTなら `_Reply.status` を記録する。
-      `backends.make_driver` の `xcuitest` 分岐が、作業単位2の文脈がトレース有効を示すときに
-      これを渡す。
-- [x] 作業単位 4 — Android側の `transport` と `subprocess` カテゴリの計測。どちらも
-      `backends.make_driver` の `adb` 分岐の内部で行う。`fetch_hierarchy`、`fetch_clock`、`act`
-      をラップし（`transport`。`act` のラップは `ActOutcome.acted`／`.published_mark` も
-      記録する）、計測用にラップした `adb.real_run` を `AdbDriver` の `run=` として渡す
-      （`subprocess`）。`run=` が届かない1呼び出しのために `AdbDriver._run_text` の
-      クラスレベル属性も差し替える。どのモジュールにも `subprocess` へのモンキーパッチは行わない。
-- [x] 作業単位 5 — `driver` カテゴリのラップ。`device_pool` の `lease()` クロージャが、
-      `launch_driver(...)` の戻り値を `TracingDriver` で包んでから `Lease.driver` へ格納する
-      （テアダウンはその引数を読まないことを詳細設計の作業単位5で確認済み）。
+- [x] 作業単位 1 — `base.Driver` を満たす委譲プロキシ `TracingDriver`。ラップ対象のドライバが
+      実際に満たす能力プロトコルの全メンバーを、`typing.get_protocol_members` で導出します。
+      それをインスタンスの実属性として設定します。`__getattr__` はそれ以外の呼び出しへの
+      フォールバックとしてのみ残しています。本項目の当初の前提は、`__getattr__` のみに
+      頼るプロキシでした。しかしこの方式では、`@runtime_checkable` プロトコルへの肯定的な
+      `isinstance` 判定を絶対に通せません。`isinstance()` は `inspect.getattr_static` を
+      介して解決され、`__getattr__` を一切呼ばないためです。そのため、能力プロトコル
+      （`InterruptionPolicyTarget`、`SettledReadProvider` など）への `isinstance` の判定結果は、
+      true であれ false であれ、包んでいるドライバの本当の能力をそのまま反映します。
+- [x] 作業単位 2 — `XcuitestDriver` と `AdbDriver` 自身のラップが読む、共有のトレース文脈。
+      作業単位6の `_ScenarioRunner.run_one` フックがセットします。`threading.local` ではなく
+      `contextvars.ContextVar` とし、本リポジトリ既存のアンビエント状態
+      （`analytics/ledger`、`serve/oplog`）の慣例に合わせ、`ThreadPoolExecutor` の
+      ワーカー再利用の下でも正しく動作します。
+- [x] 作業単位 3 — iOS側の `transport` カテゴリの計測。`XcuitestDriver.__init__` 自身の
+      内部で（構築時に一度だけ、トレースがすでに開いているかを確認したうえで）行います。
+      既存の `_tracking_transport` ラップと並べて `self._transport` をもう1段ラップし、
+      POST なら `_Reply.status` を記録します。
+- [x] 作業単位 4 — Android側の `transport` と `subprocess` カテゴリの計測。
+      `AdbDriver.__init__` 自身の内部で（作業単位3と同じ構築時チェックで）行います。
+      `fetch_hierarchy`、`fetch_clock`、`act` をラップし（`transport`。`act` のラップは
+      `ActOutcome.acted`／`.published_mark` も記録します）、`run` コールバックもラップします
+      （`subprocess`）。`_run_text`（単なる `@staticmethod` のため同じ方法ではラップできません）は、
+      代わりにアンビエントなトレース文脈を直接読みます。どのモジュールにも `subprocess` への
+      モンキーパッチは行いません。
+- [x] 作業単位 5 — `driver` カテゴリのラップ。`_ScenarioRunner._run_one_impl` は、各リース
+      呼び出しの成功直後にこれを行います。戻ってきた `Lease.driver` を、その場で
+      `TracingDriver` に書き換えます。`device_pool` の `lease()` クロージャの内部ではありません。そのクロージャのウォーム
+      ドライバキャッシュは生のドライバを別に保持しており、内部でラップすると再利用時に
+      二重ラップになるためです。
 - [x] 作業単位 6 — `_ScenarioRunner.run_one` と `_StepRunner._run_one` への
       シナリオ・ステップ境界フックの追加。トレース文脈（作業単位2）の開始・書き出しと、
-      `RunArtifactWriter.write_json` 経由での `driver_trace.json` 書き出し。
+      `RunArtifactWriter.write_json` 経由での `driver_trace.json` 書き出しを、`finally` の
+      中で行います。これにより、シナリオが例外を送出しても部分的なトレースがディスクに残ります。
+      その書き出しを囲む `except OSError` が、失敗を例外にせず警告として記録するので、書き出しの
+      失敗も run を止めません（`--zip`／`--evidence-store` と同様の診断専用の扱いです）。
+      `TraceContext` はクラッシュリカバリの再試行ごとにスタンプされる
+      `attempt` 番号も持ち、リカバリしたシナリオのトレースが、クラッシュした試行の記録を
+      成功した試行と同じステップキーへ混ぜてしまわないようにしています。
 - [x] 作業単位 7 — `bajutsu run --trace-driver` という CLI フラグの追加と、
       `_RunPlan` から `_ScenarioRunner` への配線。
 - [x] 作業単位 8 — テスト。`FakeDriver` に対する `TracingDriver` のユニットテスト（ラップしても

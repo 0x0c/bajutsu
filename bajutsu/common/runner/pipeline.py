@@ -282,9 +282,18 @@ class _ScenarioRunner:
             finally:
                 writer = self._artifacts()
                 if writer is not None:
-                    writer.write_json(
-                        f"{sid}/driver_trace.json", tracing.trace_document(s.name, trace_ctx)
-                    )
+                    try:
+                        writer.write_json(
+                            f"{sid}/driver_trace.json",
+                            tracing.trace_document(s.name, trace_ctx),
+                        )
+                    except OSError as exc:
+                        # Diagnostic only, like `--zip` / `--evidence-store`: a failed trace write
+                        # is warned about, never allowed to end the run or displace the scenario's
+                        # own in-flight exception.
+                        _logger.warning(
+                            "scenario %s: writing driver_trace.json failed (%s)", s.name, exc
+                        )
 
     # Genuinely long: the per-scenario run on the deterministic run path. Splitting it carries real
     # behavioral risk, so it belongs to BE-0386's ratchet steps rather than the PR that sets the
@@ -457,6 +466,14 @@ class _ScenarioRunner:
         replaced = False
         try:
             for attempt in range(1, budget.total_attempts + 1):
+                if self.trace_driver:
+                    # Stamped *before* this attempt leases (and constructs) a driver — a cold
+                    # respawn's own readiness round trips happen inside `self.lease(...)` below, so
+                    # stamping any later would misattribute them to the previous attempt. `run_one`
+                    # always opens a trace before calling here whenever `self.trace_driver` is True.
+                    trace_ctx = tracing.current_trace()
+                    assert trace_ctx is not None
+                    trace_ctx.attempt = attempt
                 # Reset per attempt: the crash handler reads it to reach the lease's own signals, and
                 # a lease-time crash must not be judged on the previous attempt's lease.
                 lz: Lease | None = None
@@ -536,7 +553,10 @@ class _ScenarioRunner:
                         # `pool.py` — `device_pool`'s warm-driver cache stores the raw driver
                         # separately from the `Lease` object, so wrapping there would leak a wrapped
                         # driver into that cache and double-wrap it on the next lease. Mutating this
-                        # already-returned `Lease.driver` never touches that cache.
+                        # already-returned `Lease.driver` never touches that cache. (The context's
+                        # `attempt` number is stamped at the top of this loop, before the lease that
+                        # just returned `lz` — not here — so a cold respawn's own readiness round
+                        # trips are attributed to the attempt that actually made them.)
                         lz.driver = tracing.TracingDriver(lz.driver)
                     if attempt > 1:
                         _logger.info(

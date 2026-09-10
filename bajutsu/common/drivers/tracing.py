@@ -85,7 +85,8 @@ _PROTOCOLS: tuple[type, ...] = (
 
 @dataclass(frozen=True, slots=True)
 class TraceRecord:
-    """One timed Python<->driver call, attributed to the step it happened during."""
+    """One timed Python<->driver call, attributed to the step and crash-recovery attempt it
+    happened during."""
 
     category: str  # "driver" | "transport" | "subprocess"
     step: str | None
@@ -93,16 +94,22 @@ class TraceRecord:
     started_at: float
     elapsed_s: float
     response: dict[str, Any] | None = None
+    attempt: int = 1
 
 
 @dataclass(slots=True)
 class TraceContext:
     """One scenario's accumulated trace: driver/transport/subprocess records plus each step's own
-    wall time. `current_step` is set by `traced_step` for the duration of one step."""
+    wall time. `current_step` is set by `traced_step` for the duration of one step. `attempt` is
+    set by `_ScenarioRunner._run_one_impl`'s retry loop, once per crash-recovery attempt — a fresh
+    lease (and driver) starts each attempt, but this one `TraceContext` spans every attempt, so
+    without it a retry's records would be indistinguishable from the attempt it recovered from
+    (same step keys, since each attempt's `StepLoopState` restarts its counter at 0)."""
 
     records: list[TraceRecord] = field(default_factory=list)
     steps: list[dict[str, Any]] = field(default_factory=list)
     current_step: str | None = None
+    attempt: int = 1
 
     def record(
         self,
@@ -113,7 +120,9 @@ class TraceContext:
         response: dict[str, Any] | None = None,
     ) -> None:
         self.records.append(
-            TraceRecord(category, self.current_step, name, started_at, elapsed_s, response)
+            TraceRecord(
+                category, self.current_step, name, started_at, elapsed_s, response, self.attempt
+            )
         )
 
 
@@ -155,7 +164,9 @@ def traced_step(key: str) -> Iterator[None]:
     try:
         yield
     finally:
-        ctx.steps.append({"step": key, "wall_s": time.perf_counter() - start})
+        ctx.steps.append(
+            {"step": key, "wall_s": time.perf_counter() - start, "attempt": ctx.attempt}
+        )
         ctx.current_step = prev
 
 
@@ -172,6 +183,7 @@ def trace_document(scenario_name: str, ctx: TraceContext) -> dict[str, Any]:
                 "started_at": r.started_at,
                 "elapsed_s": r.elapsed_s,
                 "response": r.response,
+                "attempt": r.attempt,
             }
             for r in ctx.records
         ],

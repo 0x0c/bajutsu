@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextvars
 import math
 import subprocess
 import threading
@@ -1508,18 +1509,42 @@ class AdbDriver(CoordinateTreeDriver):
         thread boundary and is re-raised, unchanged, out of the join, so the caller fails exactly as it
         would have; the thread is a daemon so a caller that dies before joining cannot wedge the
         interpreter on it.
+
+        BE-0415: records its own `subprocess` entry from inside the thread, rather than relying on
+        `TracingDriver`'s generic per-call wrap. That wrap can only time the call it wraps — here,
+        starting the thread and returning `join`, which takes microseconds — not the actual
+        `screencap` capture, which happens afterwards, overlapped with the rest of the same step. The
+        thread also runs inside a copy of the *calling* thread's `contextvars.Context`: a bare
+        `threading.Thread` starts its target in a fresh, empty context, so `tracing.current_trace()`
+        would otherwise see no open trace here even while one is open on the caller's thread.
         """
         failure: list[Exception] = []
 
         def run() -> None:
+            ctx = tracing.current_trace()
+            started_at = time.time()
+            t0 = time.perf_counter()
             try:
                 self.screenshot(path)
             except Exception as exc:
                 # Deliberately broad, and not a swallow: whatever the synchronous `screenshot` would
                 # have raised is carried across the thread boundary and re-raised verbatim by `join`.
                 failure.append(exc)
+            finally:
+                if ctx is not None:
+                    ctx.record(
+                        "subprocess",
+                        "screenshot_in_background",
+                        started_at,
+                        time.perf_counter() - t0,
+                    )
 
-        thread = threading.Thread(target=run, name="bajutsu-adb-screenshot", daemon=True)
+        thread = threading.Thread(
+            target=contextvars.copy_context().run,
+            args=(run,),
+            name="bajutsu-adb-screenshot",
+            daemon=True,
+        )
         thread.start()
 
         def join() -> None:
