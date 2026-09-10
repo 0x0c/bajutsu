@@ -66,7 +66,9 @@ identifier it offers, if any; whether an ordinary `tap`/`type` step already rece
 interruption-monitor treatment when its target sits under the banner's frame, the treatment BE-0399
 measured for a system alert, or whether hit-testing instead resolves the overlap silently, with no
 interruption dispatched at all; and, only if the monitor is invoked, whether a swipe issued from inside
-its handler can be verified cleared by XCUITest before the handler returns. BE-0399's own motivation
+its handler can be confirmed to have cleared the banner before the handler returns `true` — XCUITest
+checks the interruption only after the handler returns, and re-invokes the monitor when it finds the
+banner still up. BE-0399's own motivation
 measured what happens when a monitor claims an interruption it cannot confirm cleared: XCUITest
 re-invokes the monitor on every following interaction, and that looped until the runner died in every
 measured attempt. This unit produces no code; the measurement fixes the design questions Unit 4
@@ -98,11 +100,13 @@ A config- and scenario-level toggle arms a guard that polls Unit 2's presence qu
 interval BE-0315 already established for the SpringBoard probe, and dismisses the banner through
 Unit 3's action the moment one is found. Unit 1's fourth measurement decides which of two paths the
 guard takes, and the choice is not symmetric: only one of them is safe to take unconditionally. When
-Unit 1 confirms that a swipe issued from inside XCUITest's interruption-monitor handler is verified
-cleared before the handler returns, the guard answers through that monitor, mirroring how BE-0399's
+Unit 1 confirms that the handler can swipe the banner away and see it gone before it returns `true`,
+the guard answers through that monitor, mirroring how BE-0399's
 monitor answers an interrupting alert. In every other case — including when Unit 1 cannot confirm that
 guarantee — the guard instead polls and clears the banner immediately before each act step's own
-actuation. That fallback carries a known, accepted limitation: a banner arriving in the gap between the
+actuation. That pre-actuation check issues its own presence query at the step boundary rather than
+reusing the interval-bounded poll's last answer, since acting on a remembered probe result is the
+defect BE-0399 measured. That fallback carries a known, accepted limitation: a banner arriving in the gap between the
 poll and the tap's own synthesis can still intercept the tap, so this item does not claim the tap always
 lands, only that it lands far more reliably than today. Closing that residual gap is left to a
 follow-up rather than blocking this item. Either branch records the dismissal on the step it
@@ -116,8 +120,8 @@ rather than merely present. The guard is armed only on a
 backend that advertises the capability Unit 2 and Unit 3 gate their driver calls behind; on a backend
 without it, the toggle has no effect and today's behavior is unchanged. The toggle follows the same
 config-then-scenario, flag-overridable precedence
-([BE-0177](../BE-0177-run-behavior-target-config/BE-0177-run-behavior-target-config.md))
-`systemAlertHandling` already established.
+([BE-0177](../BE-0177-run-behavior-target-config/BE-0177-run-behavior-target-config.md)) that
+`systemAlertHandling` and its `--system-alert-handling` CLI flag already established.
 
 ### Unit 5 — showcase fixture and on-device verification
 
@@ -131,14 +135,16 @@ showcase apps present no foreground banner today —
 `UNUserNotificationCenterDelegate` foreground presentation the banner needs, and answers the
 notification-authorization prompt in the fixture with a `handleSystemAlert` step, since `permissions`
 cannot pre-grant notification authorization on iOS ([`docs/scenarios.md`](../../docs/scenarios.md)).
-The off-Simulator gate cannot prove a native swipe against a real banner; the unit that lands the
+The tap under test must sit inside the frame Unit 1 measured for the banner, so the overlap holds by
+construction; if no showcase control does, this unit adds one. The off-Simulator gate cannot prove a
+native swipe against a real banner; the unit that lands the
 driver methods must exercise this scenario on a booted Simulator.
 
 ### Unit 6 — docs
 
-Document the new toggle in [`docs/scenarios.md`](../../docs/scenarios.md) and its `docs/ja/` mirror,
-alongside `interrupts` and `systemAlertHandling`, extending BE-0314's existing comparison of when to
-reach for each mechanism.
+Document the new toggle in [`docs/scenarios.md`](../../docs/scenarios.md), its CLI flag in
+[`docs/cli.md`](../../docs/cli.md), and both `docs/ja/` mirrors, alongside `interrupts` and
+`systemAlertHandling`, extending BE-0314's existing comparison of when to reach for each mechanism.
 
 ### Unit 7 — tests
 
@@ -186,8 +192,8 @@ path the way BE-0399's own test suite covers the alert monitor.
 - [ ] Unit 3 — deterministic swipe-dismiss action anchored to the measured frame.
 - [ ] Unit 4 — reactive guard wiring behind a config/scenario toggle, following the existing
       precedence.
-- [ ] Unit 5 — showcase fixture, including the app-side foreground banner presentation, and on-device
-      verification.
+- [ ] Unit 5 — showcase fixture, including the app-side foreground banner presentation and a tap
+      target inside the banner's frame, and on-device verification.
 - [ ] Unit 6 — docs (`docs/scenarios.md` + ja).
 - [ ] Unit 7 — tests.
 - [ ] Follow-up — close the poll-and-clear fallback's residual race window, once Unit 1's measurement
