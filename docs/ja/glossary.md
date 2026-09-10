@@ -166,8 +166,11 @@ config ならリポジトリ名とリポジトリ内のパスになります。�
 - **`triage`**（CLI の動詞）は、**失敗した run を AI が診断し**、最小限の修正を提案します。Tier 1 の助言
   的な作業であり、CI をゲートすることはありません。エンジンは `bajutsu/triage/heuristic.py` です。
 
-> `trace` は多義的です。動詞のほかに、**`appTrace`** という区間の証跡の種類（os_signpost / os_log の
-> 区間）があります。どちらの意味も観測用で、合否は決めません。
+> `trace` は3通りの意味で使われます。動詞のほかに、**`appTrace`** という区間の証跡の種類
+> （os_signpost / os_log の区間）があり、`bajutsu run --trace-driver` はシナリオごとに Python と
+> ドライバー間のすべての呼び出しを計測した `driver_trace.json` を書き出します
+> （[BE-0415](../../roadmaps/BE-0415-driver-call-trace-per-scenario/BE-0415-driver-call-trace-per-scenario-ja.md)）。
+> どの意味も観測用で、合否は決めません。
 
 ## CLI の動詞
 

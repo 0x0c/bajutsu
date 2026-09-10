@@ -159,8 +159,11 @@ Distinct from a step's inline `capture:`, which is a *one-shot* capture at that 
 - **`triage`** (CLI verb) is *AI diagnosing a failed run* and proposing a minimal fix. It is a
   Tier-1, advisory activity — it never gates CI. Engine in `bajutsu/triage/heuristic.py`.
 
-> `trace` is overloaded: besides the verb, **`appTrace`** is an interval evidence kind
-> (os_signpost / os_log intervals). Both senses are observational; neither decides pass/fail.
+> `trace` is overloaded three ways: besides the verb, **`appTrace`** is an interval evidence kind
+> (os_signpost / os_log intervals), and `bajutsu run --trace-driver` writes a per-scenario
+> `driver_trace.json` timing every Python↔driver call
+> ([BE-0415](../roadmaps/BE-0415-driver-call-trace-per-scenario/BE-0415-driver-call-trace-per-scenario.md)).
+> All three senses are observational; none decides pass/fail.
 
 ## CLI verbs
 

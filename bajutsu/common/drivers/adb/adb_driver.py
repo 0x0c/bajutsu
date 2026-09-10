@@ -12,7 +12,7 @@ from xml.etree import ElementTree as ET
 
 from bajutsu.common import stall_diagnostics
 from bajutsu.common.backend_cli import adb
-from bajutsu.common.drivers import base
+from bajutsu.common.drivers import base, tracing
 from bajutsu.common.drivers.actuation import Actuation, ActuationLog, Drained
 from bajutsu.common.drivers.coordinate_tree import CoordinateTreeDriver, StableKey
 from bajutsu.common.drivers.elements import screen_size_from_elements
@@ -52,6 +52,79 @@ ActFn = Callable[[ActRequest], ActOutcome]
 # Android's `uiautomator` dump reports bounds in raw display pixels, so that is the space stamped on
 # this backend's actuation records — a coordinate only means something alongside its unit.
 _UNIT = "pixel"
+
+
+# BE-0415: one wrap per callable, folded in at `__init__` only when a trace is already open
+# (`--trace-driver` is a whole-run flag, so a driver built while none is open never traces for the
+# rest of its lifetime either — checked once here instead of per call). `_run` becomes a
+# `subprocess` record (it shells out); the resident-channel callables become `transport` records.
+def _traced_run(run: RunFn) -> RunFn:
+    def _wrapped(args: list[str]) -> str:
+        ctx = tracing.current_trace()
+        if ctx is None:
+            return run(args)
+        started_at = time.time()
+        t0 = time.perf_counter()
+        try:
+            return run(args)
+        finally:
+            ctx.record("subprocess", " ".join(args), started_at, time.perf_counter() - t0)
+
+    return _wrapped
+
+
+def _traced_fetch_hierarchy(fetch: HierarchyFetch) -> HierarchyFetch:
+    def _wrapped(deadline: float | None) -> HierarchyRead:
+        ctx = tracing.current_trace()
+        if ctx is None:
+            return fetch(deadline)
+        started_at = time.time()
+        t0 = time.perf_counter()
+        try:
+            return fetch(deadline)
+        finally:
+            ctx.record("transport", "fetch_hierarchy", started_at, time.perf_counter() - t0)
+
+    return _wrapped
+
+
+def _traced_fetch_clock(fetch: ClockFetch) -> ClockFetch:
+    def _wrapped() -> float | None:
+        ctx = tracing.current_trace()
+        if ctx is None:
+            return fetch()
+        started_at = time.time()
+        t0 = time.perf_counter()
+        try:
+            return fetch()
+        finally:
+            ctx.record("transport", "fetch_clock", started_at, time.perf_counter() - t0)
+
+    return _wrapped
+
+
+def _traced_act(act: ActFn) -> ActFn:
+    def _wrapped(request: ActRequest) -> ActOutcome:
+        ctx = tracing.current_trace()
+        if ctx is None:
+            return act(request)
+        started_at = time.time()
+        t0 = time.perf_counter()
+        outcome: ActOutcome | None = None
+        try:
+            outcome = act(request)
+        finally:
+            # `outcome` stays None when `act(request)` raised, so this still records the elapsed
+            # time (unlike a raising `act`, which carries no outcome to report a response for).
+            response = (
+                None
+                if outcome is None
+                else {"acted": outcome.acted, "published_mark": outcome.published_mark}
+            )
+            ctx.record("transport", "act", started_at, time.perf_counter() - t0, response)
+        return outcome
+
+    return _wrapped
 
 
 class AdbDriver(CoordinateTreeDriver):
@@ -130,6 +203,18 @@ class AdbDriver(CoordinateTreeDriver):
     ) -> None:
         super().__init__()
         self.serial = adb.checked_serial(serial)
+        # BE-0415: a driver built while a trace is open times every subprocess call `run` issues and
+        # every resident-channel round trip these three callables make. Checked once here, not on
+        # every call — see `_traced_run` et al.'s own comment. `_run_text` (below) reads the same
+        # ambient trace directly instead, since it is a plain staticmethod with no instance to wrap.
+        if tracing.current_trace() is not None:
+            run = _traced_run(run)
+            if fetch_hierarchy is not None:
+                fetch_hierarchy = _traced_fetch_hierarchy(fetch_hierarchy)
+            if fetch_clock is not None:
+                fetch_clock = _traced_fetch_clock(fetch_clock)
+            if act is not None:
+                act = _traced_act(act)
         self._run = run
         # When set, reads go through the resident channel and fall back to `uiautomator dump` only on
         # failure (BE-0245). Unset (the default) keeps today's dump-every-read behavior exactly.
@@ -1378,7 +1463,18 @@ class AdbDriver(CoordinateTreeDriver):
 
     @staticmethod
     def _run_text(cmd: list[str], script: str) -> None:
-        subprocess.run(cmd, input=script, capture_output=True, text=True, check=True)
+        # BE-0415: reads the ambient trace directly (this is a plain staticmethod, so it has no
+        # instance to be wrapped through at construction time like `_run`/`_fetch_hierarchy`/etc.).
+        ctx = tracing.current_trace()
+        if ctx is None:
+            subprocess.run(cmd, input=script, capture_output=True, text=True, check=True)
+            return
+        started_at = time.time()
+        t0 = time.perf_counter()
+        try:
+            subprocess.run(cmd, input=script, capture_output=True, text=True, check=True)
+        finally:
+            ctx.record("subprocess", " ".join(cmd), started_at, time.perf_counter() - t0)
 
     def delete_text(self, count: int) -> None:
         # `count` backspaces (KEYCODE_DEL) in one `input keyevent` call. The orchestrator focuses the

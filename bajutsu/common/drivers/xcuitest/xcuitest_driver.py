@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from bajutsu.common.devices.os import DeviceOS
-from bajutsu.common.drivers import base
+from bajutsu.common.drivers import base, tracing
 from bajutsu.common.drivers.actuation import Actuation, ActuationLog, Drained
 from bajutsu.common.drivers.zorder import ZOrderSource
 
@@ -155,6 +155,35 @@ class XcuitestDriver:
             return reply
 
         self._transport = _tracking_transport
+        # BE-0415: one more optional wrap, folded in only when a trace is already open at
+        # construction time. `--trace-driver` is a whole-run flag, so a driver built while no trace
+        # is open never traces for the rest of its lifetime either (including warm-resident reuse
+        # across scenarios) — checked once here instead of per call.
+        if tracing.current_trace() is not None:
+            _traceable_transport = self._transport
+
+            def _traced_transport(method: str, path: str, body: Mapping[str, Any] | None) -> _Reply:
+                ctx = tracing.current_trace()
+                if ctx is None:
+                    return _traceable_transport(method, path, body)
+                started_at = time.time()
+                t0 = time.perf_counter()
+                response: dict[str, Any] | None = None
+                try:
+                    reply = _traceable_transport(method, path, body)
+                    if method == "POST":
+                        response = {"status": reply.status}
+                    return reply
+                finally:
+                    ctx.record(
+                        "transport",
+                        f"{method} {path}",
+                        started_at,
+                        time.perf_counter() - t0,
+                        response,
+                    )
+
+            self._transport = _traced_transport
         # Injectable so the stale re-resolution backoff (BE-0289) adds no wall time under test.
         self._sleep = sleep
         # The device screen size (BE-0326), fetched once from the runner; fixed for a run.

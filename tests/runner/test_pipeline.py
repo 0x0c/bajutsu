@@ -2141,3 +2141,35 @@ def test_the_run_resolves_a_system_alert_prompt_against_the_scenario_locale() ->
 
     assert [r.ok for r in results] == [True], results[0].failure
     assert driver.actions == [("handle_system_alert", ({"label": "許可"}, 0.0))]
+
+
+def test_trace_driver_writes_driver_trace_json(tmp_path: Path) -> None:
+    # `bajutsu run --trace-driver` (BE-0415): one `<sid>/driver_trace.json` per scenario, attributing
+    # every `driver`-category record to the step it happened during. The `fake` backend produces no
+    # `transport`/`subprocess` records (no host-device round trip to measure), so this proves the
+    # `driver`-category wrap and the file's own shape; `tests/test_driver_tracing.py` covers the
+    # transport/subprocess wraps directly against `XcuitestDriver`/`AdbDriver`.
+    scenario = Scenario.model_validate({"name": "a", "steps": [{"tap": {"id": "ok"}}]})
+    run_dir = tmp_path / "runs" / "run1"
+    results = run_all(_eff(), [scenario], _lease, run_dir=run_dir, trace_driver=True)
+    assert results[0].ok, results[0].failure
+    trace_path = run_dir / results[0].sid / "driver_trace.json"
+    assert trace_path.is_file()
+    doc = json.loads(trace_path.read_text(encoding="utf-8"))
+    assert doc["scenario"] == "a"
+    assert doc["steps"]  # one entry for the scenario's one `tap` step
+    driver_records = [r for r in doc["records"] if r["category"] == "driver"]
+    assert any(r["name"] == "tap" for r in driver_records)
+    assert all(r["step"] == "00:tap" for r in driver_records)
+    # `TracingDriver` must preserve `ActuationReporter` too (not just the two capability protocols
+    # BE-0407's trace_run.py measured): missing it silently drops every step's own actuation
+    # evidence for the whole run once `--trace-driver` is on.
+    assert results[0].steps[0].actuations
+
+
+def test_trace_driver_off_by_default_writes_no_file(tmp_path: Path) -> None:
+    scenario = Scenario.model_validate({"name": "a", "steps": [{"tap": {"id": "ok"}}]})
+    run_dir = tmp_path / "runs" / "run1"
+    results = run_all(_eff(), [scenario], _lease, run_dir=run_dir)
+    assert results[0].ok, results[0].failure
+    assert not (run_dir / results[0].sid / "driver_trace.json").exists()

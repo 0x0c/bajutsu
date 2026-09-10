@@ -7,7 +7,7 @@
 |---|---|
 | 提案 | [BE-0415](BE-0415-driver-call-trace-per-scenario-ja.md) |
 | 提案者 | [@0x0c](https://github.com/0x0c) |
-| 状態 | **提案** |
+| 状態 | **実装済み** |
 | トラッキング Issue | [検索](https://github.com/bajutsu-e2e/bajutsu/issues?q=is%3Aissue+label%3Aroadmap-tracking+in%3Atitle+"BE-0415") |
 | トピック | Driver & backend architecture |
 | 関連 | [BE-0407](../BE-0407-step-latency-driver-internal-tuning/BE-0407-step-latency-driver-internal-tuning-ja.md) |
@@ -261,32 +261,32 @@ BE-0407 はステップの遅延を大きく削減しました。ただしその
 > MECE な作業分解を写したもの（作業単位1つにつき1つのチェックボックス）で、
 > ログには変更内容と日時を古い順に記録し、関連する PR へリンクします。
 
-- [ ] 作業単位 1 — `base.Driver` を満たす委譲プロキシ `TracingDriver`。自前のプロトコル
+- [x] 作業単位 1 — `base.Driver` を満たす委譲プロキシ `TracingDriver`。自前のプロトコル
       メソッドは1つも宣言せず（`__getattr__` のみ）、包んでいるドライバが実際にその呼び出しを
       持つときだけ計測する。これにより、能力プロトコル（`InterruptionPolicyTarget`、`SettledReadProvider` など）への `isinstance` は、
       包んでいるドライバの本当の能力をそのまま反映し続ける。
-- [ ] 作業単位 2 — `make_driver` と `AdbDriver` の `run=` ラップが読む、共有のスレッドローカルな
+- [x] 作業単位 2 — `make_driver` と `AdbDriver` の `run=` ラップが読む、共有のスレッドローカルな
       トレース文脈。作業単位6の `_ScenarioRunner.run_one` フックがセットする。
-- [ ] 作業単位 3 — iOS側の `transport` カテゴリの計測。`XcuitestDriver` に新しい
+- [x] 作業単位 3 — iOS側の `transport` カテゴリの計測。`XcuitestDriver` に新しい
       任意のコンストラクタ引数を追加し、既存の `_tracking_transport` ラップと並べて
       `self._transport` をもう1段ラップし、POSTなら `_Reply.status` を記録する。
       `backends.make_driver` の `xcuitest` 分岐が、作業単位2の文脈がトレース有効を示すときに
       これを渡す。
-- [ ] 作業単位 4 — Android側の `transport` と `subprocess` カテゴリの計測。どちらも
+- [x] 作業単位 4 — Android側の `transport` と `subprocess` カテゴリの計測。どちらも
       `backends.make_driver` の `adb` 分岐の内部で行う。`fetch_hierarchy`、`fetch_clock`、`act`
       をラップし（`transport`。`act` のラップは `ActOutcome.acted`／`.published_mark` も
       記録する）、計測用にラップした `adb.real_run` を `AdbDriver` の `run=` として渡す
       （`subprocess`）。`run=` が届かない1呼び出しのために `AdbDriver._run_text` の
       クラスレベル属性も差し替える。どのモジュールにも `subprocess` へのモンキーパッチは行わない。
-- [ ] 作業単位 5 — `driver` カテゴリのラップ。`device_pool` の `lease()` クロージャが、
+- [x] 作業単位 5 — `driver` カテゴリのラップ。`device_pool` の `lease()` クロージャが、
       `launch_driver(...)` の戻り値を `TracingDriver` で包んでから `Lease.driver` へ格納する
       （テアダウンはその引数を読まないことを詳細設計の作業単位5で確認済み）。
-- [ ] 作業単位 6 — `_ScenarioRunner.run_one` と `_StepRunner._run_one` への
+- [x] 作業単位 6 — `_ScenarioRunner.run_one` と `_StepRunner._run_one` への
       シナリオ・ステップ境界フックの追加。トレース文脈（作業単位2）の開始・書き出しと、
       `RunArtifactWriter.write_json` 経由での `driver_trace.json` 書き出し。
-- [ ] 作業単位 7 — `bajutsu run --trace-driver` という CLI フラグの追加と、
+- [x] 作業単位 7 — `bajutsu run --trace-driver` という CLI フラグの追加と、
       `_RunPlan` から `_ScenarioRunner` への配線。
-- [ ] 作業単位 8 — テスト。`FakeDriver` に対する `TracingDriver` のユニットテスト（ラップしても
+- [x] 作業単位 8 — テスト。`FakeDriver` に対する `TracingDriver` のユニットテスト（ラップしても
       能力プロトコルの否定側が保たれること、たとえば
       `isinstance(traced, base.SettledReadProvider)` が偽のままであることを含む）、スタブの
       `transport` を渡した `XcuitestDriver` に対して往復ごとに `transport` レコードが1件できることを
@@ -296,7 +296,7 @@ BE-0407 はステップの遅延を大きく削減しました。ただしその
       書き出されないことを検証するテスト。`fake` バックエンドだけでは `transport` も
       `subprocess` もレコードが生まれないため、作業単位3〜4（iOSとAndroidのラップ）が高速な
       テストスイートで検証されないまま残ってしまいます。
-- [ ] 作業単位 9 — ドキュメント。`bajutsu run` のフラグ一覧に、両言語で
+- [x] 作業単位 9 — ドキュメント。`bajutsu run` のフラグ一覧に、両言語で
       `--trace-driver` を追記する。
 
 ## 参考

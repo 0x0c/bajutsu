@@ -32,6 +32,7 @@ from bajutsu.common.cancellation import CANCELLED_FAILURE, CancelSource, not_can
 from bajutsu.common.capability import capability_preflight
 from bajutsu.common.config import Effective
 from bajutsu.common.devices import errors as device_errors
+from bajutsu.common.drivers import tracing
 from bajutsu.common.drivers.base import BackendCrashError
 from bajutsu.common.evidence import Artifact
 from bajutsu.common.evidence.network import NetworkExchange, _no_transitions
@@ -206,6 +207,9 @@ class _ScenarioRunner:
     # first lease is attempted, and handed down to `run_scenario` so the step loop and its condition
     # waits notice a cancel at their own safe boundaries.
     cancelled: CancelSource = not_cancelled
+    # `bajutsu run --trace-driver` (BE-0415): opens a `tracing` context per scenario and writes
+    # `<sid>/driver_trace.json`. Diagnostic only, off by default, never on the verdict path.
+    trace_driver: bool = False
     # Latches once `_maybe_emit_score` has fired, so a backend-crash retry of scenario 0 (which
     # re-enters `_run_on_lease` on a respawned app — BE-0049) does not re-score and emit a second
     # grade: the score is a once-per-run tell, not a per-attempt one. A mutable field on a frozen
@@ -256,10 +260,7 @@ class _ScenarioRunner:
         """
         return _resolve_now(self.clock)()
 
-    # Genuinely long: the per-scenario run on the deterministic run path. Splitting it carries real
-    # behavioral risk, so it belongs to BE-0386's ratchet steps rather than the PR that sets the
-    # ceiling.
-    def run_one(self, i: int, s: Scenario) -> RunResult:  # noqa: C901, PLR0912, PLR0915
+    def run_one(self, i: int, s: Scenario) -> RunResult:
         """Run one scenario on a freshly leased device and return its result.
 
         Args:
@@ -267,6 +268,35 @@ class _ScenarioRunner:
             s: The scenario to run.
         """
         sid = f"{i:02d}-{scenario_slug(s.name)}"
+        if not self.trace_driver:
+            return self._run_one_impl(i, s, sid)
+        # BE-0415: opened *before* `_run_one_impl` leases a device, so the driver it constructs
+        # (`self.lease(...)` -> `launch_driver` -> `backends.make_driver`) sees a trace already open
+        # at construction time — see `tracing`'s module docstring and `XcuitestDriver`/`AdbDriver`'s
+        # own construction-time checks. Flushed once per scenario, across every crash-recovery
+        # retry, in a `finally` so a scenario that raises past `_run_one_impl` still leaves its
+        # partial trace on disk — exactly the crash case this feature exists to help diagnose.
+        with tracing.open_trace() as trace_ctx:
+            try:
+                return self._run_one_impl(i, s, sid)
+            finally:
+                writer = self._artifacts()
+                if writer is not None:
+                    writer.write_json(
+                        f"{sid}/driver_trace.json", tracing.trace_document(s.name, trace_ctx)
+                    )
+
+    # Genuinely long: the per-scenario run on the deterministic run path. Splitting it carries real
+    # behavioral risk, so it belongs to BE-0386's ratchet steps rather than the PR that sets the
+    # ceiling.
+    def _run_one_impl(  # noqa: C901, PLR0912, PLR0915
+        self, i: int, s: Scenario, sid: str
+    ) -> RunResult:
+        """`run_one`'s actual body.
+
+        Runs once per crash-recovery attempt, inside — or, when `--trace-driver` is off, without —
+        the open trace `run_one` wraps it in.
+        """
         # A cancel that landed before this scenario started (BE-0370). It is failed rather than
         # dropped, so `run_all` still returns exactly one result per scenario in declaration order
         # and nothing downstream needs to know cancellation happened at all — an operator who
@@ -501,6 +531,13 @@ class _ScenarioRunner:
                             exc,
                         )
                         lz = self.lease(self.eff, s)
+                    if self.trace_driver:
+                        # BE-0415: wraps the `Lease` this attempt just returned, not anything inside
+                        # `pool.py` — `device_pool`'s warm-driver cache stores the raw driver
+                        # separately from the `Lease` object, so wrapping there would leak a wrapped
+                        # driver into that cache and double-wrap it on the next lease. Mutating this
+                        # already-returned `Lease.driver` never touches that cache.
+                        lz.driver = tracing.TracingDriver(lz.driver)
                     if attempt > 1:
                         _logger.info(
                             "scenario %s: backend respawned and recovered on attempt %d/%d",
@@ -836,6 +873,7 @@ def run_all(
     run_crash_recovery_budget: float | None = None,
     force_erase_on_retry: bool = True,
     cancelled: CancelSource = not_cancelled,
+    trace_driver: bool = False,
 ) -> list[RunResult]:
     """Run every scenario, each on a freshly leased device, and return one result per scenario.
 
@@ -919,6 +957,11 @@ def run_all(
             all — comes back as `RunResult(ok=False, failure="cancelled")`, so the caller still
             receives one result per scenario and writes an ordinary failed run's report. The default
             never cancels, leaving every existing caller unchanged.
+        trace_driver: `bajutsu run --trace-driver` (BE-0415): write one `<sid>/driver_trace.json`
+            per scenario, recording every Python<->driver call — the driver method invoked, its
+            host-device round trips, and (on Android) which fell back to a subprocess — attributed
+            to the step it happened during. False (the default) writes nothing; diagnostic only,
+            never on the verdict path.
 
     Returns:
         One result per scenario, in the same order as `scenarios`.
@@ -986,6 +1029,7 @@ def run_all(
         run_crash_budget=RunCrashRecoveryBudget(resolved_run_crash_recovery_budget),
         force_erase_on_retry=force_erase_on_retry,
         cancelled=cancelled,
+        trace_driver=trace_driver,
     )
     if workers > 1:
         # >1 hands each worker its own device + per-device resources; the runner is frozen and
@@ -1022,14 +1066,15 @@ def run_and_report(
     on_score: Callable[[Score], None] | None = None,
     force_erase_on_retry: bool = True,
     cancelled: CancelSource = not_cancelled,
+    trace_driver: bool = False,
 ) -> tuple[list[RunResult], Path]:
     """Run the scenarios, then write the run's artifacts under `runs_dir/run_id`.
 
     Wraps `run_all` and persists the report: `manifest.json`, JUnit XML, and the executed
     `scenario.yaml` (so a run is re-runnable / reviewable).
 
-    Beyond `run_all`'s arguments (`force_erase_on_retry` and `cancelled` pass straight through — see
-    their docstrings there), `runs_dir` + `run_id` locate this run's artifact directory
+    Beyond `run_all`'s arguments (`force_erase_on_retry`, `cancelled`, and `trace_driver` pass
+    straight through — see their docstrings there), `runs_dir` + `run_id` locate this run's artifact directory
     (`runs_dir/run_id`),
     `source_name` / `description` are recorded in the report, and `config_source` — the Git source
     the config came from (BE-0063), or None for a local config — is stamped into the manifest's
@@ -1060,6 +1105,7 @@ def run_and_report(
         on_score=on_score,
         force_erase_on_retry=force_erase_on_retry,
         cancelled=cancelled,
+        trace_driver=trace_driver,
     )
     manifest = _assemble_report(
         with_lifecycle_phases(eff, scenarios),

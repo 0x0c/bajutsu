@@ -7,7 +7,7 @@
 |---|---|
 | Proposal | [BE-0415](BE-0415-driver-call-trace-per-scenario.md) |
 | Author | [@0x0c](https://github.com/0x0c) |
-| Status | **Proposal** |
+| Status | **Implemented** |
 | Tracking issue | [Search](https://github.com/bajutsu-e2e/bajutsu/issues?q=is%3Aissue+label%3Aroadmap-tracking+in%3Atitle+"BE-0415") |
 | Topic | Driver & backend architecture |
 | Related | [BE-0407](../BE-0407-step-latency-driver-internal-tuning/BE-0407-step-latency-driver-internal-tuning.md) |
@@ -245,31 +245,31 @@ beyond the flag check itself.
 > *Detailed design* (one box per unit of work); the log records what changed and when
 > (oldest first), linking the PRs.
 
-- [ ] Unit 1 — `TracingDriver`, a `base.Driver`-conforming delegating proxy that declares no
+- [x] Unit 1 — `TracingDriver`, a `base.Driver`-conforming delegating proxy that declares no
       protocol methods of its own (`__getattr__` only), timing a call only when the wrapped driver
       actually has it, so `isinstance` against a capability protocol (`InterruptionPolicyTarget`,
       `SettledReadProvider`, …) still reads the wrapped driver's real capability set.
-- [ ] Unit 2 — The shared thread-local trace context `make_driver` and `AdbDriver`'s `run=` wrap
+- [x] Unit 2 — The shared thread-local trace context `make_driver` and `AdbDriver`'s `run=` wrap
       consult, set by unit 6's `_ScenarioRunner.run_one` hook.
-- [ ] Unit 3 — `transport`-category timing on iOS: a new optional constructor argument on
+- [x] Unit 3 — `transport`-category timing on iOS: a new optional constructor argument on
       `XcuitestDriver`, wrapping `self._transport` a second time alongside the existing
       `_tracking_transport` wrap, recording `_Reply.status` for a POST; `backends.make_driver`'s
       `xcuitest` branch passes it when unit 2's context says tracing is on.
-- [ ] Unit 4 — `transport`- and `subprocess`-category timing on Android, both inside
+- [x] Unit 4 — `transport`- and `subprocess`-category timing on Android, both inside
       `backends.make_driver`'s `adb` branch: wrap `fetch_hierarchy` / `fetch_clock` / `act`
       (`transport`, the `act` wrap also recording `ActOutcome.acted` / `.published_mark`) and pass a
       timed `adb.real_run` as `AdbDriver`'s `run=` (`subprocess`); also
       substitute `AdbDriver._run_text`'s class-level attribute for the one call `run=` does not
       reach. No monkey-patch of `subprocess` in any module.
-- [ ] Unit 5 — The `driver`-category wrap: `device_pool`'s `lease()` closure wraps the value
+- [x] Unit 5 — The `driver`-category wrap: `device_pool`'s `lease()` closure wraps the value
       `launch_driver(...)` returns in a `TracingDriver`, before storing it on `Lease.driver`
       (teardown never reads that argument, confirmed in Detailed design unit 5).
-- [ ] Unit 6 — Scenario and step boundary hooks in `_ScenarioRunner.run_one` and
+- [x] Unit 6 — Scenario and step boundary hooks in `_ScenarioRunner.run_one` and
       `_StepRunner._run_one`: open/flush the trace context (unit 2) and `driver_trace.json` write
       through `RunArtifactWriter.write_json`.
-- [ ] Unit 7 — The `bajutsu run --trace-driver` CLI flag, threaded through `_RunPlan` to
+- [x] Unit 7 — The `bajutsu run --trace-driver` CLI flag, threaded through `_RunPlan` to
       `_ScenarioRunner`.
-- [ ] Unit 8 — Tests: a `TracingDriver` unit test against `FakeDriver`, including that wrapping
+- [x] Unit 8 — Tests: a `TracingDriver` unit test against `FakeDriver`, including that wrapping
       preserves a capability-protocol negative (`isinstance(traced, base.SettledReadProvider)`
       stays False); an `XcuitestDriver` built with a stub `transport`, asserting a `transport`
       record per round trip; an `AdbDriver` built with a fake `run`, asserting a `subprocess`
@@ -277,7 +277,7 @@ beyond the flag check itself.
       written file's shape; a no-flag run asserting no `driver_trace.json` is written. The `fake`
       backend alone would leave units 3–4 (the iOS and Android wraps) with no fast-suite coverage,
       since it produces no `transport` or `subprocess` records.
-- [ ] Unit 9 — Documentation: the CLI reference for `bajutsu run`'s flags, in both languages, gains
+- [x] Unit 9 — Documentation: the CLI reference for `bajutsu run`'s flags, in both languages, gains
       `--trace-driver`.
 
 ## References
