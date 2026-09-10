@@ -108,7 +108,12 @@ config とシナリオの双方で設定できるスイッチが、Unit 2 の存
 そのため本項目は「タップが必ず届く」とは主張せず、「今よりずっと確実に届く」とだけ主張します。この
 残存する隙間を埋めることは、本項目を止めずにフォローアップへ切り出します。どちらの経路でも、その
 dismiss は割り込まれたステップの `AlertEvent` に記録します。これは BE-0399 が drain した label を
-そこに畳み込むのと同じ扱いで、通知バナーの dismiss を黙ったままにしません。ガードは、Unit 2 と
+そこに畳み込むのと同じ扱いです。ただし通知バナーにはボタンがないため、この記録が読み取れるもので
+あるには専用のフィールドが必要です。`AlertEvent` が持つのは `label`、すなわちガードが押したボタン
+だけ（該当がなければ空）であり、レポートもそのフィールドしか出力しません。そのため通知バナーの
+dismiss は空の label として届き、名前の付いたボタンがないアラートと見分けがつきません。この Unit
+では `AlertEvent` に任意の識別子を追加します。既定は現在のアラートの場合とし、既存のレポートは
+変えないまま、通知バナーの dismiss をレポート上で識別できるようにします。ガードは、Unit 2 と
 Unit 3 が driver 呼び出しをその背後に置く capability を backend が公開しているときにだけ有効になります。
 持たない backend ではスイッチは何もせず、今の挙動のまま変わりません。このスイッチは、
 `systemAlertHandling` がすでに確立している config からシナリオへ、さらにフラグで上書きできる優先順位
@@ -118,9 +123,15 @@ Unit 3 が driver 呼び出しをその背後に置く capability を backend �
 
 タップ対象の直前に `push` ステップ（[`docs/scenarios.md`](../../docs/scenarios.md)、`simctl push`）
 で通知バナーを発生させ、通知バナーの到着をタイミング頼みではなくステップの境界に固定した showcase
-シナリオを追加し、タップがそのタップ先に届くことをアサートします。実機の通知バナーに対するネイティブ
-なスワイプは、Simulator を使わないゲートでは証明できません。driver のメソッドを実装する Unit は、
-このシナリオを起動済みの Simulator 上で実行しなければなりません。
+シナリオを追加し、タップがそのタップ先に届くことをアサートします。通知バナーを発生させること自体が、
+この Unit が担うアプリ側の作業です。現在の showcase アプリはフォアグラウンドで通知バナーを表示しません
+（[`demos/showcase/scenarios/push.yaml`](../../demos/showcase/scenarios/push.yaml) に、その `push` が
+フォアグラウンドの UI を変えないと記録されています）。そのためこの Unit では、通知バナーの表示に必要な
+`UNUserNotificationCenterDelegate` のフォアグラウンド表示も追加し、通知の許可プロンプトは fixture 内の
+`handleSystemAlert` ステップで答えます。iOS では `permissions` で通知の許可を事前に付与できないため
+です（[`docs/scenarios.md`](../../docs/scenarios.md)）。実機の通知バナーに対するネイティブなスワイプ
+は、Simulator を使わないゲートでは証明できません。driver のメソッドを実装する Unit は、このシナリオを
+起動済みの Simulator 上で実行しなければなりません。
 
 ### Unit 6 — ドキュメント
 
@@ -132,7 +143,8 @@ Unit 3 が driver 呼び出しをその背後に置く capability を backend �
 
 新しいスイッチのスキーマの parse/validate、ポーリングのたびに存在照会の返り値が入れ替わる fake driver、
 ステップ自身の操作より前にガードが通知バナーを消すこと、その dismiss がステップの `AlertEvent` に
-届くこと、capability を持たない backend では何も変わらないこと、config からシナリオへの優先順位、
+届き、アラートの dismiss と区別する識別子を伴うこと、capability を持たない backend では何も変わらない
+こと、config からシナリオへの優先順位、
 そして Unit 1 で interruption monitor 経由の経路が必要だと分かった場合は、BE-0399 のテストスイートが
 アラートの monitor をカバーしているのと同じやり方でその経路をカバーします。
 
@@ -172,7 +184,7 @@ Unit 3 が driver 呼び出しをその背後に置く capability を backend �
 - [ ] Unit 2 — 決定論的な存在照会（通知バナーの枠、または不在を返す `Driver` のメソッド）。
 - [ ] Unit 3 — 実測した枠を基準にしたスワイプによる決定論的な dismiss アクション。
 - [ ] Unit 4 — 既存の優先順位に従う、config/シナリオのスイッチによるリアクティブガードの組み込み。
-- [ ] Unit 5 — showcase の fixture と実機検証。
+- [ ] Unit 5 — showcase の fixture（アプリ側のフォアグラウンドでの通知バナー表示を含む）と実機検証。
 - [ ] Unit 6 — ドキュメント（`docs/scenarios.md` と ja 対訳）。
 - [ ] Unit 7 — テスト。
 - [ ] フォローアップ — Unit 1 の測定によって Unit 4 の経路が定まり次第、poll-and-clear 方式に残る

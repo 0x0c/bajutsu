@@ -106,8 +106,13 @@ actuation. That fallback carries a known, accepted limitation: a banner arriving
 poll and the tap's own synthesis can still intercept the tap, so this item does not claim the tap always
 lands, only that it lands far more reliably than today. Closing that residual gap is left to a
 follow-up rather than blocking this item. Either branch records the dismissal on the step it
-interrupted, folded into that step's `AlertEvent`s the same way BE-0399's drained labels are, so a
-banner dismissal reaches the run's report instead of staying silent. The guard is armed only on a
+interrupted, folded into that step's `AlertEvent`s the same way BE-0399's drained labels are. Because
+the banner carries no button, that record needs a field of its own to be legible: `AlertEvent` carries
+only `label` — the button the guard tapped, empty when none was named — and the report serializes only
+that field, so a banner dismissal would arrive as an empty label, the shape an alert with no named
+button already has. This unit adds an optional discriminator to `AlertEvent`, defaulting to today's
+alert case so no existing report changes, and a banner dismissal is identifiable in the run's report
+rather than merely present. The guard is armed only on a
 backend that advertises the capability Unit 2 and Unit 3 gate their driver calls behind; on a backend
 without it, the toggle has no effect and today's behavior is unchanged. The toggle follows the same
 config-then-scenario, flag-overridable precedence
@@ -119,8 +124,15 @@ config-then-scenario, flag-overridable precedence
 Add a showcase scenario that raises the banner with a `push` step
 ([`docs/scenarios.md`](../../docs/scenarios.md), `simctl push`) placed immediately before the tap under
 test, so the banner's arrival is pinned to a step boundary rather than to wall-clock timing, and assert
-that the tap still lands on that target. The off-Simulator gate cannot prove a native swipe against a
-real banner; the unit that lands the driver methods must exercise this scenario on a booted Simulator.
+that the tap still lands on that target. Raising the banner is app-side work this unit owns: the
+showcase apps present no foreground banner today —
+[`demos/showcase/scenarios/push.yaml`](../../demos/showcase/scenarios/push.yaml) records that its
+`push` leaves the foreground UI unchanged — so this unit also adds the
+`UNUserNotificationCenterDelegate` foreground presentation the banner needs, and answers the
+notification-authorization prompt in the fixture with a `handleSystemAlert` step, since `permissions`
+cannot pre-grant notification authorization on iOS ([`docs/scenarios.md`](../../docs/scenarios.md)).
+The off-Simulator gate cannot prove a native swipe against a real banner; the unit that lands the
+driver methods must exercise this scenario on a booted Simulator.
 
 ### Unit 6 — docs
 
@@ -132,7 +144,8 @@ reach for each mechanism.
 
 Schema parse/validate for the new toggle; a fake driver whose presence query flips between polls; the
 guard dismissing the banner before a step's own actuation; the dismissal reaching the step's
-`AlertEvent`s; the capability gate leaving a backend without it unchanged; the config-then-scenario
+`AlertEvent`s and carrying the discriminator that tells it apart from an alert dismissal; the
+capability gate leaving a backend without it unchanged; the config-then-scenario
 precedence layering; and, if Unit 1 finds the interruption-monitor path is needed, coverage for that
 path the way BE-0399's own test suite covers the alert monitor.
 
@@ -173,7 +186,8 @@ path the way BE-0399's own test suite covers the alert monitor.
 - [ ] Unit 3 — deterministic swipe-dismiss action anchored to the measured frame.
 - [ ] Unit 4 — reactive guard wiring behind a config/scenario toggle, following the existing
       precedence.
-- [ ] Unit 5 — showcase fixture and on-device verification.
+- [ ] Unit 5 — showcase fixture, including the app-side foreground banner presentation, and on-device
+      verification.
 - [ ] Unit 6 — docs (`docs/scenarios.md` + ja).
 - [ ] Unit 7 — tests.
 - [ ] Follow-up — close the poll-and-clear fallback's residual race window, once Unit 1's measurement
