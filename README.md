@@ -133,8 +133,9 @@ Implemented and covered by tests (run without a Simulator):
   [docs/web-ui.md](docs/web-ui.md)
 - **Hosted server backend** (`serve --backend server`, `bajutsu worker`): a self-hostable control
   plane — FastAPI, Postgres, S3-compatible object storage, GitHub OAuth login, RBAC
-  (role-based access control), and quotas — that credential-free Mac and Linux workers poll over
-  plain HTTP for queued runs, so a team can share one `serve` instead of running it per machine.
+  (role-based access control), and quotas — that Mac and Linux workers poll over plain HTTP for
+  queued runs, carrying only the control-plane URL and a token (no cloud SDK or object-store
+  secrets), so a team can share one `serve` instead of running it per machine.
   Guide: [`docs/self-hosting.md`](docs/self-hosting.md)
 
 Validated on a real Simulator (iPhone 17 Pro, recent iOS):
@@ -153,16 +154,17 @@ Validated in a browser (Linux, no Mac):
 
 Validated on an Android emulator (Linux, no Mac):
 
-- The adb backend's `uiautomator dump` parsing (with a resident UI Automator server as the default,
-  faster channel), frame-center tap, and launch sequencing — actuation-fidelity parity with
-  XCUITest — are confirmed against a booted emulator (API 34, under KVM) in
+- The adb backend's element reads (a resident UI Automator server, with `uiautomator dump` as the
+  fallback), device-side re-resolved tap (falling back to a host-computed frame-center coordinate
+  tap), and launch sequencing — actuation-fidelity parity with XCUITest — are confirmed against a
+  booted emulator (API 34, under KVM) in
   [`android-e2e.yml`](.github/workflows/android-e2e.yml), driving the same shared scenarios
   XCUITest runs.
 
 Validated against a real Postgres (Linux, no Mac):
 
-- The hosted server backend's Alembic migrations and its object-relational-mapper repository layer
-  run against an ephemeral `postgres:16` container in
+- The hosted server backend's Alembic migrations and its object-relational mapper (ORM) repository
+  layer run against an ephemeral `postgres:16` container in
   [`serve-db.yml`](.github/workflows/serve-db.yml) — a **required check**, promoted from signal
   once it proved stable.
 
@@ -178,7 +180,7 @@ for the full implemented-vs-unwired table.
   the whole gate run anywhere, Linux included
 - **For iOS:** macOS with Xcode (the iOS Simulator and `xcodebuild`) — the XCUITest runner builds from the repo
 - **For web:** any OS with Playwright's Chromium (`playwright install chromium`) — no Mac needed
-- **For Android:** any OS with `adb` and a booted device or emulator (API 34+) — no Mac needed
+- **For Android:** any OS with `adb` and a booted device or emulator — no Mac needed (CI validates on API 34)
 - **For the hosted server backend:** a Linux node for the control plane (Postgres, S3-compatible
   storage) plus Mac or Linux workers, or both — see [`docs/self-hosting.md`](docs/self-hosting.md).
   Optional: the local `bajutsu serve` needs none of it

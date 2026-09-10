@@ -130,9 +130,10 @@ orchestrator、証跡、config、レポート）は [`bajutsu/common/`](bajutsu/
   参照してください
 - **ホスティング可能なサーバ backend**（`serve --backend server`、`bajutsu worker`）: FastAPI、
   Postgres、S3 互換オブジェクトストレージ、GitHub OAuth ログイン、RBAC（ロールベースアクセス
-  制御）、クォータを備えた、自前でホスティングできる制御プレーンです。認証情報を持たない Mac /
-  Linux ワーカーが素の HTTP でキューをポーリングするので、チームは `serve` をマシンごとに動かす
-  代わりに 1 つ共有できます。ガイドは [`docs/ja/self-hosting.md`](docs/ja/self-hosting.md) に
+  制御）、クォータを備えた、自前でホスティングできる制御プレーンです。Mac / Linux ワーカーは制御
+  プレーンの URL とトークンだけを持ち、クラウド SDK やオブジェクトストレージの認証情報は要りま
+  せん。そのワーカーが素の HTTP でキューをポーリングするので、チームは `serve` をマシンごとに
+  動かす代わりに 1 つ共有できます。ガイドは [`docs/ja/self-hosting.md`](docs/ja/self-hosting.md) に
   あります
 
 実機 Simulator で検証済みです（iPhone 17 Pro・近年の iOS）。
@@ -149,16 +150,18 @@ orchestrator、証跡、config、レポート）は [`bajutsu/common/`](bajutsu/
 
 Android エミュレータで検証済みです（Linux・Mac 不要）。
 
-- adb backend の `uiautomator dump` パース（既定は常駐の UI Automator サーバ経由で高速）、
-  フレーム中心の tap、起動シーケンスは XCUITest と同等の actuation を実現しており、KVM 上で
-  起動した API 34 のエミュレータに対して
+- adb backend の要素読み取り（既定は常駐の UI Automator サーバ、フォールバックが `uiautomator
+  dump`）、デバイス側で再解決する tap（フォールバックはホスト側で算出したフレーム中心の座標
+  tap）、起動シーケンスは XCUITest と同等の actuation を実現しており、KVM 上で起動した API 34 の
+  エミュレータに対して
   [`android-e2e.yml`](.github/workflows/android-e2e.yml) が同じ共有シナリオを走らせて確認済みです。
 
 実際の Postgres でも検証済みです（Linux・Mac 不要）。
 
-- サーバ backend の Alembic マイグレーションと、その object-relational-mapper なリポジトリ層を
-  [`serve-db.yml`](.github/workflows/serve-db.yml) が使い捨ての `postgres:16` コンテナに対して
-  走らせて確認します。signal として着地した後に安定が確認され、**必須チェック**へ昇格しました。
+- サーバ backend の Alembic マイグレーションと、その上のオブジェクト関係マッピング（ORM）による
+  リポジトリ層を [`serve-db.yml`](.github/workflows/serve-db.yml) が使い捨ての `postgres:16`
+  コンテナに対して走らせて確認済みです。参考情報の任意チェック（signal）として着地し、安定が
+  確認された後に**必須チェック**へ昇格しました。
 
 未配線: 外部 `mockServer` コマンド（シナリオ内 `mocks` で代替済み）、web backend 上の `appTrace`
 区間証跡（iOS 専用で、web backend は独自の `video` / `deviceLog` 相当の証跡を持ちます）、
@@ -174,8 +177,8 @@ Bajutsu 側の欠落ではありません）。完全な「実装済み vs 未�
   ビルドします
 - **web の場合:** Playwright の Chromium（`playwright install chromium`）が入った任意の OS。Mac は
   不要です
-- **Android の場合:** `adb` と、起動済みのデバイスまたはエミュレータ（API 34 以上）が入った任意の
-  OS。Mac は不要です
+- **Android の場合:** `adb` と、起動済みのデバイスまたはエミュレータが入った任意の OS。Mac は
+  不要です（CI は API 34 のエミュレータで検証しています）
 - **ホスティング可能なサーバ backend の場合:** 制御プレーン向けの Linux ノード（Postgres、S3 互換
   ストレージ）に加えて、Mac ワーカーか Linux ワーカー、あるいはその両方が要ります。詳細は
   [`docs/ja/self-hosting.md`](docs/ja/self-hosting.md) を参照してください。任意項目で、ローカルの
