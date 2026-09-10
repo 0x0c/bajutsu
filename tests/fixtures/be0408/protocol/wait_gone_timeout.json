@@ -1,0 +1,21 @@
+{
+  "schema": 1,
+  "operation": "wait",
+  "request": {
+    "mode": "gone",
+    "selector": { "id": "loading.spinner" },
+    "timeoutMs": 3000,
+    "pollBudgetMs": 1500
+  },
+  "response": {
+    "status": "timeout",
+    "elements": [
+      {
+        "traits": ["progressIndicator"],
+        "frame": [140.0, 300.0, 40.0, 40.0],
+        "handle": "h3",
+        "identifier": "loading.spinner"
+      }
+    ]
+  }
+}

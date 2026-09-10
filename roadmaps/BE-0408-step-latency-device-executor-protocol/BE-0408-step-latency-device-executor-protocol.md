@@ -7,8 +7,9 @@
 |---|---|
 | Proposal | [BE-0408](BE-0408-step-latency-device-executor-protocol.md) |
 | Author | [@0x0c](https://github.com/0x0c) |
-| Status | **Proposal** |
+| Status | **Implemented** |
 | Tracking issue | [Search](https://github.com/bajutsu-e2e/bajutsu/issues?q=is%3Aissue+label%3Aroadmap-tracking+in%3Atitle+"BE-0408") |
+| Implementing PR | [#1949](https://github.com/bajutsu-e2e/bajutsu/pull/1949) |
 | Topic | Platform support |
 | Related | [BE-0114](../BE-0114-driver-conformance-suite/BE-0114-driver-conformance-suite.md), [BE-0407](../BE-0407-step-latency-driver-internal-tuning/BE-0407-step-latency-driver-internal-tuning.md), [BE-0409](../BE-0409-step-latency-ios-device-executor/BE-0409-step-latency-ios-device-executor.md), [BE-0410](../BE-0410-step-latency-android-device-executor/BE-0410-step-latency-android-device-executor.md) |
 <!-- /BE-METADATA -->
@@ -85,10 +86,11 @@ Selector resolution, `wait for`, `until: gone`, `until: settled`, a screen-close
 
 ### Selector semantics as the shared contract
 
-`find_all` and `resolve_unique` in [`bajutsu/common/drivers/base.py`](../../bajutsu/common/drivers/base.py)
+`find_all` and `resolve_unique` in
+[`bajutsu/common/drivers/base/_functions.py`](../../bajutsu/common/drivers/base/_functions.py)
 are today's single definition of what a selector means: `within`, `idMatches`, `labelMatches`, the
 trait derivations, and — on Android — the derived-label fallback in
-[`drivers/adb.py:251-282`](../../bajutsu/common/drivers/adb.py). A device-side executor needs its own
+[`drivers/adb/_functions.py`](../../bajutsu/common/drivers/adb/_functions.py). A device-side executor needs its own
 copy of this logic in Swift and Kotlin, and the two copies must resolve every selector to the same
 element the host's copy would, including failing the same way on an ambiguous match — a selector
 match is exactly the kind of deterministic judgment prime directive 1 requires, so a device-side and a
@@ -153,25 +155,65 @@ its platform.
 > *Detailed design* (one box per unit of work); the log records what changed and when
 > (oldest first), linking the PRs.
 
-**Sequence status: blocked on BE-0407's completion** (see *Implementation
-order* in *Detailed design*). Do not start the checklist below before then.
+**Sequence status: BE-0407 completed** ([#1944](https://github.com/bajutsu-e2e/bajutsu/pull/1944)),
+unblocking this item (see *Implementation order* in *Detailed design*). Every box below is now
+checked.
 
-- [ ] Write the wire format for stage 1 (`POST /wait`) and agree it across both platform items before
-  either begins implementing.
-- [ ] Port `find_all` / `resolve_unique` selector semantics to a shared design document precise
+- [x] Write the wire format for stage 1 (`POST /wait`) and agree it across both platform items before
+  either begins implementing. Shipped as one OpenAPI 3.1 document,
+  [`protocol/device-executor.openapi.yaml`](protocol/device-executor.openapi.yaml) (companion
+  narrative in [`protocol/README.md`](protocol/README.md)), rather than prose alone — pinned by a
+  `jsonschema` conformance test (`tests/test_be0408_protocol_fixtures.py`) so a future BE-0409 or
+  BE-0410 PR that drifts from the shared schema fails the fast gate.
+- [x] Port `find_all` / `resolve_unique` selector semantics to a shared design document precise
   enough for two independent (Swift and Kotlin) implementations to agree on edge cases (ambiguous
-  matches, trait derivation, the Android derived-label fallback).
-- [ ] Extend the driver conformance suite ([BE-0114](../BE-0114-driver-conformance-suite/BE-0114-driver-conformance-suite.md))
-  with a fixture set a device-side resolver can be run against once one exists.
-- [ ] Define the wire format for stages 2–4 (`settled`, screen-closed `assert`, `POST /scenario`),
-  informed by whatever stage 1 and the platform items learn from a real implementation.
+  matches, trait derivation, the Android derived-label fallback). Shipped as a new *Porting
+  contract for a device-side resolver* section in [`docs/selectors.md`](../../docs/selectors.md)
+  (and its [Japanese mirror](../../docs/ja/selectors.md)), covering every edge case named here plus
+  two Swift behaviors a port must deliberately not close (`PositionPath`'s frame tolerance and
+  ordered-trait comparison).
+- [x] Extend the driver conformance suite ([BE-0114](../BE-0114-driver-conformance-suite/BE-0114-driver-conformance-suite.md))
+  with a fixture set a device-side resolver can be run against once one exists. Shipped as a
+  sibling fixture set, [`tests/fixtures/be0408/`](../../tests/fixtures/be0408/), rather than inside
+  BE-0114's `DriverConformanceContract`. That contract requires a live `Driver`, which no
+  device-side resolver has yet. Selector resolution is already backend-agnostic — every backend
+  shares one `resolve_unique` — so running the same fixtures once per backend would add no
+  information a per-backend harness could report differently. `tests/test_selector_fixtures.py`
+  replays every case against the real implementation today, so the fixture set cannot itself drift
+  from what it is meant to pin.
+- [x] Define the wire format for stages 2–4 (`settled`, screen-closed `assert`, `POST /scenario`).
+  Base it on this document's own stage 1 design and BE-0409/BE-0410's own written proposals, not on
+  a real implementation's feedback. BE-0409 cannot start until this item is complete, so no such
+  feedback yet exists. Shipped in the same OpenAPI document as stage 1 (`POST
+  /assert`, `POST /scenario`; `settled` folds into `POST /wait` as a fourth mode) — see
+  `protocol/README.md`'s *Revision history* for how a later implementation's findings feed back
+  into a dated revision of this document, rather than being a precondition for writing it once.
 - [x] Once the `roadmap-id` workflow allocates the four ids on `main`, backfill a reciprocal
   `Related` link with BE-0407, BE-0409, and BE-0410 (see the same box on BE-0407).
+
+Log:
+
+- [#1949](https://github.com/bajutsu-e2e/bajutsu/pull/1949) — completes all five units. Shipped the
+  language-neutral selector-resolution fixtures (`tests/fixtures/be0408/`) and their replay test
+  against `find_all` / `resolve_unique` / `parse_hierarchy`; the *Porting contract for a
+  device-side resolver* section in `docs/selectors.md`; a draft shared OpenAPI 3.1 protocol
+  document (`protocol/device-executor.openapi.yaml` + `protocol/README.md`) covering stages 1–4,
+  with Android brought into the same JSON contract as iOS (org.json now, an
+  `openapi-generator`-Kotlin-models recommendation for BE-0410 to evaluate) and a `pollBudgetMs`
+  polling design in place of single-call cancellation; and its own conformance fixtures and test
+  (`tests/fixtures/be0408/protocol/`, `tests/test_be0408_protocol_fixtures.py`). Fixed the stale
+  `bajutsu/common/drivers/base.py` / `drivers/adb.py` citations throughout (packaged per-class
+  since BE-0411) and a self-contradictory checklist item. A three-round self-review pass against
+  the CI review contract found and fixed 25 issues before the gate ran, mostly in the draft
+  OpenAPI schema's own structural rigor (untyped fields accepting `null`, unenforced "exactly one
+  of" rules, an unvalidated bundle payload).
 
 ## References
 
 [BE-0105 — Single-snapshot XCUITest query](../BE-0105-xcuitest-single-snapshot-query/BE-0105-xcuitest-single-snapshot-query.md),
 [BE-0114 — Driver conformance suite](../BE-0114-driver-conformance-suite/BE-0114-driver-conformance-suite.md),
 [BE-0310 — iOS accessibility screen-change readiness](../BE-0310-ios-accessibility-screen-change-readiness/BE-0310-ios-accessibility-screen-change-readiness.md),
-[`bajutsu/common/drivers/base.py`](../../bajutsu/common/drivers/base.py),
-[`bajutsu/common/drivers/adb.py`](../../bajutsu/common/drivers/adb.py)
+[`bajutsu/common/drivers/base/_functions.py`](../../bajutsu/common/drivers/base/_functions.py),
+[`bajutsu/common/drivers/adb/_functions.py`](../../bajutsu/common/drivers/adb/_functions.py),
+[`protocol/device-executor.openapi.yaml`](protocol/device-executor.openapi.yaml),
+[`docs/selectors.md`](../../docs/selectors.md)

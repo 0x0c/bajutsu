@@ -1,0 +1,22 @@
+{
+  "schema": 1,
+  "operation": "wait",
+  "request": {
+    "mode": "for",
+    "selector": { "id": "settings.open" },
+    "timeoutMs": 5000,
+    "pollBudgetMs": 1500
+  },
+  "response": {
+    "status": "ok",
+    "elements": [
+      {
+        "traits": ["button"],
+        "frame": [0.0, 0.0, 10.0, 10.0],
+        "handle": "h1",
+        "identifier": "settings.open",
+        "label": "設定"
+      }
+    ]
+  }
+}

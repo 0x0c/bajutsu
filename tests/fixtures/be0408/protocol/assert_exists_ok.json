@@ -1,0 +1,21 @@
+{
+  "schema": 1,
+  "operation": "assert",
+  "request": {
+    "kind": "exists",
+    "selector": { "id": "result.row.1" },
+    "negate": false
+  },
+  "response": {
+    "ok": true,
+    "elements": [
+      {
+        "traits": ["cell"],
+        "frame": [0.0, 0.0, 300.0, 44.0],
+        "handle": "h6",
+        "identifier": "result.row.1",
+        "label": "A"
+      }
+    ]
+  }
+}
