@@ -81,20 +81,30 @@ that holds its evidence, with no detour through `manifest.json`.
      [`bajutsu/common/scenario/load_expanded.py:63-89`](../../bajutsu/common/scenario/load_expanded.py) —
      shared by `audit`, `trace --explain`, `coverage`, and the serve Web UI's coverage view (and, via
      `load_scenarios_dir()`, by any device-free reader of a whole suite).
-3. **`_ScenarioRunner.run_one`'s `sid` construction reads it, with a fallback.** The two sites —
+3. **`_ScenarioRunner.run_one`'s `sid` construction reads it, through a narrow sanitizer, with a
+   fallback.** The two sites —
    [`bajutsu/common/runner/pipeline.py:269`](../../bajutsu/common/runner/pipeline.py) and `:1173`
    (the cross-browser matrix's `_cancelled_pass`) — change from
    `sid = f"{i:02d}-{scenario_slug(s.name)}"` to
-   `sid = f"{i:02d}-{s.source_stem or scenario_slug(s.name)}"`. The source stem is used raw, with no
-   further sanitization (see *Alternatives considered*): a scenario file's own name is already a
-   valid filesystem path segment, and passing it through `scenario_slug()`'s alnum-and-hyphen
-   normalization would turn `login_flow` into `login-flow`, no longer identical to the file name. The
+   `sid = f"{i:02d}-{sanitize_source_stem(s.source_stem) if s.source_stem else scenario_slug(s.name)}"`.
+   `sid` is not only a filesystem path segment: `report.html`'s `src=` / `href=` asset links
+   ([`bajutsu/templates/report.html.j2:32,43,47`](../../bajutsu/templates/report.html.j2)) and serve's
+   `/runs/<runId>/<sid>/…` fetches interpolate it unescaped, so a raw stem such as `login#1` or `a?b`
+   would silently truncate every relative link at the `#` / `?` — a class of breakage
+   `scenario_slug()`'s `[0-9a-z-]+` output makes impossible today (see *Alternatives considered*).
+   **`sanitize_source_stem()`** (new, beside `scenario_slug()` in
+   [`bajutsu/common/orchestrator/types/_functions.py`](../../bajutsu/common/orchestrator/types/_functions.py))
+   replaces only characters unsafe in an unescaped HTML attribute or URL path segment — anything
+   outside `[A-Za-z0-9_.-]` — with `_`, leaving a plain stem such as `login_flow` unchanged. Unlike
+   `scenario_slug()`, it leaves `_` and `.` alone, so `sid` still reads identically to the source
+   file's name in the common case; only a stem carrying an unsafe character is altered. The
    `{i:02d}-` prefix stays exactly as it is today, so `sid` stays unique within one run without any
    new counter.
 4. **Docs.** [`docs/reporting.md`](../../docs/reporting.md) / [`docs/ja/reporting.md`](../../docs/ja/reporting.md)'s
-   "Output layout" section, which today names only `runId`'s format
-   (`docs/reporting.md:30-32`), gains a line naming `sid`'s derivation (the source file's stem, or the
-   scenario's `name:` field when no source file is known).
+   "Output layout" section gains a line naming `sid`'s derivation (the source file's stem, or the
+   scenario's `name:` field when no source file is known) beside the `runId` format it names today
+   (`docs/reporting.md:30-32`), and its layout tree gains the `<sid>/` level it omits today, which
+   currently hangs `<stepId>/` directly off `runs/<runId>/`.
 5. **Tests.**
    - `tests/runner/test_pipeline.py`: a file-loaded scenario's `sid` uses the source file's stem; a
      `Scenario` built directly (no `source_stem` set) keeps today's `scenario_slug(s.name)` `sid`.
@@ -102,14 +112,18 @@ that holds its evidence, with no detour through `manifest.json`.
      file's stem, including the data-driven-expansion case (every expanded row carries the same
      stem).
    - A test that `source_stem` never appears in `Scenario.model_dump()` output.
+   - A unit test for `sanitize_source_stem()`: a plain stem such as `login_flow` passes through
+     unchanged; a stem carrying an HTML/URL-unsafe character (`login#1`, `a?b`) comes back with only
+     that character replaced.
 
 ## Alternatives considered
 
 | Alternative | Why we did not take it |
 |---|---|
 | Rename the top-level run directory (`runs/<runId>/`) itself after the scenario file | Breaks the lexicographic-sort-equals-chronological-order contract [BE-0200](../BE-0200-run-id-contract/BE-0200-run-id-contract.md) established, relied on by `latest_run()`, `serve`'s run/crawl listings, and `run/notify`'s prior-verdict lookup — a replacement for all of that would be needed. It also has no coherent answer for a run that executes more than one scenario or scenario file, since one `runs/<runId>/` directory would need one name for every scenario it holds. |
-| Drop the `{i:02d}-` index prefix and rely on a duplicate-suffix counter for uniqueness | The prefix already makes `sid` unique within a run at no extra cost, and keeping it means a directory listing still shows run order at a glance. A pure duplicate counter (`login_flow`, `login_flow_2`, …) would also make the second-and-later scenario in a multi-scenario file harder to tell apart by name alone, where today's `scenario_slug(s.name)` fallback (still used when no source file is known) does not have that problem. |
-| Normalize the file stem through the existing `scenario_slug()` sanitizer | Would turn `login_flow.yaml` into `login-flow`, no longer identical to the file name — defeating the point of naming `sid` after the file. A scenario file's name is already a valid filesystem path segment, so no additional normalization is needed. |
+| Drop the `{i:02d}-` index prefix and rely on a duplicate-suffix counter for uniqueness | The prefix already makes `sid` unique within a run at no extra cost, and keeping it means a directory listing still shows run order at a glance, which a bare counter loses. It does not, however, make same-file scenarios any more identifiable than a counter would: under this item's own design, two scenarios in one `login_flow.yaml` become `00-login_flow` and `01-login_flow`, distinguished only by the same run-order index a `login_flow` / `login_flow_2` counter would carry just as well. `scenario_slug(s.name)` — today's behavior, and this item's fallback when no source file is known — is what actually tells same-file scenarios apart by name, a property neither the index prefix nor a duplicate counter provides on its own. |
+| Normalize the file stem through the existing `scenario_slug()` sanitizer | Would turn `login_flow.yaml` into `login-flow`, no longer identical to the file name for the common case — defeating the point of naming `sid` after the file. `sanitize_source_stem()` (see *Detailed design*) gets the same filesystem/HTML/URL safety at a narrower cost, by leaving `_` and `.` untouched. |
+| Use the source stem completely raw, with no sanitization | A scenario file's name is already a valid filesystem path segment, but `sid` also travels unescaped into `report.html`'s asset links and serve's `/runs/<runId>/<sid>/…` routes (see *Detailed design*). An unsanitized stem such as `login#1` or `a?b.yaml` would silently truncate those links at the `#` / `?`, with nothing in `make check` catching it. `sanitize_source_stem()` closes that gap while keeping the common case (`login_flow`) unchanged. |
 | Thread a parallel `list[str]` of source stems alongside `list[Scenario]` through `run_all` / `run_and_report` / `run_matrix_and_report` and their callers, instead of attaching the stem to `Scenario` | Touches every call site that carries a `list[Scenario]` today — `bajutsu/run/cli.py`, `bajutsu/analysis/cli/audit.py`, and the pipeline test suite — for data that only ever travels with its scenario. A private, load-time-only field on `Scenario` keeps the change local to the two loaders and the one read site. |
 
 ## Progress
@@ -127,4 +141,6 @@ that holds its evidence, with no detour through `manifest.json`.
 - [`bajutsu/common/scenario/load_expanded.py`](../../bajutsu/common/scenario/load_expanded.py)
 - [`bajutsu/run/cli.py`](../../bajutsu/run/cli.py)
 - [`bajutsu/common/runner/pipeline.py`](../../bajutsu/common/runner/pipeline.py)
+- [`bajutsu/common/orchestrator/types/_functions.py`](../../bajutsu/common/orchestrator/types/_functions.py)
+- [`bajutsu/templates/report.html.j2`](../../bajutsu/templates/report.html.j2)
 - [`docs/reporting.md`](../../docs/reporting.md)

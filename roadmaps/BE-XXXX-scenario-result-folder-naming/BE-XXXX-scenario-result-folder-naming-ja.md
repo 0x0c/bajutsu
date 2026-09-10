@@ -90,21 +90,32 @@
      の `load_expanded_scenarios()`。`audit`、`trace --explain`、`coverage`、serve Web UI の
      カバレッジビューが共有します。`load_scenarios_dir()` 経由で、スイート全体を読む他の
      デバイスフリーな読み手にも及びます。
-3. **`sid` 組み立てが、この属性をフォールバック付きで読みます。**
+3. **`sid` 組み立てが、狭い範囲のサニタイザを通してこの属性を読みます。フォールバックも備えます。**
    [`bajutsu/common/runner/pipeline.py:269`](../../bajutsu/common/runner/pipeline.py) と、
    クロスブラウザマトリクスの `_cancelled_pass` にある `:1173` の2箇所を書き換えます。
    `sid = f"{i:02d}-{scenario_slug(s.name)}"` を
-   `sid = f"{i:02d}-{s.source_stem or scenario_slug(s.name)}"` に変更します。ソースの stem は
-   そのまま使い、追加の正規化はしません(理由は「検討した代替案」を参照)。シナリオファイル自身の
-   名前は、すでにファイルシステム上安全なパスの1セグメントです。`scenario_slug()` の英数字・
-   ハイフン正規化をかけると `login_flow` が `login-flow` になり、ファイル名と一致しなくなって
-   しまいます。`{i:02d}-` プレフィックスは今日のままです。新たなカウンタを設けなくても、`sid` は
-   同一 run 内で一意であり続けます。
+   `sid = f"{i:02d}-{sanitize_source_stem(s.source_stem) if s.source_stem else scenario_slug(s.name)}"`
+   に変更します。`sid` はファイルシステムのパスセグメントとしてだけ使われるわけではありません。
+   `report.html` の `src=` / `href=` によるアセットリンク
+   ([`bajutsu/templates/report.html.j2:32,43,47`](../../bajutsu/templates/report.html.j2))も、
+   serve の `/runs/<runId>/<sid>/…` へのフェッチも、`sid` をエスケープせずに埋め込みます。その
+   ため `login#1` や `a?b` のような stem をそのまま使うと、相対リンクが `#` や `?` の位置で静かに
+   切れてしまいます。`scenario_slug()` が出力する `[0-9a-z-]+` では、この種の破損は起こりえません
+   (理由は「検討した代替案」を参照)。**`sanitize_source_stem()`**(新規。
+   [`bajutsu/common/orchestrator/types/_functions.py`](../../bajutsu/common/orchestrator/types/_functions.py)
+   に `scenario_slug()` と並べて置きます)は、エスケープされない HTML 属性や URL のパスセグメント
+   として安全でない文字、つまり `[A-Za-z0-9_.-]` の範囲外の文字だけを `_` に置き換えます。
+   `login_flow` のような通常の stem はそのまま変わりません。`scenario_slug()` と異なり `_` と `.`
+   には手を加えないため、通常のケースでは `sid` が由来ファイルの名前と変わらず読めます。安全で
+   ない文字を含む stem だけが変化します。`{i:02d}-` プレフィックスは今日のままです。新たな
+   カウンタを設けなくても、`sid` は同一 run 内で一意であり続けます。
 4. **ドキュメント。** [`docs/reporting.md`](../../docs/reporting.md) /
-   [`docs/ja/reporting.md`](../../docs/ja/reporting.md) の「出力レイアウト」節は、現状 `runId` の
-   フォーマットしか説明していません(`docs/reporting.md:30-32`)。ここに `sid` の由来を明記する行を
-   追加します。由来ファイルの stem を使うこと、由来ファイルがわからない場合はシナリオの `name:`
-   フィールドを使うことの両方を書きます。
+   [`docs/ja/reporting.md`](../../docs/ja/reporting.md) の「出力レイアウト」節に、`sid` の由来を
+   明記する行を追加します。由来ファイルの stem を使うこと、由来ファイルがわからない場合はシナリオ
+   の `name:` フィールドを使うことの両方を、現状の節が説明している `runId` のフォーマット
+   (`docs/reporting.md:30-32`)と並べて書きます。あわせて、レイアウトを示す図にも `<sid>/` の階層
+   を追加します。現状の図は `<stepId>/` を `runs/<runId>/` に直接ぶら下げており、`<sid>/` の階層が
+   抜けています。
 5. **テスト。**
    - `tests/runner/test_pipeline.py`: ファイルから読み込んだシナリオの `sid` が由来ファイルの
      stem を使うことを確認します。`source_stem` を設定しない形で直接組み立てた `Scenario` は、
@@ -114,14 +125,18 @@
      行も同じ stem を持つことを確認します。
    - `source_stem` が `Scenario.model_dump()` の出力に一切現れないことを確認するテストを追加
      します。
+   - `sanitize_source_stem()` のユニットテストを追加します。`login_flow` のような通常の stem は、
+     そのまま変わらないことを確認します。`login#1` や `a?b` のように安全でない文字を含む stem は、
+     その文字だけが置き換わることも確認します。
 
 ## 検討した代替案
 
 | 代替案 | 採らなかった理由 |
 |---|---|
 | トップレベルの run ディレクトリ(`runs/<runId>/`)自体をシナリオファイルにちなんで改名する | [BE-0200](../BE-0200-run-id-contract/BE-0200-run-id-contract-ja.md) が確立した契約を壊します。辞書順が時系列順に一致するという契約です。この契約には `latest_run()`、`serve` の run 一覧・crawl 一覧、`run/notify` の直前 run 照合が依存しており、代わる仕組みが別途必要になります。加えて、複数のシナリオや複数のシナリオファイルを実行する run に対して一貫した答えがありません。1つの `runs/<runId>/` ディレクトリが保持するすべてのシナリオに、それぞれ1つの名前が必要になってしまうからです。 |
-| `{i:02d}-` インデックスプレフィックスを廃止し、一意性を重複サフィックスカウンタに委ねる | プレフィックスは、追加のコストなしに run 内で `sid` をすでに一意にしています。プレフィックスを残せば、ディレクトリ一覧を見ただけで実行順もわかります。純粋な重複カウンタ(`login_flow`、`login_flow_2`、…)にすると、複数シナリオを含む1ファイルの2番目以降のシナリオを、名前だけで区別しにくくなります。由来ファイルがわからない場合のフォールバックである `scenario_slug(s.name)` には、この問題がありません。 |
-| ファイルの stem を、既存の `scenario_slug()` で正規化する | `login_flow.yaml` が `login-flow` になり、ファイル名と一致しなくなります。これでは `sid` をファイルにちなんで名付ける狙いそのものが崩れます。シナリオファイルの名前は、すでにファイルシステム上安全なパスの1セグメントです。追加の正規化は不要です。 |
+| `{i:02d}-` インデックスプレフィックスを廃止し、一意性を重複サフィックスカウンタに委ねる | プレフィックスは、追加のコストなしに run 内で `sid` をすでに一意にしています。プレフィックスを残せば、ディレクトリ一覧を見ただけで実行順もわかりますが、これは重複カウンタ方式にはない利点です。一方で、同一ファイル由来のシナリオを名前で区別しやすくするという点では、この案と本項目の設計に差はありません。本項目の設計でも、1つの `login_flow.yaml` に含まれる2つのシナリオは `00-login_flow` と `01-login_flow` になり、区別できるのは重複カウンタ方式の `login_flow` と `login_flow_2` が持つのと同じ実行順インデックスだけです。同一ファイル由来のシナリオを実際に名前で区別できているのは、由来ファイルがわからない場合のフォールバックである `scenario_slug(s.name)`(現状の挙動でもあります)であり、インデックスプレフィックスにも重複カウンタにも、この性質はありません。 |
+| ファイルの stem を、既存の `scenario_slug()` で正規化する | `login_flow.yaml` が `login-flow` になり、通常のケースでファイル名と一致しなくなります。これでは `sid` をファイルにちなんで名付ける狙いそのものが崩れます。`sanitize_source_stem()`(「詳細設計」を参照)は `_` と `.` に手を加えないぶん、同じファイルシステム・HTML・URL の安全性を、より狭い代償で得られます。 |
+| ソースの stem をそのまま使い、正規化を一切しない | シナリオファイルの名前は、すでにファイルシステム上安全なパスの1セグメントです。しかし `sid` は `report.html` のアセットリンクや、serve の `/runs/<runId>/<sid>/…` ルートにもエスケープなしで渡ります(「詳細設計」を参照)。`login#1` や `a?b.yaml` のような正規化していない stem を使うと、これらのリンクが `#` や `?` の位置で静かに切れてしまい、`make check` では検出できません。`sanitize_source_stem()` は、通常のケース(`login_flow`)を変えずにこの隙間を塞ぎます。 |
 | `Scenario` に stem を持たせる代わりに、`list[Scenario]` と並行して由来 stem の `list[str]` を呼び出し元に引き回す | `run_all` / `run_and_report` / `run_matrix_and_report` とその呼び出し元が対象です。今日 `list[Scenario]` を持ち回るすべての呼び出し箇所に影響が及びます。`bajutsu/run/cli.py`、`bajutsu/analysis/cli/audit.py`、pipeline のテスト群が該当します。この情報は常にシナリオ自身と一緒に運ばれるものです。`Scenario` に、読み込みの際にだけ使うフィールドを1つ持たせるほうが、変更を2つのローダーと1つの読み取り箇所だけに閉じ込められます。 |
 
 ## 進捗
@@ -139,4 +154,6 @@
 - [`bajutsu/common/scenario/load_expanded.py`](../../bajutsu/common/scenario/load_expanded.py)
 - [`bajutsu/run/cli.py`](../../bajutsu/run/cli.py)
 - [`bajutsu/common/runner/pipeline.py`](../../bajutsu/common/runner/pipeline.py)
+- [`bajutsu/common/orchestrator/types/_functions.py`](../../bajutsu/common/orchestrator/types/_functions.py)
+- [`bajutsu/templates/report.html.j2`](../../bajutsu/templates/report.html.j2)
 - [`docs/reporting.md`](../../docs/reporting.md)
