@@ -9,6 +9,7 @@
 | Author | [@0x0c](https://github.com/0x0c) |
 | Status | **Implemented** |
 | Tracking issue | [Search](https://github.com/bajutsu-e2e/bajutsu/issues?q=is%3Aissue+label%3Aroadmap-tracking+in%3Atitle+"BE-0415") |
+| Implementing PR | [#1966](https://github.com/bajutsu-e2e/bajutsu/pull/1966) |
 | Topic | Driver & backend architecture |
 | Related | [BE-0407](../BE-0407-step-latency-driver-internal-tuning/BE-0407-step-latency-driver-internal-tuning.md) |
 <!-- /BE-METADATA -->
@@ -279,6 +280,22 @@ beyond the flag check itself.
       since it produces no `transport` or `subprocess` records.
 - [x] Unit 9 — Documentation: the CLI reference for `bajutsu run`'s flags, in both languages, gains
       `--trace-driver`.
+
+Log:
+
+- [#1966](https://github.com/bajutsu-e2e/bajutsu/pull/1966) — All 9 units, completing the item.
+  `TracingDriver` (unit 1) installs every member of every capability protocol the wrapped driver
+  actually satisfies as a real instance attribute, derived via `typing.get_protocol_members`, rather
+  than the `__getattr__`-only proxy this item's own text describes — `isinstance()` against a
+  `@runtime_checkable` protocol resolves via `inspect.getattr_static`, which never calls
+  `__getattr__`, so that design could never pass a positive `isinstance` check for any protocol. The
+  shared trace context (unit 2) is a `contextvars.ContextVar`, not `threading.local`, matching this
+  repo's existing ambient-state convention. The `driver`-category wrap (unit 5) happens in
+  `pipeline.py`'s `_run_one_impl`, mutating the returned `Lease.driver`, rather than inside
+  `pool.py`'s `device_pool().lease()` closure — that closure's warm-driver cache stores the raw
+  driver separately, so wrapping there would leak a wrapped driver into it and double-wrap on reuse.
+  Units 3–4's transport/subprocess timing lives inside `XcuitestDriver`/`AdbDriver`'s own
+  constructors rather than `backends.make_driver`'s branches.
 
 ## References
 

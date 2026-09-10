@@ -9,6 +9,7 @@
 | 提案者 | [@0x0c](https://github.com/0x0c) |
 | 状態 | **実装済み** |
 | トラッキング Issue | [検索](https://github.com/bajutsu-e2e/bajutsu/issues?q=is%3Aissue+label%3Aroadmap-tracking+in%3Atitle+"BE-0415") |
+| 実装 PR | [#1966](https://github.com/bajutsu-e2e/bajutsu/pull/1966) |
 | トピック | Driver & backend architecture |
 | 関連 | [BE-0407](../BE-0407-step-latency-driver-internal-tuning/BE-0407-step-latency-driver-internal-tuning-ja.md) |
 <!-- /BE-METADATA -->
@@ -298,6 +299,23 @@ BE-0407 はステップの遅延を大きく削減しました。ただしその
       テストスイートで検証されないまま残ってしまいます。
 - [x] 作業単位 9 — ドキュメント。`bajutsu run` のフラグ一覧に、両言語で
       `--trace-driver` を追記する。
+
+ログ：
+
+- [#1966](https://github.com/bajutsu-e2e/bajutsu/pull/1966) — 全9作業単位を完了し、本項目を完成させました。
+  `TracingDriver`（作業単位1）は、ラップ対象のドライバが実際に満たす能力プロトコルの全メンバーを、
+  `typing.get_protocol_members` で導出したうえで実インスタンス属性としてインストールします。
+  本項目の本文が説明する、`__getattr__` のみに頼るプロキシ方式は採用していません。
+  `@runtime_checkable` プロトコルへの `isinstance()` は `inspect.getattr_static` 経由で解決され、
+  `__getattr__` を一切呼ばないためです。その方式では、どのプロトコルに対しても肯定的な
+  `isinstance` 判定を通せませんでした。共有トレース文脈（作業単位2）は `threading.local` ではなく
+  `contextvars.ContextVar` とし、本リポジトリ既存のアンビエント状態の慣例に合わせました。
+  `driver` カテゴリのラップ（作業単位5）は、`pool.py` の `device_pool().lease()` クロージャの
+  内部ではなく、`pipeline.py` の `_run_one_impl` で戻り値の `Lease.driver` を書き換える形にしました。
+  そのクロージャのウォームドライバキャッシュは、生のドライバを別に保持しています。内部でラップすると、
+  次回再利用時にラップ済みドライバが紛れ込み、二重ラップになるためです。作業単位3〜4の
+  transport／subprocess 計測は、`backends.make_driver` の各分岐ではなく、`XcuitestDriver`／
+  `AdbDriver` 自身のコンストラクタ内に置きました。
 
 ## 参考
 
