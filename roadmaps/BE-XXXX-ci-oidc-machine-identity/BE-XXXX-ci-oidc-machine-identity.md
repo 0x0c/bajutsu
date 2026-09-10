@@ -165,15 +165,22 @@ disabled once OAuth is configured, exactly where the exchange is enabled instead
 
 `OrgConfig` (`bajutsu/serve/orgs.py`) already declares who belongs to an org: `members`,
 `githubOrgs`, `githubTeams`, `editorTeams`, and the `targets` it owns. This item adds
-`allowedRepositories`, each entry an `"<owner>/<repo>"`. A verified token whose repository matches an
-entry acts as that org; one that matches no org's entries is refused. The org comes from the
-validated claim alone, never from a field the caller supplies — the rule `worker_lease` already
-follows when it takes the org from the leased job rather than from the worker.
+`allowedRepositories`, each entry an `"<owner>/<repo>"`. **The exchange request names the org it
+wants, always.** The exchange succeeds when that org's `allowedRepositories` lists the token's
+repository, and is refused when it does not. That is the whole rule.
 
-A repository listed by more than one org's `allowedRepositories` is a configuration error, refused
-at startup. Humans resolve that ambiguity with a preferred org plus a selector; a machine has
-neither. Configuration order would otherwise decide the winner without anyone choosing it. If the
-conflict is ever reached at exchange time regardless, the exchange gets refused rather than resolved.
+Naming the org **selects, it never grants**: the request says which org to check the claim against,
+and the check is what admits it. That keeps `worker_lease`'s rule — the org from a validated source,
+never from the caller's word — one level up.
+
+Requiring the name is what lets one repository serve several orgs, a real shape: a shared pipeline
+repository testing apps owned by different teams. Inferring the org would have to forbid that, or
+pick a winner among the orgs listing the repository. A human resolves such an ambiguity afterwards,
+through the header's org selector backed by `eligible_orgs`, because a person can see where they
+landed and switch; a pipeline sees nothing, so the same after-the-fact choice would drop it into one
+of several tenants silently. Naming the org in the workflow states the target where it is already
+written down, and leaves one membership test. The machine session records it, so it is settled at
+the exchange rather than re-derived per request.
 
 **`allowedRepositories` keeps `"<owner>/<repo>"` names — a consciously accepted trade-off, not a
 passing caveat.** `repository` is a *mutable* name, and name recycling is precisely why GitHub
@@ -318,8 +325,11 @@ JWKS and a locally signed token:
   a listed repository.
 - A token from an unlisted repository is refused with 403, and a token whose `repository` merely
   shares a prefix with a listed entry is refused too.
-- A repository listed under two orgs' `allowedRepositories` is refused as a configuration error at
-  startup.
+- A repository listed under two orgs exchanges into whichever of them the request names, so one
+  shared pipeline repository can serve both.
+- A request naming an org whose `allowedRepositories` does not list the token's repository is
+  refused, so naming an org selects and never grants.
+- An exchange request naming no org is refused, rather than inferring one.
 - A token in the immutable-subject format authorizes on its `repository` claim, so the two `sub`
   shapes behave identically.
 - An expired token, a token with a `kid` still absent from the JWKS after the bounded refresh, a
@@ -359,9 +369,9 @@ JWKS and a locally signed token:
   entirely;
 - the exchange endpoint, the machine session it mints, and that the session's time-to-live is
   capped by the presented token's own `exp`;
-- the `allowedRepositories` shape, and the operator duty to update an entry — and revoke outstanding
-  machine sessions for it — when its repository is renamed, transferred, or deleted, or when a
-  narrowing tightens;
+- the `allowedRepositories` shape, that the exchange request names the org to check against, and the
+  operator duty to update an entry — and revoke outstanding machine sessions for it — when its
+  repository is renamed, transferred, or deleted, or when a narrowing tightens;
 - the optional `environment` / `ref` / `job_workflow_ref` narrowing, including an `environment`
   bound refusing an absent claim the same as a differing one;
 - the `pull_request_target` and fork-pull-request write-token hazards;
@@ -397,9 +407,9 @@ serve configuration.
       that cannot enforce it, an org and principal-kind column on the session record, `joserfc`
       declared directly in the `oauth` extra, and its verification kept in its own lazily-imported
       module so `gate.py` stays free of it.
-- [ ] Unit 2 — `allowedRepositories` on `OrgConfig`, matched on the discrete claims, with the
-      optional `environment` / `ref` / `job_workflow_ref` narrowing, an `environment` bound refusing
-      an absent claim, and a repository listed under two orgs refused as a configuration error.
+- [ ] Unit 2 — `allowedRepositories` on `OrgConfig`, checked against the discrete claims for the org
+      the exchange request names, with the optional `environment` / `ref` / `job_workflow_ref`
+      narrowing and an `environment` bound refusing an absent claim.
 - [ ] Unit 3 — The machine session (identity `repo:<owner>/<repo>`, revocable) and its endpoint
       allowlist in `bajutsu/serve/gate.py`, added to `gate.is_open`'s POST arm and enforced
       unconditionally regardless of the database, the verified org carried on the machine session
