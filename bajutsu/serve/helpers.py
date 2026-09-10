@@ -21,6 +21,7 @@ from bajutsu.common.backend_cli import simctl as _simctl
 from bajutsu.common.backends import KNOWN_ACTUATORS, PLATFORMS
 from bajutsu.common.config import Config, IosConfig, resolve
 from bajutsu.common.devices.id import is_valid_device_id
+from bajutsu.common.run_meta.object_store import _PRESIGN_TTL
 from bajutsu.common.scenario import load_scenario_file
 from bajutsu.serve.capabilities import required_capabilities
 from bajutsu.serve.orgs import OrgConfig, load_serve_config
@@ -91,6 +92,14 @@ def range_reply(data: bytes, range_header: str | None) -> tuple[int, bytes, dict
     start, end = byte_range
     headers = {"Accept-Ranges": "bytes", "Content-Range": f"bytes {start}-{end}/{len(data)}"}
     return 206, data[start : end + 1], headers
+
+
+# A redirect to a signed URL carries no freshness of its own, so a cache is free to invent one
+# (RFC 9111 heuristic freshness, which a 302 is eligible for) and keep handing out a URL that has
+# already expired. Bound it to half the signing TTL: even a hit served at the end of the window
+# leaves the client the other half to follow the redirect. `private` because the URL is a bearer
+# credential for one org's artifact — a shared cache must not store it.
+SIGNED_REDIRECT_CACHE_CONTROL = f"private, max-age={_PRESIGN_TTL // 2}"
 
 
 # --- query helpers ---

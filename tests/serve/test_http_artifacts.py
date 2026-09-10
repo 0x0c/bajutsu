@@ -9,8 +9,12 @@ from typing import Any
 
 import pytest
 from _shared import StubArtifactStore, _serve, project, write_run
+from fastapi.testclient import TestClient
 
 from bajutsu import serve as srv
+from bajutsu.common.run_meta.object_store import _PRESIGN_TTL
+from bajutsu.serve.helpers import SIGNED_REDIRECT_CACHE_CONTROL
+from bajutsu.serve.server.app import make_app
 
 
 def test_serve_run_file_serves_body_from_store(tmp_path: Path) -> None:
@@ -132,9 +136,30 @@ def test_serve_run_file_emits_redirect_when_store_returns_one(tmp_path: Path) ->
             opener.open(f"http://127.0.0.1:{port}/runs/r1/shot.png")
         assert ei.value.code == 302
         assert ei.value.headers["Location"] == "https://signed.example/r1/shot.png"
+        # Without this a cache may invent its own freshness for the 302 and go on handing out a
+        # signed URL that has already expired.
+        assert ei.value.headers["Cache-Control"] == SIGNED_REDIRECT_CACHE_CONTROL
     finally:
         server.shutdown()
         server.server_close()
+
+
+def test_fastapi_redirect_carries_the_same_cache_control(tmp_path: Path) -> None:
+    # The hosted backend emits the same redirect, so it must bound it the same way.
+    scn_dir, cfg, runs = project(tmp_path)
+    state = srv.ServeState(scenarios_dir=scn_dir, config=cfg, runs_dir=runs)
+    state.artifacts = _RedirectStore()
+    resp = TestClient(make_app(state)).get("/runs/r1/shot.png", follow_redirects=False)
+
+    assert resp.status_code == 302
+    assert resp.headers["location"] == "https://signed.example/r1/shot.png"
+    assert resp.headers["cache-control"] == SIGNED_REDIRECT_CACHE_CONTROL
+
+
+def test_signed_redirect_cache_window_ends_before_the_url_it_points_at() -> None:
+    # The whole point of the header: a cached copy must never outlive the signature.
+    assert SIGNED_REDIRECT_CACHE_CONTROL.startswith("private, ")  # never a shared cache
+    assert 0 < int(SIGNED_REDIRECT_CACHE_CONTROL.rsplit("=", 1)[1]) < _PRESIGN_TTL
 
 
 def test_relative_runs_dir_is_anchored_at_launch_cwd(tmp_path: Path, monkeypatch: Any) -> None:
