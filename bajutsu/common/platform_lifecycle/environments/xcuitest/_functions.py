@@ -21,6 +21,7 @@ from bajutsu.common.drivers.zorder import ZOrderResponder, ZOrderSource
 from bajutsu.common.platform_lifecycle.environments._bundled_runner import (
     bundled_products_dir,
     bundled_runner_build_info,
+    ensure_bundled_runner_fresh,
     materialize,
 )
 
@@ -515,7 +516,9 @@ def _resolve_runner(xcfg: XcuitestConfig | None, device_type: str) -> Path:
     Precedence keeps explicit config above the default. A configured `testRunner` is used, built on
     demand via `build` when the file is missing. With neither configured, a Simulator run falls back
     to the wheel-bundled generic runner (BE-0292), materialized into a writable cache; a real device
-    instead fails loudly, since its runner must be signed (BE-0288) and is not bundled.
+    instead fails loudly, since its runner must be signed (BE-0288) and is not bundled. In a dev
+    checkout, `ensure_bundled_runner_fresh` rebuilds that fallback first when BajutsuKit's own source
+    has moved past it, so this tier never silently serves a stale bundle.
     """
     tier, test_runner, build = _classify_runner(xcfg, device_type)
 
@@ -540,6 +543,7 @@ def _resolve_runner(xcfg: XcuitestConfig | None, device_type: str) -> Path:
             "xcuitest.deviceType: device requires an explicit xcuitest.testRunner "
             "(a real-device runner must be signed and is not bundled; see BE-0288)"
         )
+    ensure_bundled_runner_fresh()
     products = bundled_products_dir()
     if products is None:
         raise simctl.DeviceError(

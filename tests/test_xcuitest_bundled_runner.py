@@ -116,6 +116,41 @@ def test_simulator_falls_back_to_the_bundle(
     assert seen["source"] == bundle
 
 
+def test_simulator_checks_freshness_before_falling_back_to_the_bundle(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    bundle = _products(tmp_path / "bundle")
+    calls: list[None] = []
+    monkeypatch.setattr(xcuitest_impl, "ensure_bundled_runner_fresh", lambda: calls.append(None))
+    monkeypatch.setattr(xcuitest_impl, "bundled_products_dir", lambda: bundle)
+    monkeypatch.setattr(
+        xcuitest_impl, "materialize", lambda source: source / "BajutsuRunner.xctestrun"
+    )
+
+    xcuitest._resolve_runner(None, "simulator")
+
+    assert calls == [None]
+
+
+def test_explicit_test_runner_never_checks_bundle_freshness(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # An explicit testRunner resolves to that path, not the bundle, so the freshness check — which
+    # would shell out to rebuild an unrelated bundle — must never even run.
+    monkeypatch.setattr(xcuitest_impl, "ensure_bundled_runner_fresh", _boom)
+    runner = tmp_path / "Explicit.xctestrun"
+    runner.write_bytes(b"")
+    cfg = XcuitestConfig.model_validate({"testRunner": str(runner)})
+    assert xcuitest._resolve_runner(cfg, "simulator") == runner
+
+
+def test_device_tier_never_checks_bundle_freshness(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(xcuitest_impl, "ensure_bundled_runner_fresh", _boom)
+    cfg = XcuitestConfig.model_validate({"deviceType": "device"})
+    with pytest.raises(simctl.DeviceError, match="deviceType: device requires"):
+        xcuitest._resolve_runner(cfg, "device")
+
+
 def test_simulator_without_a_bundle_fails_clearly(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(xcuitest_impl, "bundled_products_dir", lambda: None)
     with pytest.raises(simctl.DeviceError, match="no bundled runner"):
