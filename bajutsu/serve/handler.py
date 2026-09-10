@@ -23,7 +23,12 @@ from jinja2 import Environment, FileSystemLoader
 from bajutsu.serve import gate, oplog
 from bajutsu.serve import operations as ops
 from bajutsu.serve._paths import TEMPLATES_DIR as _TEMPLATE_DIR
-from bajutsu.serve.helpers import range_reply, valid_run_id
+from bajutsu.serve.helpers import (
+    INLINE_ARTIFACT_CACHE_CONTROL,
+    SIGNED_REDIRECT_CACHE_CONTROL,
+    range_reply,
+    valid_run_id,
+)
 from bajutsu.serve.routes import ROUTES, match_route
 from bajutsu.serve.state import ServeState
 from bajutsu.serve.upload_artifacts import ArtifactKind
@@ -621,11 +626,13 @@ def _make_handler(state: ServeState) -> type[BaseHTTPRequestHandler]:  # noqa: C
             if art.redirect is not None:  # a server store hands back a signed URL
                 self.send_response(302)
                 self.send_header("Location", art.redirect)
+                self.send_header("Cache-Control", SIGNED_REDIRECT_CACHE_CONTROL)
                 self.end_headers()
                 return
             data = art.body or b""
             status, chunk, headers = range_reply(data, self.headers.get("Range"))
             self.send_response(status)
+            self.send_header("Cache-Control", INLINE_ARTIFACT_CACHE_CONTROL)
             if status != 416:
                 self.send_header("Content-Type", art.content_type)
                 if filename is not None:
