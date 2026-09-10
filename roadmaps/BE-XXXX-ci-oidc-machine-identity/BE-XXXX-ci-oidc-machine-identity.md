@@ -61,7 +61,10 @@ editor. The job-scoped binary artifact override proposal, a sibling of this item
 sequence — upload a build, then dispatch a run naming it — and can only assume a credential an OAuth
 deployment has none of. A pipeline publishing a configuration or scenario tree alongside its build
 needs two more admin-tier routes, `POST /api/artifacts/config` and `POST /api/artifacts/scenarios`,
-so the allowlist below covers all three artifact kinds, not the binary alone.
+so the allowlist below covers all three artifact kinds, not the binary alone. That pipeline is the
+consumer of what it publishes, not a courier staging bytes for a human to compose afterwards: it
+runs a named scenario against the very triple it just uploaded. Unit 3 says how the triple becomes
+effective without the org-wide rebind `POST /api/compose` performs.
 
 **Verifiable outcome.** A GitHub Actions workflow with `permissions: id-token: write` and **no
 repository secret** dispatches a run against an OAuth-configured deployment, and the run lands in
@@ -253,10 +256,31 @@ admin rank describes it. What it may do is an explicit allowlist of endpoints:
 
 | Allowed | Refused |
 |---|---|
-| `POST /api/artifacts/{config,scenarios,binary}` | `POST /api/config`, `POST /api/compose` (rebinding the org's active configuration) |
+| `POST /api/artifacts/{config,scenarios,binary}` | `POST /api/config`, `POST /api/compose` (rebinding the org's active configuration — see below for what a pipeline uses instead) |
 | `GET /api/artifacts/exists` | `GET /api/config/content` (a config body may embed secrets) |
 | `POST /api/run`, and reading runs in its org | `POST /api/apikey`, `POST /api/claudecodetoken` (operator secrets) |
 | | `/api/orgs*` (who may sign in and write) |
+
+**Publishing an artifact is half of what a pipeline needs, and `POST /api/compose` is not the other
+half.** A real pipeline uploads a config and a scenario tree alongside its build and then runs a
+named scenario against all three, so the three upload routes above leave it holding bytes it has no
+allowed call to make effective — `bind_artifact` binds nothing on its own. `POST /api/compose` is
+nevertheless the wrong way to close that: it binds the org's **active** configuration and writes the
+org's remembered one through `remember_org_config_source`, so a member's next session inherits
+whatever the last pipeline composed, and concurrent jobs of one repository contend for a single
+binding rather than each running what it asked for. Both are the reasons the sibling job-scoped
+binary override gives for refusing a rebind before every dispatch, and they apply to a triple
+exactly as they apply to a binary.
+
+The pipeline's triple therefore becomes effective the way that sibling makes a binary effective: as
+a **per-job artifact reference named at dispatch**, materialized for the run and binding nothing.
+`materialize_composition` already assembles a triple into a content-addressed tree independently of
+`state.bind_upload` and `remember_org_config_source`, so a per-job triple needs no new composition
+machinery and no binding slot — which is what lets a machine session keep the sessionless
+`binding_for` path above. This item does not specify that field; it depends on the sibling widening
+its `binaryArtifact` override from the binary leg to the triple. That widening is the one this item
+contradicts in the sibling's Alternatives, which rejects it on the premise that CI holds config and
+scenarios fixed while varying only the binary — a premise this item's motivating case does not meet.
 
 `POST /api/oidc/exchange` itself sits outside this allowlist: it is the entry point, so it requires
 no prior serve credential — only a verifiable OIDC token. Nobody should read the table above as
@@ -380,7 +404,9 @@ JWKS and a locally signed token:
 - `import bajutsu.serve` pulls in no `joserfc`, the same way it already pulls in none of the other
   server-only dependencies the import guard's `FORBIDDEN` set lists.
 - A machine session reaches every endpoint on the allowlist and is refused on `POST /api/config`,
-  `POST /api/compose`, `GET /api/config/content`, and the operator-secret endpoints. That holds the
+  `POST /api/compose`, `GET /api/config/content`, and the operator-secret endpoints. A refused
+  `POST /api/compose` leaves the org's active binding and its remembered configuration untouched,
+  so a member's next session inherits nothing from a pipeline. That holds the
   same way with no database wired. `POST /api/oidc/exchange` itself needs no prior session or token
   to be reached — only a verifiable OIDC token.
 - Both backends (`handler.py` and `server/app.py`) enforce the machine session identically, since
@@ -472,6 +498,11 @@ serve configuration.
   to this item's own `joserfc` dependency in the `oauth` extra.
 - [BE-0160 — Credential-free worker uploads via presigned URLs](../BE-0160-worker-credential-free-uploads/BE-0160-worker-credential-free-uploads.md)
   — the same "hold no long-lived credential" posture, applied to the worker.
+- [BE-0268 — Composable upload artifacts](../BE-0268-composable-upload-artifacts/BE-0268-composable-upload-artifacts.md)
+  — the triple and `materialize_composition`, which assembles one independently of any binding.
+- The job-scoped binary artifact override proposal — the sibling this item's allowlist depends on
+  for making a pipeline's uploaded triple effective, and whose Alternatives currently reject
+  widening that override past the binary leg on a premise this item's motivating case does not meet.
 - [OpenID Connect reference — GitHub Docs](https://docs.github.com/en/actions/reference/security/oidc)
   — the issuer, the claim set, the immutable-subject rollout, and `include_claim_keys`.
 - [OpenID Connect — GitHub Docs](https://docs.github.com/en/actions/concepts/security/openid-connect)

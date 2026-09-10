@@ -62,7 +62,10 @@ full-access (the operator credential)」です。つまりserveが知ってい�
 できるものがありません。ビルドとあわせて設定やシナリオ一式を公開するパイプラインもあります。そうした
 パイプラインには、さらに2つのadmin向けルート、`POST /api/artifacts/config`と
 `POST /api/artifacts/scenarios`が必要です。そのため、以下の許可リストはbinaryだけでなく、アーティ
-ファクトの3種類すべてを対象にします。
+ファクトの3種類すべてを対象にします。このパイプラインは、公開したものを人間が後からcomposeするための
+運び手ではなく、公開したものの利用者そのものです。アップロードしたばかりの3つ組に対して、シナリオを
+名指して実行します。その3つ組が、`POST /api/compose`が行うorg全体の差し替えなしにどう有効になるかは、
+単位3で述べます。
 
 **検証可能な成果。** `permissions: id-token: write`を宣言し、**リポジトリのシークレットを一切持たない**
 GitHub Actionsのワークフローが、OAuthを設定したデプロイに対してrunをdispatchします。そのrunは、
@@ -279,10 +282,31 @@ GitHubがimmutableなsubjectを導入した理由そのものです。列挙し�
 
 | 許可 | 拒否 |
 |---|---|
-| `POST /api/artifacts/{config,scenarios,binary}` | `POST /api/config`、`POST /api/compose`（orgのアクティブな設定の差し替え） |
+| `POST /api/artifacts/{config,scenarios,binary}` | `POST /api/config`、`POST /api/compose`（orgのアクティブな設定の差し替え。パイプラインが代わりに使うものは後述） |
 | `GET /api/artifacts/exists` | `GET /api/config/content`（configの本文はシークレットを埋め込み得ます） |
 | `POST /api/run`と、自分のorgのrunの読み取り | `POST /api/apikey`、`POST /api/claudecodetoken`（オペレーターのシークレット） |
 | | `/api/orgs*`（誰がサインインし書き込めるか） |
+
+**アーティファクトの公開は、パイプラインに必要なことの半分であり、その残り半分は`POST /api/compose`
+ではありません。** 実際のパイプラインは、ビルドと一緒にconfigとシナリオツリーをアップロードし、その
+3つに対してシナリオを名指して実行します。そのため、上記の3つのアップロード経路だけでは、有効化する
+手段のないバイトを抱えたままになります。`bind_artifact`はそれ単体では何もバインドしません。とはいえ、
+`POST /api/compose`でその穴を塞ぐのは誤りです。この経路はorgの**アクティブな**設定をバインドし、さらに
+`remember_org_config_source`を通じてorgの記憶された設定も書き込みます。そのため、メンバーの次の
+セッションは、最後にパイプラインがcomposeしたものを引き継いでしまいます。加えて、同じリポジトリの
+同時実行ジョブは、それぞれが求めたものを実行するのではなく、1つのバインディングを取り合うことに
+なります。どちらも、姉妹提案であるジョブ単位のbinary上書きが、dispatchのたびに差し替えを求めることを
+拒否した理由そのものであり、binaryに当てはまるのと同じように、3つ組にも当てはまります。
+
+したがって、パイプラインの3つ組は、その姉妹提案がbinaryを有効化するのと同じ方法で有効化します。
+**dispatch時に名指す、ジョブ単位のアーティファクト参照**であり、runのためにマテリアライズされ、何も
+バインドしません。`materialize_composition`は、`state.bind_upload`や`remember_org_config_source`とは
+独立に、3つ組をcontent-addressedなツリーへ組み立てます。そのため、ジョブ単位の3つ組に、新しい
+composeの仕組みもバインディングのスロットも要りません。これは、機械セッションが上記のセッションなしの
+`binding_for`の経路を保てる理由でもあります。本項目はそのフィールドを規定しません。姉妹提案が
+`binaryArtifact`の上書きを、binaryのレッグから3つ組へ広げることに依存します。この拡張こそ、姉妹提案の
+「検討した代替案」が却下しているものであり、その根拠は、CIがbinaryだけを変えてconfigとシナリオは固定
+するという前提です。本項目の動機となるケースは、その前提を満たしません。
 
 `POST /api/oidc/exchange`自体は、この許可リストの外にあります。入口そのものであるため、事前のserve
 の資格情報を必要とせず、検証可能なOIDCトークンだけを求めます。上の表を入口のゲートだと読んではいけ
@@ -413,6 +437,8 @@ nullを許すforeign keyです（`bajutsu/serve/server/models/audit_log.py`）�
 - 機械セッションは許可リスト上のすべてのエンドポイントへ到達します。`POST /api/config`・
   `POST /api/compose`・`GET /api/config/content`・オペレーターのシークレットのエンドポイントでは
   拒否されます。データベースが配線されているかどうかで、この振る舞いは変わりません。
+  `POST /api/compose`が拒否されても、orgのアクティブなバインディングと記憶された設定はそのまま残り、
+  メンバーの次のセッションがパイプラインから何かを引き継ぐことはありません。
   `POST /api/oidc/exchange`自体は、事前のセッションもトークンも必要とせず、検証可能なOIDCトークン
   だけで到達できます。
 - 両方のバックエンド（`handler.py`と`server/app.py`）は、どちらも`gate.py`を経由するため、
@@ -503,6 +529,11 @@ nullを許すforeign keyです（`bajutsu/serve/server/models/audit_log.py`）�
   `oauth` extraに持つ`joserfc`という独自の依存とは無関係です。
 - [BE-0160 — presigned URL による、認証情報不要な worker アップロード](../BE-0160-worker-credential-free-uploads/BE-0160-worker-credential-free-uploads-ja.md)
   ——「長期の資格情報を持たせない」という同じ姿勢を、workerに対して適用した項目。
+- [BE-0268 — 組み合わせ可能なアップロードアーティファクト](../BE-0268-composable-upload-artifacts/BE-0268-composable-upload-artifacts-ja.md)
+  ——3つ組と`materialize_composition`。後者は、いかなるバインディングとも独立に3つ組を組み立てます。
+- ジョブ単位のbinaryアーティファクト上書きの提案——本項目の許可リストが、パイプラインのアップロード
+  した3つ組を有効にするために依存する姉妹提案。その「検討した代替案」は、この上書きをbinaryのレッグ
+  より先へ広げることを、本項目の動機となるケースが満たさない前提にもとづいて却下しています。
 - [OpenID Connect reference — GitHub Docs](https://docs.github.com/en/actions/reference/security/oidc)
   ——発行者、クレームの一覧、immutableなsubjectへの移行、`include_claim_keys`。
 - [OpenID Connect — GitHub Docs](https://docs.github.com/en/actions/concepts/security/openid-connect)
