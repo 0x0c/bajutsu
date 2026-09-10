@@ -269,10 +269,14 @@ beyond the flag check itself.
       through `RunArtifactWriter.write_json`.
 - [ ] Unit 7 — The `bajutsu run --trace-driver` CLI flag, threaded through `_RunPlan` to
       `_ScenarioRunner`.
-- [ ] Unit 8 — Tests: a `TracingDriver` unit test against `FakeDriver` and against a driver missing
-      `settled_query`, confirming `isinstance` stays accurate; a `--trace-driver` run against the
-      `fake` backend asserting the written file's shape; a no-flag run asserting no
-      `driver_trace.json` is written.
+- [ ] Unit 8 — Tests: a `TracingDriver` unit test against `FakeDriver`, including that wrapping
+      preserves a capability-protocol negative (`isinstance(traced, base.SettledReadProvider)`
+      stays False); an `XcuitestDriver` built with a stub `transport`, asserting a `transport`
+      record per round trip; an `AdbDriver` built with a fake `run`, asserting a `subprocess`
+      record per adb invocation; a `--trace-driver` run against the `fake` backend asserting the
+      written file's shape; a no-flag run asserting no `driver_trace.json` is written. The `fake`
+      backend alone would leave units 3–4 (the iOS and Android wraps) with no fast-suite coverage,
+      since it produces no `transport` or `subprocess` records.
 - [ ] Unit 9 — Documentation: the CLI reference for `bajutsu run`'s flags, in both languages, gains
       `--trace-driver`.
 

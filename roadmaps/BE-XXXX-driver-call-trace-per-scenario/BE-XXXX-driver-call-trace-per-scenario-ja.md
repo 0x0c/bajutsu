@@ -286,11 +286,16 @@ BE-0407 はステップの遅延を大きく削減しました。ただしその
       `RunArtifactWriter.write_json` 経由での `driver_trace.json` 書き出し。
 - [ ] 作業単位 7 — `bajutsu run --trace-driver` という CLI フラグの追加と、
       `_RunPlan` から `_ScenarioRunner` への配線。
-- [ ] 作業単位 8 — テスト。`FakeDriver` に対する `TracingDriver` のユニットテストと、
-      `settled_query` を持たないドライバに対するテスト（`isinstance` の判定が崩れないことを
-      確認する）、`fake` バックエンドに対して `--trace-driver` を付けて実行し出力ファイルの形を
-      検証するテスト、フラグなしの実行では `driver_trace.json` が書き出されないことを
-      検証するテスト。
+- [ ] 作業単位 8 — テスト。`FakeDriver` に対する `TracingDriver` のユニットテスト（ラップしても
+      能力プロトコルの否定側が保たれること、たとえば
+      `isinstance(traced, base.SettledReadProvider)` が偽のままであることを含む）、スタブの
+      `transport` を渡した `XcuitestDriver` に対して往復ごとに `transport` レコードが1件できることを
+      確認するテスト、疑似の `run` を渡した `AdbDriver` に対して adb 呼び出しごとに `subprocess`
+      レコードが1件できることを確認するテスト、`fake` バックエンドに対して `--trace-driver` を
+      付けて実行し出力ファイルの形を検証するテスト、フラグなしの実行では `driver_trace.json` が
+      書き出されないことを検証するテスト。`fake` バックエンドだけでは `transport` も
+      `subprocess` もレコードが生まれないため、作業単位3〜4（iOSとAndroidのラップ）が高速な
+      テストスイートで検証されないまま残ってしまいます。
 - [ ] 作業単位 9 — ドキュメント。`bajutsu run` のフラグ一覧に、両言語で
       `--trace-driver` を追記する。
 
