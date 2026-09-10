@@ -42,7 +42,12 @@ from bajutsu.serve.handler import (
     _asset,
     _index_html,
 )
-from bajutsu.serve.helpers import SIGNED_REDIRECT_CACHE_CONTROL, range_reply, valid_run_id
+from bajutsu.serve.helpers import (
+    INLINE_ARTIFACT_CACHE_CONTROL,
+    SIGNED_REDIRECT_CACHE_CONTROL,
+    range_reply,
+    valid_run_id,
+)
 from bajutsu.serve.routes import ROUTES, Handle, Route
 from bajutsu.serve.state import ServeState
 from bajutsu.serve.upload_artifacts import ArtifactKind
@@ -130,6 +135,7 @@ def _serve_artifact(art: Any, request: Request, *, filename: str | None = None) 
             headers={"Cache-Control": SIGNED_REDIRECT_CACHE_CONTROL},
         )
     status, chunk, headers = range_reply(art.body or b"", request.headers.get("range"))
+    headers = {**headers, "Cache-Control": INLINE_ARTIFACT_CACHE_CONTROL}
     if status == 416:
         return Response(status_code=416, headers=headers)
     if filename is not None:

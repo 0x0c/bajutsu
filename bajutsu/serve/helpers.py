@@ -102,6 +102,16 @@ def range_reply(data: bytes, range_header: str | None) -> tuple[int, bytes, dict
 # `private` states the same intent for anything that keys on it.
 SIGNED_REDIRECT_CACHE_CONTROL = "private, no-store"
 
+# The inline-bytes reply (a local store's artifact, or a `416`) is the same org-scoped-by-actor,
+# not-by-URL situation as the redirect above, but 200/206 — unlike 302 — *are* on RFC 9110 §15.1's
+# heuristically-cacheable list: a shared proxy storing and replaying one across two orgs' identical
+# `/runs/<id>/<rel>` request is behavior the RFC permits, not misbehavior. `private` is the bound
+# rather than `no-store` because it already forbids exactly that shared-cache replay (RFC 9111 §3),
+# while `no-store` would additionally block the private cache the `<video>` Range/seek path reuses.
+# What that leaves: a private cache may still store, so two logins in one browser profile can reach
+# each other's bytes — accepted, since these replies carry no validator and get refetched anyway.
+INLINE_ARTIFACT_CACHE_CONTROL = "private"
+
 
 # --- query helpers ---
 
