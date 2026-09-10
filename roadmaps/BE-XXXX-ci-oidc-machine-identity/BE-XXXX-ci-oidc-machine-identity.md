@@ -150,6 +150,13 @@ OAuth-configured, database-backed deployments. The minted session's lifetime als
 token's own `exp`: the exchange only improves on reusing the token if the credential it mints is
 shorter-lived.
 
+The `sessions` columns above and the `jti` replay cache are both schema changes, and ship with an
+Alembic revision under `bajutsu/serve/server/migrations/versions/` the way every prior addition
+did — the replay cache included, since it reads as a cache but is a table like any other. Without
+it an existing deployment upgrades to code selecting columns its `sessions` table lacks and writing
+rows to a table that does not exist, failing at the exchange on exactly the database-backed
+deployments this design narrows itself to.
+
 **What the exchange buys, and what it does not.** Both are bearer credentials over TLS, so resistance
 to a captured one is roughly unchanged — the honest difference is lifetime, which is why the cap
 above matters. Four things do change: the session can be **revoked** (Unit 3's identity for it makes
@@ -268,7 +275,10 @@ only caller today is org retirement; Unit 3 owns exposing a revocation path so a
 a repository's outstanding machine sessions without retiring its org. That granularity is per
 repository, not per job — every session a repository mints shares one identity, so a revocation ends
 its concurrent pipelines too, and that shared identity is exactly what Unit 2's operator duty relies
-on.
+on. Org retirement itself needs widening for the same reason: `delete_org` revokes the roster
+`list_org_user_ids` returns, which reads the `users` table, and a machine has no row there — so
+retiring an org must also revoke the machine sessions bound to it, or they keep acting as the
+retired tenant until they expire, the exact leak BE-0375 added that revocation to close.
 
 Run reads are **org**-scoped, not per-actor: the read paths take an `org_id` and never filter on
 `created_by`, the nullable foreign key to `users.id` that already exists on `runs`
@@ -312,7 +322,13 @@ through `state.org_of(actor)`, which reads the actor's *persisted user row*. A m
 cross-tenant hole on the very routes the allowlist opens first. (`Repository.get_run(run_id)`
 compounds it — `session.get(Run, run_id)` with no `org_id` — so a per-run read built on it carries no
 tenant boundary of its own.) Every allowlisted operation instead reads the org from the machine
-session, resolved once at exchange (Unit 1).
+session, resolved once at exchange (Unit 1). A machine session also resolves its configuration by
+calling `binding_for` with no session, never taking a per-session binding slot: that is the
+sessionless path `binding_for` already documents for a CI request, which reads the deployment's
+fallback and restores nothing. BE-0393 unit 2 sized the slot map for members
+(`MAX_SESSION_BINDINGS`, "thousands of concurrent members"), and its restore is a Git or bundle
+fetch paid once per session, so one session per job would both pay that fetch per job and evict
+members' slots.
 
 Minting a synthetic `users` row to carry that org instead brings its own cost: it would carry a role
 column too, reopening the viewer-default fork above, and the machine would show up in the roster
@@ -320,9 +336,13 @@ column too, reopening the viewer-default fork above, and the machine would show 
 
 For the same reason, the audit record does not gain the repository as an *actor*. `actor_id` is a
 nullable foreign key to `users.id` (`bajutsu/serve/server/models/audit_log.py`), and minting a
-synthetic row to meet that constraint carries the cost described above. `actor_id` stays null for a machine
-request; the repository goes into the audit entry's own detail payload instead. That answers "which
-pipeline started this run" without a fake user row.
+synthetic row to meet that constraint carries the cost described above. Unlike `created_by`, which
+`jobs.py` already guards on the actor having a user row, `_record_audit` passes its actor straight
+through to `actor_id`, so Unit 3 changes that seam to write null for a machine principal rather than
+a login with no `users` row behind it — keeping the entry itself, since `_record_audit` returns
+early on a falsy actor (`bajutsu/serve/authz.py:408`) and simply passing none would drop the row
+instead of nulling the column; the repository goes into the audit entry's own detail payload
+instead. That answers "which pipeline started this run" without a fake user row.
 
 ### Unit 4 — Tests and documentation
 
@@ -374,7 +394,10 @@ JWKS and a locally signed token:
   org its repository is listed under, not `default`, on a multi-org deployment — and so does a
   machine-dispatched run and a run read.
 - The audit record for a machine-dispatched run names the repository in its detail payload, with
-  `actor_id` left null.
+  `actor_id` written as null rather than a login no `users` row backs — on an artifact upload as
+  well as a run, since `bind_artifact` audits too.
+- Retiring an org revokes its outstanding machine sessions, not only the sessions of the members
+  `list_org_user_ids` returns.
 
 `docs/self-hosting.md` and its Japanese mirror gain a section covering:
 
@@ -418,7 +441,8 @@ serve configuration.
       deployment-configured `aud` (fail closed if unset), and lifetime. A `jti` replay defense shared
       across replicas through the `Repository` seam (refusing a token with no `jti`), a per-session
       expiry on `SessionStore.issue()` capped by the token's own `exp` and refused outright on a store
-      that cannot enforce it, an org and principal-kind column on the session record, `joserfc`
+      that cannot enforce it, an org and principal-kind column on the session record, an Alembic
+      revision for those columns and the replay table, `joserfc`
       declared directly in the `oauth` extra, and its verification kept in its own lazily-imported
       module so `gate.py` stays free of it.
 - [ ] Unit 2 — `allowedRepositories` on `OrgConfig`, checked against the discrete claims for the org
@@ -427,8 +451,10 @@ serve configuration.
 - [ ] Unit 3 — The machine session (identity `repo:<owner>/<repo>`, revocable) and its endpoint
       allowlist in `bajutsu/serve/gate.py`, added to `gate.is_open`'s POST arm and enforced
       unconditionally regardless of the database, the verified org carried on the machine session
-      rather than read through `org_of` (run reads included), and the repository recorded in the
-      audit entry's detail payload.
+      rather than read through `org_of` (run reads included), `_record_audit` writing null for a
+      machine principal with the repository recorded in the audit entry's detail payload, a
+      revocation path for a repository's outstanding sessions, and org retirement widened to revoke
+      the machine sessions bound to the retired org.
 - [ ] Unit 4 — Tests for each seam, including the cross-replica `jti` replay test, the DB-less
       exchange refusal, and the import-guard check for `joserfc`, and the self-hosting documentation.
 
