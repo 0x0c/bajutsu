@@ -9,7 +9,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-find BajutsuKit/Package.swift BajutsuKit/Sources BajutsuKit/Runner/Host BajutsuKit/Runner/Sources \
+find Package.swift BajutsuKit/Sources BajutsuKit/Runner/Host BajutsuKit/Runner/Sources \
   BajutsuKit/Runner/project.yml -type f -print0 |
   sort -z |
   xargs -0 shasum -a 256 |

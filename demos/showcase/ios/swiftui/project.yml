@@ -14,7 +14,9 @@ settings:
     TARGETED_DEVICE_FAMILY: "1,2"
 packages:
   BajutsuKit:
-    path: ../../../../BajutsuKit
+    # Package.swift lives at the repo root (so it resolves via `.package(url:)` from another repo,
+    # which SPM's git-based resolution requires), not under BajutsuKit/ itself.
+    path: ../../../..
 targets:
   # The a11y build: ACCESSIBLE is defined, so every aid(...) attaches an identifier
   # and state mirrors to accessibilityValue. doctor --target grades this Ready.

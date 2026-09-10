@@ -10,10 +10,14 @@ on:
     branches: [main]
     paths:
       - "BajutsuKit/**"
+      - "Package.swift"
+      - "Package.resolved"
       - ".github/workflows/swift.yml"
   pull_request:
     paths:
       - "BajutsuKit/**"
+      - "Package.swift"
+      - "Package.resolved"
       - ".github/workflows/swift.yml"
 
 permissions:
@@ -60,17 +64,17 @@ jobs:
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
         with:
           path: ~/Library/Caches/org.swift.swiftpm
-          key: swiftpm-deps-${{ runner.os }}-${{ runner.arch }}-${{ steps.swiftver.outputs.v }}-${{ hashFiles('BajutsuKit/Package.resolved') }}
+          key: swiftpm-deps-${{ runner.os }}-${{ runner.arch }}-${{ steps.swiftver.outputs.v }}-${{ hashFiles('Package.resolved') }}
           restore-keys: |
             swiftpm-deps-${{ runner.os }}-${{ runner.arch }}-${{ steps.swiftver.outputs.v }}-
 
       - name: Cache SwiftPM build products
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
         with:
-          path: BajutsuKit/.build
-          key: swiftpm-build-${{ runner.os }}-${{ runner.arch }}-${{ steps.swiftver.outputs.v }}-${{ hashFiles('BajutsuKit/Package.resolved', 'BajutsuKit/Package.swift', 'BajutsuKit/Sources/BajutsuRunner/openapi.yaml', 'BajutsuKit/Sources/BajutsuRunner/openapi-generator-config.yaml') }}-${{ hashFiles('BajutsuKit/Sources/**/*.swift', 'BajutsuKit/Tests/**/*.swift') }}
+          path: .build
+          key: swiftpm-build-${{ runner.os }}-${{ runner.arch }}-${{ steps.swiftver.outputs.v }}-${{ hashFiles('Package.resolved', 'Package.swift', 'BajutsuKit/Sources/BajutsuRunner/openapi.yaml', 'BajutsuKit/Sources/BajutsuRunner/openapi-generator-config.yaml') }}-${{ hashFiles('BajutsuKit/Sources/**/*.swift', 'BajutsuKit/Tests/**/*.swift') }}
           restore-keys: |
-            swiftpm-build-${{ runner.os }}-${{ runner.arch }}-${{ steps.swiftver.outputs.v }}-${{ hashFiles('BajutsuKit/Package.resolved', 'BajutsuKit/Package.swift', 'BajutsuKit/Sources/BajutsuRunner/openapi.yaml', 'BajutsuKit/Sources/BajutsuRunner/openapi-generator-config.yaml') }}-
+            swiftpm-build-${{ runner.os }}-${{ runner.arch }}-${{ steps.swiftver.outputs.v }}-${{ hashFiles('Package.resolved', 'Package.swift', 'BajutsuKit/Sources/BajutsuRunner/openapi.yaml', 'BajutsuKit/Sources/BajutsuRunner/openapi-generator-config.yaml') }}-
             swiftpm-build-${{ runner.os }}-${{ runner.arch }}-${{ steps.swiftver.outputs.v }}-
 
       # The control channel (BE-0365) is the one feature a compilation condition has to select
@@ -81,29 +85,29 @@ jobs:
       - name: Cache SwiftPM build products (control channel)
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
         with:
-          path: BajutsuKit/.build-control-channel
-          key: swiftpm-build-cc-${{ runner.os }}-${{ runner.arch }}-${{ steps.swiftver.outputs.v }}-${{ hashFiles('BajutsuKit/Package.resolved', 'BajutsuKit/Package.swift', 'BajutsuKit/Sources/BajutsuRunner/openapi.yaml', 'BajutsuKit/Sources/BajutsuRunner/openapi-generator-config.yaml') }}-${{ hashFiles('BajutsuKit/Sources/**/*.swift', 'BajutsuKit/Tests/**/*.swift') }}
+          path: .build-control-channel
+          key: swiftpm-build-cc-${{ runner.os }}-${{ runner.arch }}-${{ steps.swiftver.outputs.v }}-${{ hashFiles('Package.resolved', 'Package.swift', 'BajutsuKit/Sources/BajutsuRunner/openapi.yaml', 'BajutsuKit/Sources/BajutsuRunner/openapi-generator-config.yaml') }}-${{ hashFiles('BajutsuKit/Sources/**/*.swift', 'BajutsuKit/Tests/**/*.swift') }}
           restore-keys: |
-            swiftpm-build-cc-${{ runner.os }}-${{ runner.arch }}-${{ steps.swiftver.outputs.v }}-${{ hashFiles('BajutsuKit/Package.resolved', 'BajutsuKit/Package.swift', 'BajutsuKit/Sources/BajutsuRunner/openapi.yaml', 'BajutsuKit/Sources/BajutsuRunner/openapi-generator-config.yaml') }}-
+            swiftpm-build-cc-${{ runner.os }}-${{ runner.arch }}-${{ steps.swiftver.outputs.v }}-${{ hashFiles('Package.resolved', 'Package.swift', 'BajutsuKit/Sources/BajutsuRunner/openapi.yaml', 'BajutsuKit/Sources/BajutsuRunner/openapi-generator-config.yaml') }}-
             swiftpm-build-cc-${{ runner.os }}-${{ runner.arch }}-${{ steps.swiftver.outputs.v }}-
 
       # Unflagged, and deliberately first: this is what an adopter links, so it is what the gate
       # has to build. It also proves the compile-out is clean — the channel's own sources and
       # tests compile to nothing here.
       - name: Build
-        run: swift build --package-path BajutsuKit
+        run: swift build --package-path .
 
       - name: Test
-        run: swift test --package-path BajutsuKit
+        run: swift test --package-path .
 
       - name: Build (control channel)
         run: >-
-          swift build --package-path BajutsuKit
-          --scratch-path BajutsuKit/.build-control-channel
+          swift build --package-path .
+          --scratch-path .build-control-channel
           -Xswiftc -DBAJUTSU_ENABLE_CONTROL_CHANNEL
 
       - name: Test (control channel)
         run: >-
-          swift test --package-path BajutsuKit
-          --scratch-path BajutsuKit/.build-control-channel
+          swift test --package-path .
+          --scratch-path .build-control-channel
           -Xswiftc -DBAJUTSU_ENABLE_CONTROL_CHANNEL
