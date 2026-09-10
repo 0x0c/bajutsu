@@ -14,6 +14,7 @@ import os
 import plistlib
 import shutil
 import subprocess
+import threading
 import time
 from collections.abc import Buffer
 from pathlib import Path
@@ -490,6 +491,50 @@ def test_ensure_fresh_raises_when_the_build_fails(
 
     with pytest.raises(simctl.DeviceError, match="rebuild failed"):
         _bundled_runner.ensure_bundled_runner_fresh()
+
+
+def test_ensure_fresh_rebuilds_only_once_under_concurrent_callers(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # The device pool fans `ensure_bundled_runner_fresh` out across simulator lanes concurrently; a
+    # cold/stale bundle must trigger exactly one `xcodebuild`, not one per lane.
+    bundle = _products(tmp_path / "bundle")
+    state = {"built": False}
+    start = threading.Barrier(2, timeout=5)
+
+    monkeypatch.setattr(_bundled_runner, "runner_source_present", lambda: True)
+    monkeypatch.setattr(_bundled_runner, "source_hash", lambda: "new-hash")
+    monkeypatch.setattr(_bundled_runner, "bundled_products_dir", lambda: bundle)
+    monkeypatch.setattr(
+        _bundled_runner,
+        "bundled_runner_build_info",
+        lambda: {"sourceHash": "new-hash" if state["built"] else "old-hash"},
+    )
+    monkeypatch.setattr(shutil, "which", lambda name: f"/usr/bin/{name}")
+
+    calls: list[list[str]] = []
+
+    def _slow_run(argv: list[str], **kwargs: Any) -> None:
+        # Long enough that the second thread's outer (unlocked) freshness check — run before either
+        # thread reaches the lock — still sees the stale hash, forcing it through the lock instead of
+        # short-circuiting before ever contending for it.
+        time.sleep(0.05)
+        calls.append(list(argv))
+        state["built"] = True
+
+    monkeypatch.setattr(subprocess, "run", _slow_run)
+
+    def _call() -> None:
+        start.wait()
+        _bundled_runner.ensure_bundled_runner_fresh()
+
+    threads = [threading.Thread(target=_call) for _ in range(2)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=5)
+
+    assert calls == [["make", "runner-bundle"]]
 
 
 # --- runner_source: the same precedence, disclosed without acting on it (BE-0292) --- #
