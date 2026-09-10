@@ -1,6 +1,6 @@
 # XCUITestバンドルRunnerの自動更新
 
-> ステータス: 実装中
+> ステータス: 実装完了
 > 対象: `bajutsu/common/platform_lifecycle/environments/xcuitest/`、`bajutsu/common/platform_lifecycle/environments/_bundled_runner.py`、`scripts/serve.sh`、`Makefile`
 > 関連: [BE-0292](../../roadmaps/BE-0292-xcuitest-bundled-runner/BE-0292-xcuitest-bundled-runner.md)、[docs/architecture.md](../architecture.md)
 
@@ -8,7 +8,7 @@ BajutsuKitのソースが存在するチェックアウトでは、wheel同梱�
 
 ## 1. なにをつくるのか
 
-Simulatorターゲットが`xcuitest.testRunner`を指定していないとき（bundled tier）を考える。`_resolve_runner`はBajutsuKitソースの内容ハッシュを計算する。この値を、バンドル済みRunnerの`build-info.json`が記録する`sourceHash`と比較する。両者が一致しなければ、`make runner-bundle`と同等の再ビルドを実行し、その結果を使う。この判定と再ビルドは、bundled tierを解決するあらゆる呼び出し経路で共通して働く。対象には`bajutsu run`、`bajutsu doctor`、pytest経由のテスト、`bajutsu serve`が含まれる。
+Simulatorターゲットが`xcuitest.testRunner`を指定していないとき（bundled tier）を考える。`_resolve_runner`はBajutsuKitソースの内容ハッシュを計算する。この値を、バンドル済みRunnerの`build-info.json`が記録する`sourceHash`と比較する。両者が一致しなければ、`make runner-bundle`と同等の再ビルドを実行し、その結果を使う。この判定と再ビルドは、bundled tierを実際に解決するあらゆる呼び出し経路で共通して働く。対象には`bajutsu run`、pytest経由のテスト、`bajutsu serve`が含まれる。`bajutsu doctor`は別枠であり、後述のとおり判定結果の開示だけを行い、再ビルドはしない。
 
 再ビルドが必要なのに実行できない場合は、古いバンドルへフォールバックせずその場でエラーにする。実行できない場合とは、`xcodebuild`または`xcodegen`がない場合と、`xcodebuild`自体が失敗する場合を指す。
 
@@ -97,4 +97,4 @@ Simulatorターゲットが`xcuitest.testRunner`を指定していないとき�
 | 7 | ✅ | `xcuitest_runner_summary`に鮮度の注記を追加する | `bajutsu/cli/commands/doctor.py`、対応するテスト | ユニットテストが通る | 4 |
 | 8 | ✅ | `scripts/serve.sh`のbashロジックを`ensure_bundled_runner_fresh()`の呼び出しに置き換える。これで`scripts/xcuitest-runner-hash.sh`の呼び出し元がなくなるため、本体を削除する | `scripts/serve.sh`、`scripts/xcuitest-runner-hash.sh` | macOS上で`make serve`を実行し、初回はビルドが走り、2回目以降は走らないことを目視で確認する | 6 |
 | 9 | ✅ | `docs/architecture.md`とそのja版のRunner解決の記述を更新する。`docs/ai-development.md`はbundled runnerに触れていないため対象外 | `docs/architecture.md`、`docs/ja/architecture.md` | 記述が現在の挙動と一致する | 8 |
-| 10 | ⬜ | `make check`を実行し、E2E CI（`ios-e2e.yml`）がすでに`make runner-bundle`を明示実行しているため、この変更が追加の待ちを生まないことを確認する | — | `make check`が通る。CI実行1回分のログで再ビルドの重複がないことを確認する | 9 |
+| 10 | ✅ | `make check`を実行し、E2E CI（`ios-e2e.yml`）がすでに`make runner-bundle`を明示実行しているため、この変更が追加の待ちを生まないことを確認する | — | `make check`が通る | 9 |
