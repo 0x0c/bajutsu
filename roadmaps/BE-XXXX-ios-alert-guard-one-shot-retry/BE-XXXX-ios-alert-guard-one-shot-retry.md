@@ -1,6 +1,6 @@
 **English** · [日本語](BE-XXXX-ios-alert-guard-one-shot-retry-ja.md)
 
-# BE-XXXX — Let the end-of-step alert guard clear more than one alert, and tolerate a tap that misses
+# BE-XXXX — Let the end-of-step alert guard clear more than one alert, and retry a tap that misses
 
 <!-- BE-METADATA -->
 | Field | Value |
@@ -22,7 +22,7 @@ across however many polls the wait allows. An ordinary action step — a `tap`, 
 no such polling loop. Once it fails, `AlertGuardConfig.__call__` gets one attempt to clear whatever
 blocks the screen. The step then retries once, and the run moves on.
 
-We propose letting that one attempt clear more than one alert, and tolerate a tap that misses on its
+We propose letting that one attempt clear more than one alert, and retry a tap that misses on its
 first try. Today it does neither. It resolves at most one alert per call. On the one path that can
 clear an alert an application raises inside its own process, it gives up the moment a tap comes back
 `ElementNotTappable` — the same "not yet reachable" condition `_AlertGuardGate` has carried a bounded
@@ -84,7 +84,7 @@ one of four actions.
 2. On `"absent"`, calls the revised `dismiss_from_tree_once` (Unit 2). A returned `AlertEvent`
    records the event and starts the next round, the same as a native dismissal.
 3. Still on `"absent"`, a `"not_tappable"` result (Unit 2) starts the next round without recording a
-   dismissal — the same tolerance a scrim mid-animation gets in the mid-wait path.
+   dismissal — the same retry a scrim mid-animation gets in the mid-wait path.
 4. Any other outcome — `"unhandled"`, `"reserved"`, `"incapable"`, or an `"absent"` state
    `dismiss_from_tree_once` can no longer match — ends the loop. Nothing further here can act on what
    remains, as today.
@@ -109,7 +109,7 @@ motivating case — the one this proposal exists for — still reads as a bare m
 that still fails once the loop hits its bound now names that leftover alert in its own reason, from
 whichever of the two origins (an unhandled native alert, or an obstructed in-tree one) produced it.
 
-### Unit 2 — give the in-tree tap the same landing-race tolerance the mid-wait path already has
+### Unit 2 — give the in-tree tap the same landing-race retry the mid-wait path already has
 
 `dismiss_from_tree_once` stops folding `ElementNotTappable` in with `ElementNotFound` and
 `AmbiguousSelector`, which one `except` clause answers with `None` today
@@ -122,7 +122,7 @@ the match turned ambiguous. The other two exceptions keep returning `None` and k
 Retrying a prompt that closed itself, or a label that resolved ambiguously, would spend the whole
 `_GUARD_CALL_MAX_ROUNDS` budget on a tap that will never land.
 
-This mirrors `_alert_guard_gate.py`'s own tolerance for the same exception, without copying its full
+This mirrors `_alert_guard_gate.py`'s own retry for the same exception, without copying its full
 state machine (`_TREE_RETAP_DELAY`, `_TREE_DISMISS_MAX_TAPS`, `_tree_signature`). The mid-wait path
 needs that machinery because a `wait` step's poll cadence can call it repeatedly against one alert.
 Across those repeated polls, it has to tell a lingering fade apart from a tap the application never
@@ -196,6 +196,22 @@ New `FakeDriver`-backed tests join the existing one-shot coverage in
 705–787. It, and its [`docs/ja/`](../../docs/ja/architecture.md) mirror, gain a short account of the
 end-of-step and `expect` guard clearing more than one alert per call. That account sits alongside the
 mid-wait guard's own account of the same behavior.
+
+### Out of scope
+
+Two cases stay unresolved after this proposal, by design rather than by omission. An alert no
+`systemAlertHandling` rule identifies still ends the loop at its `"unhandled"` outcome, unchanged,
+with nothing tapped.
+[BE-0402](../BE-0402-run-alert-guard-drop-vision-fallback/BE-0402-run-alert-guard-drop-vision-fallback.md)
+removed the AI-vision fallback that used to guess an answer for an undeclared alert. Guessing a tap on
+a screen a scenario never described was itself the risk, not the fix. Nothing here reopens that
+question. Likewise, an in-tree alert whose button never becomes tappable within
+`_GUARD_CALL_MAX_ROUNDS` still fails the step, unresolved.
+
+What this proposal changes for both cases is only the diagnosis. The failure names the alert
+`blocked_note` recorded, instead of reading as a bare missing element. Actually clearing either case —
+answering an alert no rule names, or retrying past a permanently obstructed screen — is a different,
+larger proposal. It would need to revisit BE-0402's own reasoning first.
 
 ## Alternatives considered
 
