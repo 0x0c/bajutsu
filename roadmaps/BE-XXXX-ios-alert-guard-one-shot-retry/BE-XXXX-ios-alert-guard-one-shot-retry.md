@@ -76,33 +76,51 @@ not clear — not a bare "element not found" that says nothing about a prompt on
 `__call__` changes from a single `probe_native` / `dismiss_from_tree_once` pair to a bounded loop
 over that same pair. A new constant, `_GUARD_CALL_MAX_ROUNDS` (proposed: 3), caps the loop. The value
 matches the order of `_TREE_DISMISS_MAX_TAPS`, the mid-wait path's own tap ceiling. Each round takes
-one of three actions.
+one of four actions.
 
 1. Calls `probe_native`. A `"dismissed"` result records the event and starts the next round, rather
    than returning right away. A SpringBoard-owned alert stacked in front of an in-tree one no longer
    ends the call before the second alert is even read.
-2. On `"absent"`, calls `dismiss_from_tree_once`. A returned `AlertEvent` records the event and
-   starts the next round, the same as a native dismissal.
-3. Any other outcome — `"unhandled"`, `"reserved"`, `"incapable"`, or an `"absent"` state with no
-   in-tree rule left to try — ends the loop. Nothing further here can act on what remains, as today.
+2. On `"absent"`, calls the revised `dismiss_from_tree_once` (Unit 2). A returned `AlertEvent`
+   records the event and starts the next round, the same as a native dismissal.
+3. Still on `"absent"`, a `"not_tappable"` result (Unit 2) starts the next round without recording a
+   dismissal — the same tolerance a scrim mid-animation gets in the mid-wait path.
+4. Any other outcome — `"unhandled"`, `"reserved"`, `"incapable"`, or an `"absent"` state
+   `dismiss_from_tree_once` can no longer match — ends the loop. Nothing further here can act on what
+   remains, as today.
 
-Between rounds that recorded a dismissal, the existing `settle_after_alert_dismiss`
-([`_functions.py:687`](../../bajutsu/common/orchestrator/waits/_functions.py)) runs before the next
-round reads the screen. This is unchanged from how it already runs once today. A prompt tapped a
-moment ago has not necessarily vanished yet. A round that reads a tree still mid-animation risks
-matching nothing at all. `blocked_note` keeps its existing meaning: what the *last* round's probe saw
-and could not clear. A step that still fails once the loop hits its bound names that leftover alert
-in its own reason. This is the same disclosure `blocked_note` already carries today for one
-unresolved alert.
+Every round that records a dismissal or a `"not_tappable"` result runs the existing
+`settle_after_alert_dismiss`
+([`_functions.py:687`](../../bajutsu/common/orchestrator/waits/_functions.py)) before the loop reads
+the screen again *or returns*. The round that exhausts `_GUARD_CALL_MAX_ROUNDS` is included, since
+that round has no next round to settle before. Unit 3 removes the caller's own settle on the strength
+of this guarantee holding on every exit. This is otherwise unchanged from how the settle already runs
+once today: a prompt tapped a moment ago has not necessarily vanished yet. A round that reads a
+tree still mid-animation risks matching nothing at all.
+
+`blocked_note` keeps its existing meaning for what a probe saw and could not clear. It gains one
+case that meaning does not cover today: a loop that exhausts `_GUARD_CALL_MAX_ROUNDS` on a
+`"not_tappable"` result sets `blocked_note = uncleared_prompt_note(label)`
+([`types/_functions.py:51`](../../bajutsu/common/orchestrator/types/_functions.py)). This names the
+label Unit 2's return carries, the same note `_alert_guard_gate.py` writes when it gives up on a
+showing. Without it, the native probe reports `"absent"` for an in-app-process sheet the SpringBoard
+query cannot see. The existing `state == "unhandled"` condition then leaves the note empty, and the
+motivating case — the one this proposal exists for — still reads as a bare missing element. A step
+that still fails once the loop hits its bound now names that leftover alert in its own reason, from
+whichever of the two origins (an unhandled native alert, or an obstructed in-tree one) produced it.
 
 ### Unit 2 — give the in-tree tap the same landing-race tolerance the mid-wait path already has
 
-`dismiss_from_tree_once`'s `ElementNotTappable` branch stops returning `None` outright. Instead, it
-reports that the button was visible but not yet reachable. Unit 1's loop treats that report as a
-reason to run one more round. It settles first, the same as after a dismissal, rather than ending the
-call. The `_GUARD_CALL_MAX_ROUNDS` bound already caps this round count. A scrim that never finishes
-presenting still degrades to the step's own failure within a small, fixed number of rounds. It never
-leaves the run stuck.
+`dismiss_from_tree_once` stops folding `ElementNotTappable` in with `ElementNotFound` and
+`AmbiguousSelector`, which one `except` clause answers with `None` today
+([`alert_guard_config.py:165`](../../bajutsu/common/orchestrator/types/alert_guard_config.py)). It
+gets its own branch. The return widens from `AlertEvent | None` to a shape that keeps three outcomes
+distinguishable. A dismissal is still an `AlertEvent`. Visible but not yet reachable becomes a
+`"not_tappable"` sentinel, paired with the label the method already resolved via `match_alert_rule`
+before attempting the tap — no extra lookup. Nothing to do stays `None`: the prompt closed itself, or
+the match turned ambiguous. The other two exceptions keep returning `None` and keep ending the loop.
+Retrying a prompt that closed itself, or a label that resolved ambiguously, would spend the whole
+`_GUARD_CALL_MAX_ROUNDS` budget on a tap that will never land.
 
 This mirrors `_alert_guard_gate.py`'s own tolerance for the same exception, without copying its full
 state machine (`_TREE_RETAP_DELAY`, `_TREE_DISMISS_MAX_TAPS`, `_tree_signature`). The mid-wait path
@@ -119,20 +137,30 @@ pattern: append directly to a caller-supplied list, rather than return one event
 `AlertEvent | None` return can no longer represent what a multi-round call clears. A caller reading
 the last event alone would under-report every alert the earlier rounds dismissed.
 [BE-0406](../BE-0406-system-alert-declared-prompts/BE-0406-system-alert-declared-prompts.md)'s Unit
-2a raised the same under-reporting risk for a different call site. The `bool` return replaces the
-`is not None` check both callers already make to decide whether the step is worth retrying.
+2a raised the same under-reporting risk for a different call site.
 
-Both call sites move to the new contract.
+Both call sites move to the new contract, and their note-appending changes alongside the return
+type, not only the retry check. Today, `event is not None` and a non-empty `blocked_note` are
+mutually exclusive: `__call__` clears the note on `"dismissed"`. So `if event is None and note …`
+already works as the gate for both, as things stand. A multi-round call breaks that exclusivity.
+Round 1 can dismiss the SpringBoard-owned prompt while round 2 leaves a second one unhandled, so
+`cleared` is `True` and `blocked_note` is still non-empty. Both sites gate the note on the note
+alone from here on, not on `cleared`. The stacked case then still names what remained, even though
+the call cleared something. `cleared` alone decides whether the retry runs.
 
 - [`_step_runner.py:653–695`](../../bajutsu/common/orchestrator/loop/_step_runner.py) — the
   end-of-step retry. `event = self.cfg.alert_guard(active_driver)` becomes a call that appends
   directly into `outcome.alerts`; the `if event is not None` branch that follows becomes `if
-  cleared`. `settle_after_alert_dismiss` no longer runs here: Unit 1 already settles between the
-  loop's own rounds, and the loop's last round already leaves the screen settled by the time it
-  returns.
+  cleared`. The note branch beside it does *not* become `if not cleared`: `if event is None and
+  note` becomes `if note and note not in reason`, gating on the note alone, per the paragraph
+  above. `settle_after_alert_dismiss` no longer runs here: Unit 1 already settles after every round
+  that dismissed or found something not yet tappable, the last one included.
 - [`_functions.py:752–769`](../../bajutsu/common/orchestrator/loop/_functions.py) — the `expect`
-  retry. The same change applies: `expect_alerts.extend(...)` becomes appending directly, and the
-  branch gating the retry reads the `bool` return.
+  retry. The guard's own result there is `expect_alerts.append(event)`
+  ([`loop/_functions.py:760`](../../bajutsu/common/orchestrator/loop/_functions.py)); that becomes
+  appending directly, not the `expect_alerts.extend(...)` at line 750, which is
+  `drain_interruptions`' result and stays unchanged. `if event is None and
+  alert_guard.blocked_note` changes the same way, to `if note and note not in reason`.
 
 Neither call site's own retry count changes. A step or an `expect` still gets one retry after the
 guard runs, as today. What changes is how much the guard itself clears within that one call, before
@@ -146,12 +174,18 @@ New `FakeDriver`-backed tests join the existing one-shot coverage in
 - A stacked-alert case: a native-only prompt sits in front of an in-tree-only one. Both events land in
   the caller's `alerts` list from a single `__call__`. The step's retry then succeeds against the
   now-clear screen.
-- A landing-race case: `dismiss_from_tree_once`'s tap raises `ElementNotTappable` on its first attempt
-  within a round, then succeeds on a later round. The alert still clears. The loop stays within its
+- A stacked case where the second alert stays unhandled: the native probe dismisses the first alert,
+  then reports `"unhandled"` on a second. `cleared` is `True`, but `blocked_note` is still set, and
+  the note reaches the eventual failure reason even though the call cleared something.
+- A landing-race case: `dismiss_from_tree_once` reports `"not_tappable"` on its first attempt within a
+  round, then dismisses on a later round. The alert still clears. The loop stays within its
   `_GUARD_CALL_MAX_ROUNDS` bound.
-- A permanently obstructed case: every round's tap keeps raising `ElementNotTappable`. The loop stops
-  at `_GUARD_CALL_MAX_ROUNDS`. The step fails, and the failure reason names the alert `blocked_note`
-  recorded, rather than reading as a bare missing element.
+- A permanently obstructed case: every round's tap keeps reporting `"not_tappable"`. The loop stops at
+  `_GUARD_CALL_MAX_ROUNDS`. The step fails, and the failure reason names the alert via
+  `uncleared_prompt_note(label)`, rather than reading as a bare missing element.
+- A settle-on-exhaustion case: three stacked prompts each dismiss, and the loop exhausts
+  `_GUARD_CALL_MAX_ROUNDS` right after the last one. `settle_after_alert_dismiss` still ran before
+  `__call__` returned, so the retry that follows reads a settled tree, not one still mid-animation.
 - A regression guard for today's single-alert, single-round behavior: a scenario with one in-tree
   alert that dismisses on the first attempt still clears in one round. The loop adds no extra latency
   to that common case.
