@@ -12,7 +12,6 @@ from _shared import StubArtifactStore, _serve, project, write_run
 from fastapi.testclient import TestClient
 
 from bajutsu import serve as srv
-from bajutsu.common.run_meta.object_store import _PRESIGN_TTL
 from bajutsu.serve.helpers import SIGNED_REDIRECT_CACHE_CONTROL
 from bajutsu.serve.server.app import make_app
 
@@ -156,10 +155,13 @@ def test_fastapi_redirect_carries_the_same_cache_control(tmp_path: Path) -> None
     assert resp.headers["cache-control"] == SIGNED_REDIRECT_CACHE_CONTROL
 
 
-def test_signed_redirect_cache_window_ends_before_the_url_it_points_at() -> None:
-    # The whole point of the header: a cached copy must never outlive the signature.
-    assert SIGNED_REDIRECT_CACHE_CONTROL.startswith("private, ")  # never a shared cache
-    assert 0 < int(SIGNED_REDIRECT_CACHE_CONTROL.rsplit("=", 1)[1]) < _PRESIGN_TTL
+def test_signed_redirect_is_never_stored() -> None:
+    # The regression to catch is a positively-cacheable directive creeping back in: the redirect
+    # target is org-scoped via the actor, not the request URL, so a stored copy reaches the wrong
+    # caller. Asserted as a property, so a harmless reformat of the constant doesn't fail here.
+    directives = {d.strip() for d in SIGNED_REDIRECT_CACHE_CONTROL.split(",")}
+    assert "no-store" in directives
+    assert not [d for d in directives if d.startswith(("max-age", "s-maxage", "public"))]
 
 
 def test_relative_runs_dir_is_anchored_at_launch_cwd(tmp_path: Path, monkeypatch: Any) -> None:
