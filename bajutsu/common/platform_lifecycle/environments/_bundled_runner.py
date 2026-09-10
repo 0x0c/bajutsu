@@ -13,12 +13,14 @@ import hashlib
 import json
 import os
 import shutil
+import subprocess
 import tempfile
 import threading
 import time
 from pathlib import Path
 
 import bajutsu
+from bajutsu.common.backend_cli import simctl
 
 # The packaged products directory: ``.xctestrun`` plus the test bundles beside it, populated by the
 # release build step (``make runner-bundle``) and force-included via pyproject ``artifacts``. Absent
@@ -47,6 +49,11 @@ _digest_cache: dict[Path, tuple[_DigestSignature, str]] = {}
 # full SHA-256 read. Holding the lock across the read lets the first lane populate the cache and the
 # rest reuse it — the redundant hashing the cache exists to avoid, avoided on the first call too.
 _digest_lock = threading.Lock()
+# Serializes `ensure_bundled_runner_fresh`'s check-then-rebuild, for the same reason `_digest_lock`
+# serializes `_products_digest`: the device pool calls it once per simulator lane, fanned out
+# concurrently, and without a lock a cold/stale bundle would start one `xcodebuild` per lane instead
+# of one for the whole process.
+_runner_build_lock = threading.Lock()
 
 
 def bundled_products_dir() -> Path | None:
@@ -234,3 +241,63 @@ def materialize(
                 return runner
             raise
     return runner
+
+
+def _bundle_matches(digest: str) -> bool:
+    """Whether the currently staged bundle exists and was built from *digest*'s source tree."""
+    info = bundled_runner_build_info()
+    return (
+        bundled_products_dir() is not None and info is not None and info.get("sourceHash") == digest
+    )
+
+
+def ensure_bundled_runner_fresh() -> None:
+    """Rebuild the wheel-bundled runner when this checkout's BajutsuKit source has moved past it.
+
+    A Simulator run with no explicit ``xcuitest.testRunner`` falls back to this bundle (BE-0292); in
+    a dev checkout, that fallback must track BajutsuKit's own source rather than whatever a past
+    ``make serve`` or release build last staged. No-ops when ``runner_source_present()`` is false (a
+    wheel install has no BajutsuKit source to compare against, so the shipped bundle is definitionally
+    current) and when ``BAJUTSU_SKIP_RUNNER_BUNDLE=1`` is set, the same escape hatch
+    ``scripts/serve.sh`` already offered. Raises rather than silently keeping a stale or absent
+    bundle, since staying current is the whole point of calling this.
+    """
+    if not runner_source_present():
+        return
+    if os.environ.get("BAJUTSU_SKIP_RUNNER_BUNDLE") == "1":
+        return
+
+    digest = source_hash()
+    if _bundle_matches(digest):
+        return
+
+    with _runner_build_lock:
+        # A concurrent simulator lane may have rebuilt while this one waited for the lock.
+        if _bundle_matches(digest):
+            return
+        _rebuild_bundle()
+
+
+def _rebuild_bundle() -> None:
+    """Run ``make runner-bundle``, or raise naming whichever build tool is missing.
+
+    Named after ``scripts/serve.sh``'s own tool check, so the two surfaces report an absent toolchain
+    the same way.
+    """
+    missing = []
+    if shutil.which("xcodebuild") is None:
+        missing.append("Xcode (xcodebuild) — install Xcode")
+    if shutil.which("xcodegen") is None:
+        missing.append("xcodegen — run 'make deps'")
+    if missing:
+        raise simctl.DeviceError(
+            "xcuitest bundled runner is stale and cannot be rebuilt: " + "; ".join(missing)
+        )
+    try:
+        subprocess.run(
+            ["make", "runner-bundle"],  # noqa: S607 — make resolved on PATH; argv list
+            cwd=_repo_root(),
+            check=True,
+        )
+    except (subprocess.CalledProcessError, OSError) as exc:
+        raise simctl.DeviceError(f"xcuitest bundled runner rebuild failed: {exc}") from exc

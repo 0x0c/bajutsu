@@ -12,6 +12,7 @@ from __future__ import annotations
 import hashlib
 import os
 import plistlib
+import shutil
 import subprocess
 import time
 from collections.abc import Buffer
@@ -374,6 +375,121 @@ def test_runner_source_present_false_without_bajutsukit(tmp_path: Path) -> None:
     # A wheel install never ships `BajutsuKit/` (pyproject's `packages = ["bajutsu"]`), so an empty
     # directory must read the same way.
     assert _bundled_runner.runner_source_present(root=tmp_path) is False
+
+
+# --- ensure_bundled_runner_fresh: rebuild the bundle when BajutsuKit's source has moved past it --- #
+
+
+def _boom(*args: Any, **kwargs: Any) -> object:
+    raise AssertionError("must not run a rebuild here")
+
+
+def test_ensure_fresh_noops_without_bajutsukit_source(monkeypatch: pytest.MonkeyPatch) -> None:
+    # A wheel install has no BajutsuKit source to compare against, so the shipped bundle is
+    # definitionally current — never even reached to check a hash.
+    monkeypatch.setattr(_bundled_runner, "runner_source_present", lambda: False)
+    monkeypatch.setattr(_bundled_runner, "source_hash", _boom)
+    monkeypatch.setattr(subprocess, "run", _boom)
+    _bundled_runner.ensure_bundled_runner_fresh()
+
+
+def test_ensure_fresh_noops_when_skip_env_var_is_set(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The escape hatch scripts/serve.sh already offered, extended to this call site.
+    monkeypatch.setattr(_bundled_runner, "runner_source_present", lambda: True)
+    monkeypatch.setenv("BAJUTSU_SKIP_RUNNER_BUNDLE", "1")
+    monkeypatch.setattr(_bundled_runner, "source_hash", _boom)
+    monkeypatch.setattr(subprocess, "run", _boom)
+    _bundled_runner.ensure_bundled_runner_fresh()
+
+
+def test_ensure_fresh_noops_when_the_bundle_already_matches(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    bundle = _products(tmp_path / "bundle")
+    monkeypatch.setattr(_bundled_runner, "runner_source_present", lambda: True)
+    monkeypatch.setattr(_bundled_runner, "source_hash", lambda: "abc123")
+    monkeypatch.setattr(_bundled_runner, "bundled_products_dir", lambda: bundle)
+    monkeypatch.setattr(
+        _bundled_runner, "bundled_runner_build_info", lambda: {"sourceHash": "abc123"}
+    )
+    monkeypatch.setattr(subprocess, "run", _boom)
+    _bundled_runner.ensure_bundled_runner_fresh()
+
+
+def _recording_run(calls: list[list[str]]) -> Any:
+    def _run(argv: list[str], **kwargs: Any) -> None:
+        calls.append(list(argv))
+
+    return _run
+
+
+def test_ensure_fresh_rebuilds_when_the_hash_differs(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    bundle = _products(tmp_path / "bundle")
+    monkeypatch.setattr(_bundled_runner, "runner_source_present", lambda: True)
+    monkeypatch.setattr(_bundled_runner, "source_hash", lambda: "new-hash")
+    monkeypatch.setattr(_bundled_runner, "bundled_products_dir", lambda: bundle)
+    monkeypatch.setattr(
+        _bundled_runner, "bundled_runner_build_info", lambda: {"sourceHash": "old-hash"}
+    )
+    monkeypatch.setattr(shutil, "which", lambda name: f"/usr/bin/{name}")
+    calls: list[list[str]] = []
+    monkeypatch.setattr(subprocess, "run", _recording_run(calls))
+
+    _bundled_runner.ensure_bundled_runner_fresh()
+
+    assert calls == [["make", "runner-bundle"]]
+
+
+def test_ensure_fresh_rebuilds_when_no_bundle_is_staged_yet(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # build-info.json can agree with the current source while no bundle products exist at all — a
+    # fresh checkout that never ran `make runner-bundle` — so "no bundle" must also trigger a build.
+    monkeypatch.setattr(_bundled_runner, "runner_source_present", lambda: True)
+    monkeypatch.setattr(_bundled_runner, "source_hash", lambda: "abc123")
+    monkeypatch.setattr(_bundled_runner, "bundled_products_dir", lambda: None)
+    monkeypatch.setattr(_bundled_runner, "bundled_runner_build_info", lambda: None)
+    monkeypatch.setattr(shutil, "which", lambda name: f"/usr/bin/{name}")
+    calls: list[list[str]] = []
+    monkeypatch.setattr(subprocess, "run", _recording_run(calls))
+
+    _bundled_runner.ensure_bundled_runner_fresh()
+
+    assert calls == [["make", "runner-bundle"]]
+
+
+def test_ensure_fresh_raises_naming_the_missing_tool(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(_bundled_runner, "runner_source_present", lambda: True)
+    monkeypatch.setattr(_bundled_runner, "source_hash", lambda: "new-hash")
+    monkeypatch.setattr(_bundled_runner, "bundled_products_dir", lambda: None)
+    monkeypatch.setattr(_bundled_runner, "bundled_runner_build_info", lambda: None)
+    monkeypatch.setattr(shutil, "which", lambda name: None)
+    monkeypatch.setattr(subprocess, "run", _boom)
+
+    with pytest.raises(simctl.DeviceError, match=r"xcodebuild.*install Xcode"):
+        _bundled_runner.ensure_bundled_runner_fresh()
+
+
+def test_ensure_fresh_raises_when_the_build_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(_bundled_runner, "runner_source_present", lambda: True)
+    monkeypatch.setattr(_bundled_runner, "source_hash", lambda: "new-hash")
+    monkeypatch.setattr(_bundled_runner, "bundled_products_dir", lambda: None)
+    monkeypatch.setattr(_bundled_runner, "bundled_runner_build_info", lambda: None)
+    monkeypatch.setattr(shutil, "which", lambda name: f"/usr/bin/{name}")
+
+    def _failing_run(argv: list[str], **kwargs: Any) -> None:
+        raise subprocess.CalledProcessError(1, argv)
+
+    monkeypatch.setattr(subprocess, "run", _failing_run)
+
+    with pytest.raises(simctl.DeviceError, match="rebuild failed"):
+        _bundled_runner.ensure_bundled_runner_fresh()
 
 
 # --- runner_source: the same precedence, disclosed without acting on it (BE-0292) --- #
