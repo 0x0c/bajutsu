@@ -95,6 +95,6 @@ Simulatorターゲットが`xcuitest.testRunner`を指定していないとき�
 | 5 | ✅ | 並行呼び出しのテストを追加する。2スレッドから同時に`ensure_bundled_runner_fresh()`を呼び、モックした`subprocess.run`の呼び出し回数が1回であることを確認する | 同上 | ユニットテストが通る | 4 |
 | 6 | ✅ | `_resolve_runner`のbundled tierから`ensure_bundled_runner_fresh()`を呼ぶ。既存の`_resolve_runner`のテストに、鮮度判定が呼ばれることの確認を足す | `bajutsu/common/platform_lifecycle/environments/xcuitest/_functions.py`、対応するテスト | ユニットテストが通る | 4 |
 | 7 | ✅ | `xcuitest_runner_summary`に鮮度の注記を追加する | `bajutsu/cli/commands/doctor.py`、対応するテスト | ユニットテストが通る | 4 |
-| 8 | ⬜ | `scripts/serve.sh`のbashロジックを`ensure_bundled_runner_fresh()`の呼び出しに置き換える。これで`scripts/xcuitest-runner-hash.sh`の呼び出し元がなくなるため、本体を削除する | `scripts/serve.sh`、`scripts/xcuitest-runner-hash.sh` | macOS上で`make serve`を実行し、初回はビルドが走り、2回目以降は走らないことを目視で確認する | 6 |
+| 8 | ✅ | `scripts/serve.sh`のbashロジックを`ensure_bundled_runner_fresh()`の呼び出しに置き換える。これで`scripts/xcuitest-runner-hash.sh`の呼び出し元がなくなるため、本体を削除する | `scripts/serve.sh`、`scripts/xcuitest-runner-hash.sh` | macOS上で`make serve`を実行し、初回はビルドが走り、2回目以降は走らないことを目視で確認する | 6 |
 | 9 | ⬜ | `docs/architecture.md`とそのja版、必要なら`docs/ai-development.md`のRunner解決の記述を更新する | `docs/architecture.md`、`docs/ja/architecture.md` | 記述が現在の挙動と一致する | 8 |
 | 10 | ⬜ | `make check`を実行し、E2E CI（`ios-e2e.yml`）がすでに`make runner-bundle`を明示実行しているため、この変更が追加の待ちを生まないことを確認する | — | `make check`が通る。CI実行1回分のログで再ビルドの重複がないことを確認する | 9 |
