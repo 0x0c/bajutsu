@@ -64,14 +64,15 @@ Simulatorターゲットが`xcuitest.testRunner`を指定していないとき�
 3. `source_hash()`を計算し、`bundled_runner_build_info()`が返す`sourceHash`と比較する。一致し、かつ`bundled_products_dir()`が値を返すなら、何もせず戻る（最新）。
 4. 一致しない、またはバンドルが存在しない場合、モジュールレベルのロックを取得する。このロックは`materialize()`の`_digest_lock`と同じ位置づけを持つ。SimulatorのDevice Poolは複数レーンから並行して`_resolve_runner`を呼ぶ。ロックがなければ、同時に複数の`xcodebuild`が走りかねない。
 5. ロック内で手順3を再確認する（二重チェックロック）。別レーンが直前に再ビルドを終えていれば、そのまま戻る。
-6. `xcodebuild`と`xcodegen`がどちらも実行できれば、`make runner-bundle`相当のビルドをサブプロセスで実行する。成功すれば戻る。
+6. `xcodebuild`と`xcodegen`がどちらも実行できれば、`make runner-bundle`相当のビルドをサブプロセスで実行する。
 7. いずれかのツールがない、またはビルドが失敗したら、`simctl.DeviceError`を送出する。メッセージは`scripts/serve.sh:94-98`と同じ形式にする。欠けているツールを名指しする（例: 「Xcode (xcodebuild) — install Xcode」）。ビルド自体の失敗では、`xcodebuild`の失敗理由を添える。
+8. サブプロセスの終了コードが0でも、手順3の一致判定を取り直す。`make`は`printf`への値渡しに使うコマンド置換の失敗を拾わない。そのため`sourceHash`が空文字列のまま`build-info.json`に書かれても、`make runner-bundle`は成功として終了しうる。一致しなければ、そのビルドを「見た目は成功したが結果が一致しない」ものとして`simctl.DeviceError`を送出する。再確認せずに戻ると、以後の呼び出しがすべて同じ不一致を検出しては黙って再ビルドを繰り返す。
 
 `_resolve_runner`のbundled tier（`_functions.py:543`の直前）で呼び出しを追加する。`bundled_products_dir()`を呼ぶ前に`ensure_bundled_runner_fresh()`を呼ぶ。
 
 ### `scripts/serve.sh`の変更
 
-現在bashで書かれている鮮度判定と再ビルド呼び出し（`scripts/serve.sh:73-101`）を、共通関数の呼び出しに置き換える。この呼び出しは`ensure_bundled_runner_fresh()`を呼ぶだけにとどめる。`BAJUTSU_SKIP_RUNNER_BUNDLE`のチェックはPython側に移るため、bashのガードからは外す。`serve_uses_xcuitest`によるバックエンド判定と、起動前に「staging…」を表示するUXは維持する。`ensure_bundled_runner_fresh()`が`DeviceError`を送出したら、serveの起動を中断してそのエラーメッセージを表示する。
+現在bashで書かれている鮮度判定と再ビルド呼び出し（`scripts/serve.sh:73-101`）を、共通関数の呼び出しに置き換える。この呼び出しは`ensure_bundled_runner_fresh()`を呼ぶだけにとどめる。`BAJUTSU_SKIP_RUNNER_BUNDLE`のチェックはPython側にも入るが、bashのガードは残す。スキップ時は`uv run`の起動コストを払わずに済む。`serve_uses_xcuitest`によるバックエンド判定と、起動前に「staging…」を表示するUXは維持する。`ensure_bundled_runner_fresh()`が`DeviceError`を送出したら、serveの起動を中断してそのエラーメッセージを表示する。
 
 ### `doctor`の開示
 

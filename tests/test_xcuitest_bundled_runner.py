@@ -478,15 +478,23 @@ def test_ensure_fresh_rebuilds_when_the_hash_differs(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     bundle = _products(tmp_path / "bundle")
+    state = {"built": False}
     monkeypatch.setattr(_bundled_runner, "runner_source_present", lambda: True)
     monkeypatch.setattr(_bundled_runner, "source_hash", lambda: "new-hash")
     monkeypatch.setattr(_bundled_runner, "bundled_products_dir", lambda: bundle)
     monkeypatch.setattr(
-        _bundled_runner, "bundled_runner_build_info", lambda: {"sourceHash": "old-hash"}
+        _bundled_runner,
+        "bundled_runner_build_info",
+        lambda: {"sourceHash": "new-hash" if state["built"] else "old-hash"},
     )
     monkeypatch.setattr(shutil, "which", lambda name: f"/usr/bin/{name}")
     calls: list[list[str]] = []
-    monkeypatch.setattr(subprocess, "run", _recording_run(calls))
+
+    def _run(argv: list[str], **kwargs: Any) -> None:
+        calls.append(list(argv))
+        state["built"] = True  # a real `make runner-bundle` would stamp the matching sourceHash
+
+    monkeypatch.setattr(subprocess, "run", _run)
 
     _bundled_runner.ensure_bundled_runner_fresh()
 
@@ -494,21 +502,59 @@ def test_ensure_fresh_rebuilds_when_the_hash_differs(
 
 
 def test_ensure_fresh_rebuilds_when_no_bundle_is_staged_yet(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     # build-info.json can agree with the current source while no bundle products exist at all — a
     # fresh checkout that never ran `make runner-bundle` — so "no bundle" must also trigger a build.
+    state = {"built": False}
+    bundle = _products(tmp_path / "bundle")
     monkeypatch.setattr(_bundled_runner, "runner_source_present", lambda: True)
     monkeypatch.setattr(_bundled_runner, "source_hash", lambda: "abc123")
-    monkeypatch.setattr(_bundled_runner, "bundled_products_dir", lambda: None)
-    monkeypatch.setattr(_bundled_runner, "bundled_runner_build_info", lambda: None)
+    monkeypatch.setattr(
+        _bundled_runner, "bundled_products_dir", lambda: bundle if state["built"] else None
+    )
+    monkeypatch.setattr(
+        _bundled_runner,
+        "bundled_runner_build_info",
+        lambda: {"sourceHash": "abc123"} if state["built"] else None,
+    )
     monkeypatch.setattr(shutil, "which", lambda name: f"/usr/bin/{name}")
     calls: list[list[str]] = []
-    monkeypatch.setattr(subprocess, "run", _recording_run(calls))
+
+    def _run(argv: list[str], **kwargs: Any) -> None:
+        calls.append(list(argv))
+        state["built"] = True  # a real `make runner-bundle` would stage the products and the hash
+
+    monkeypatch.setattr(subprocess, "run", _run)
 
     _bundled_runner.ensure_bundled_runner_fresh()
 
     assert calls == [["make", "runner-bundle"]]
+
+
+def test_ensure_fresh_raises_when_the_rebuild_leaves_a_mismatch(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # `make runner-bundle` can exit 0 without actually stamping a matching sourceHash — e.g. the
+    # Makefile's `"$(uv run python -c '...')"` substitution fails inside a `printf` that still
+    # succeeds, stamping an empty hash. That must raise immediately rather than leave every later
+    # call silently paying another full rebuild for a mismatch that will never resolve.
+    bundle = _products(tmp_path / "bundle")
+    monkeypatch.setattr(_bundled_runner, "runner_source_present", lambda: True)
+    monkeypatch.setattr(_bundled_runner, "source_hash", lambda: "new-hash")
+    monkeypatch.setattr(_bundled_runner, "bundled_products_dir", lambda: bundle)
+    # Build info never reflects the rebuild — simulating the mis-stamped-empty-hash failure mode.
+    monkeypatch.setattr(
+        _bundled_runner, "bundled_runner_build_info", lambda: {"sourceHash": "old-hash"}
+    )
+    monkeypatch.setattr(shutil, "which", lambda name: f"/usr/bin/{name}")
+    calls: list[list[str]] = []
+    monkeypatch.setattr(subprocess, "run", _recording_run(calls))
+
+    with pytest.raises(simctl.DeviceError, match="still does not match"):
+        _bundled_runner.ensure_bundled_runner_fresh()
+
+    assert calls == [["make", "runner-bundle"]]  # it did try, and only tried once
 
 
 def test_ensure_fresh_raises_naming_the_missing_tool(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -1113,6 +1113,34 @@ def test_xcuitest_runner_summary_silent_when_the_bundle_is_fresh(
     assert lines == ["xcuitest runner: bundled (wheel-shipped Simulator runner)"]
 
 
+def test_xcuitest_runner_summary_warns_on_a_fresh_clone_with_no_bundle_staged_yet(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A dev checkout that has never run `make runner-bundle` resolves `runner_source` to "none: ...
+    # (set xcuitest.testRunner)" — advice that was correct before this change but is now wrong, since
+    # ensure_bundled_runner_fresh builds the bundle automatically on the next real run. The staleness
+    # note must fire here too, not just for "staged but stale", so doctor doesn't send a contributor
+    # on a fresh clone to configure a testRunner they don't actually need.
+    from bajutsu.cli.commands import doctor
+    from bajutsu.common.platform_lifecycle.environments import _bundled_runner
+    from bajutsu.common.platform_lifecycle.environments.xcuitest import _functions as xc
+
+    monkeypatch.setattr(xc, "bundled_products_dir", lambda: None)
+    monkeypatch.setattr(_bundled_runner, "bundled_products_dir", lambda: None)
+    monkeypatch.setattr(_bundled_runner, "runner_source_present", lambda: True)
+    monkeypatch.setattr(_bundled_runner, "source_hash", lambda: "abc123")
+    monkeypatch.setattr(_bundled_runner, "bundled_runner_build_info", lambda: None)
+    monkeypatch.setattr(doctor, "_host_toolchain", lambda: (None, None))
+
+    lines = doctor.xcuitest_runner_summary(_bundled_tier_eff(), "xcuitest")
+
+    assert (
+        lines[0]
+        == "xcuitest runner: none: no bundled runner in this build (set xcuitest.testRunner)"
+    )
+    assert any("stale" in line and "⚠" in line for line in lines[1:])
+
+
 def test_current_screen_fake_backend_queries_the_driver(monkeypatch: pytest.MonkeyPatch) -> None:
     # For a non-xcuitest actuator, `doctor` scores whatever the driver's query() returns. The fake
     # backend needs no device, so resolving the udid is the only thing to stub away.
