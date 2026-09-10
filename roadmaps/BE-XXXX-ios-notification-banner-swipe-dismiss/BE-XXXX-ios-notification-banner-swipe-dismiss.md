@@ -60,24 +60,32 @@ guard clears the banner before the tap executes, and the tap lands on the target
 
 Before any driver method is added, measure how a foreground notification banner actually appears to
 XCUITest, on a booted Simulator, across the iOS versions the existing system-alert work already covers
-(18.6, 26.3, 26.4, 26.5). Five facts decide the shape of every later unit: which process's element
-tree exposes the banner — SpringBoard, as with a system alert, or a distinct process; what frame or
-identifier it offers, if any; whether an ordinary `tap`/`type` step already receives XCUITest's own
-interruption-monitor treatment when its target sits under the banner's frame, the treatment BE-0399
-measured for a system alert, or whether hit-testing instead resolves the overlap silently, with no
-interruption dispatched at all; only if the monitor is invoked, whether a swipe issued from inside its
-handler can be confirmed to have cleared the banner before the handler returns `true` — XCUITest checks
-the interruption only after the handler returns, and re-invokes the monitor when it finds the banner
-still up; and a fifth, independent of this proposal, detailed below.
+(18.6, 26.3, 26.4, 26.5). This measurement answers six questions. Five of them decide the shape of
+every later unit:
 
-BE-0399's monitor is already installed on every run with `systemAlertHandling` on, and its decline of
-an interruption it cannot match hands the alert to XCUITest's own default handler, which clears it by
-pressing the alert's default button. A banner has no button for that handler to press. So, if the third
-fact confirms a banner reaches the monitor, the fifth fact is whether that already reproduces BE-0399's
-own measured reinvocation loop today, with no code from this proposal involved: a monitor that claims
-an interruption it cannot confirm cleared gets re-invoked on every following interaction, and that
-looped until the runner died in every attempt BE-0399 measured. A confirmed loop there is an existing
-defect this item did not create, and it should be reported on its own regardless of whether this item
+1. Which process's element tree exposes the banner — SpringBoard, as with a system alert, or a distinct
+   process.
+2. What frame or identifier the banner offers, if any.
+3. What the presence query enumerates when a scenario raises two banners at once — separately
+   measurable frames a guard can order, or frames that coincide with no ordering signal between them.
+4. Whether an ordinary `tap`/`type` step already receives XCUITest's own interruption-monitor treatment
+   when its target sits under the banner's frame, the treatment BE-0399 measured for a system alert, or
+   whether hit-testing instead resolves the overlap silently, with no interruption dispatched at all.
+5. Only if the monitor is invoked, whether a swipe issued from inside its handler can be confirmed to
+   have cleared the banner before the handler returns `true` — XCUITest checks the interruption only
+   after the handler returns, and re-invokes the monitor when it finds the banner still up.
+
+The sixth question is independent of this proposal, detailed next.
+
+BE-0399's monitor is already installed on every run with `systemAlertHandling` on. Its decline of an
+interruption it cannot match hands the alert to XCUITest's own default handler, which clears it by
+pressing the alert's default button — but a banner has no button for that handler to press. So, if the
+fourth fact confirms a banner reaches the monitor, the sixth question is whether that already
+reproduces BE-0399's own measured reinvocation loop today, with no code from this proposal involved. A
+monitor that claims an interruption it cannot confirm cleared gets re-invoked on every following
+interaction, and that looped until the runner died in every attempt BE-0399 measured. A confirmed loop
+there is an existing defect this item did not create, and it should be reported on its own regardless
+of whether this item
 proceeds. This unit produces no code; the measurement fixes the design questions Unit 4 currently
 leaves open.
 
@@ -88,10 +96,14 @@ the on-screen frame the swipe in Unit 3 needs. This mirrors the shape of BE-0315
 `system_alert_labels()`: a thin, non-blocking read that reports a fact and decides nothing. The method
 sits behind its own capability token, the way `HANDLE_SYSTEM_ALERT` gates BE-0315's query: only the iOS
 XCUITest backend advertises it at first, and a backend without it reports absence rather than an error.
-When more than one banner is on screen at once, the query reports the topmost one by its measured
-frame — a stated, deterministic order (prime directive 2) rather than whichever banner XCUITest happens
-to report first — so the guard in Unit 4 can dismiss it and re-poll for the next, rather than aborting
-a run over an interruption it can clear.
+When more than one banner is on screen at once, the query's behavior follows Unit 1's third fact.
+Concurrent iOS banners typically stack at the same on-screen position, so a shared frame already names
+the correct swipe target regardless of which specific banner element the query happened to enumerate —
+the guard swipes it, re-polls, and repeats for whatever remains, the same one-per-poll flow Units 3 and
+4 already describe. If Unit 1 instead finds concurrent banners at genuinely different, non-overlapping
+frames, the query reports the topmost by that frame — a stated, deterministic order (prime directive 2)
+rather than whichever banner XCUITest happens to report first — so the guard can dismiss it and re-poll
+for the next, rather than aborting a run over an interruption it can clear.
 
 ### Unit 3 — a deterministic swipe-dismiss action
 
@@ -110,15 +122,19 @@ poll at a time rather than in a single action.
 
 A config- and scenario-level toggle arms a guard that polls Unit 2's presence query on the bounded
 interval BE-0315 already established for the SpringBoard probe, and dismisses the banner through
-Unit 3's action the moment one is found. Unit 1's fourth measurement decides which of two paths the
+Unit 3's action the moment one is found. Unit 1's fifth measurement decides which of two paths the
 guard takes, and the choice is not symmetric: only one of them is safe to take unconditionally. When
 Unit 1 confirms that the handler can swipe the banner away and see it gone before it returns `true`,
 the guard answers through that monitor, mirroring how BE-0399's
-monitor answers an interrupting alert. In every other case — including when Unit 1 cannot confirm that
-guarantee — the guard instead polls and clears the banner immediately before each act step's own
-actuation, then re-issues the presence query once more after its own swipe and waits for it to report
-the banner gone before letting the step's tap fire: a swipe is not instantaneous, and a tap synthesized
-the moment the drag lifts can still land on a banner whose dismissal animation is still running. That
+monitor answers an interrupting alert. That monitor path is available only when `systemAlertHandling`
+is also on: it is the single global monitor BE-0399 installed, gated by `policy.governs`, which only
+`systemAlertHandling` sets. With `systemAlertHandling` off, the banner toggle never reaches that
+monitor and always takes the fallback below, regardless of what Unit 1 found. In every other case —
+including when Unit 1 cannot confirm that guarantee — the guard instead polls and clears the banner
+immediately before each act step's own actuation. It then re-issues the presence query once more after
+its own swipe and waits for it to report the banner gone before letting the step's tap fire. A swipe is
+not instantaneous, and a tap synthesized the moment the drag lifts can still land on a banner whose
+dismissal animation is still running. That
 pre-actuation check issues its own presence query at the step boundary rather than reusing the
 interval-bounded poll's last answer, since acting on a remembered probe result is the defect BE-0399
 measured. That fallback carries a known, accepted limitation: a banner arriving in the gap between the
@@ -142,8 +158,12 @@ config-then-scenario, flag-overridable precedence
 
 Add a showcase scenario that raises the banner with a `push` step
 ([`docs/scenarios.md`](../../docs/scenarios.md), `simctl push`) placed immediately before the tap under
-test, so the banner's arrival is pinned to a step boundary rather than to wall-clock timing, and assert
-that the tap still lands on that target. Raising the banner is app-side work this unit owns: the
+test, so the banner's arrival is requested at a step boundary rather than at wall-clock timing. Assert
+both that the tap lands on that target and that the run's report carries the banner-dismissal
+discriminator Unit 4 adds. `simctl push` returns once the payload reaches the device, not once the
+banner is actually on screen. A run in which the banner never appeared would otherwise pass on the tap
+alone, exercising nothing; asserting on the discriminator closes that gap. Raising the banner is
+app-side work this unit owns: the
 showcase apps present no foreground banner today —
 [`demos/showcase/scenarios/push.yaml`](../../demos/showcase/scenarios/push.yaml) records that its
 `push` leaves the foreground UI unchanged — so this unit also adds the
