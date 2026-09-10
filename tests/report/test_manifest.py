@@ -141,6 +141,28 @@ def test_manifest_matrix_aggregates_per_engine_verdicts() -> None:
     assert cells["login"]["webkit"]["failure"] == "failed on webkit"
 
 
+def test_manifest_matrix_keeps_both_cells_for_same_named_scenarios() -> None:
+    # Two distinct scenarios that happen to share a `name:` (nothing enforces uniqueness across a
+    # multi-file run) must not collide in the matrix: each keeps its own row per engine instead of
+    # the second silently overwriting the first's cell.
+    results = [
+        _engine_result("login", "chromium", ok=True),
+        _engine_result("login", "chromium", ok=False),
+        _engine_result("login", "webkit", ok=True),
+        _engine_result("login", "webkit", ok=False),
+    ]
+    m = manifest_dict("r", results)
+    matrix = _json_obj(m["matrix"])
+    assert matrix["scenarios"] == ["login", "login (2)"]
+    cells = matrix["cells"]
+    assert cells["login"]["chromium"]["ok"] is True
+    assert cells["login"]["webkit"]["ok"] is True
+    assert cells["login (2)"]["chromium"]["ok"] is False
+    assert cells["login (2)"]["chromium"]["failure"] == "failed on chromium"
+    assert cells["login (2)"]["webkit"]["ok"] is False
+    assert cells["login (2)"]["webkit"]["failure"] == "failed on webkit"
+
+
 def test_manifest_matrix_keeps_flat_engine_tagged_scenarios() -> None:
     # The v1 shape is kept: `scenarios` stays the flat, engine-tagged result list.
     results = [
