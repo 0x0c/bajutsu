@@ -100,8 +100,8 @@ trusting any claim:
   keys. The verifier passes an explicit algorithms allowlist of RS256, refusing a token whose header
   names a different one — the classic `alg: none` / HS256-confusion forgery. A JWKS entry matches
   only when its key type is RSA and its advertised algorithm agrees. A missing `kid` triggers a
-  refresh capped by a refresh-interval floor (or a negative cache of missing ids), so a random `kid`
-  cannot force more than one outbound fetch per call before authenticating — an exposure now confined
+  refresh capped by a refresh-interval floor (or a negative cache of missing ids), so a stream of
+  random `kid`s costs one outbound fetch per interval, not one per call — an exposure now confined
   to the exchange endpoint alone (Unit 3). The fetch carries a timeout, since the gate runs
   synchronously in the stdlib backend, and a key set that cannot be fetched, with an expired cache,
   refuses the exchange rather than trusting a stale one; a signature that still fails to verify fails
@@ -112,8 +112,10 @@ trusting any claim:
   A deployment with no expected `aud` configured disables the OIDC caller shape entirely: an exchange
   presenting an OIDC token is refused outright, never falling back to accepting any audience — fail
   closed, not operator discipline.
-- **Lifetime.** `exp` and `nbf`, with a small skew allowance, matching the 60-second backdating
-  `bajutsu/common/github/app.py` already applies when it signs an App JWT.
+- **Lifetime.** `exp`, `nbf`, and `iat`, with a small skew allowance, matching the 60-second
+  backdating `bajutsu/common/github/app.py` already applies when it signs an App JWT. A token
+  carrying no `iat` is refused outright: the serve-side age ceiling below has nothing to measure
+  from — the same fail-closed rule as a missing `jti`.
 - **Replay.** GitHub documents no numeric token lifetime, so a captured token is replayable for its
   whole window. Serve spends each token's `jti` (documented as a unique identifier) in a replay cache
   bounded by that token's `exp`, and refuses a token past a serve-side age ceiling independent of
@@ -157,15 +159,17 @@ single-use `jti` becomes possible at all, turning a stolen token from a silent s
 **visible failure** — the attacker's exchange spends the `jti`, so the legitimate job's then fails
 loudly; and the minted session is worthless to any other service, unlike a token whose `aud` another
 might also accept. The cost is one more endpoint, a session lifetime to get right, and a second
-credential in the pipeline. After the exchange, a machine request carries no JWT — the same session
-lookup every human request already takes, through `authz.login()` and `state.auth.issue_session()`,
-disabled once OAuth is configured, exactly where the exchange is enabled instead.
+credential in the pipeline. After the exchange, a machine request carries no JWT — it takes the
+same session lookup every human request already takes, against a session minted by the same
+`state.auth.issue_session()` that mints a human's on the OAuth callback. What OAuth disables is
+`authz.login()`, the token sign-in; the exchange takes its place for a machine.
 
 ### Unit 2 — Map the claims to an org, on the claims themselves
 
 `OrgConfig` (`bajutsu/serve/orgs.py`) already declares who belongs to an org: `members`,
 `githubOrgs`, `githubTeams`, `editorTeams`, and the `targets` it owns. This item adds
-`allowedRepositories`, each entry an `"<owner>/<repo>"`. **The exchange request names the org it
+`allowedRepositories`, each entry an `"<owner>/<repo>"` string (optionally an object narrowing that
+entry further — see below). **The exchange request names the org it
 wants, always.** The exchange succeeds when that org's `allowedRepositories` lists the token's
 repository, and is refused when it does not. That is the whole rule.
 
@@ -220,10 +224,13 @@ listed.
 listed repository can mint a token from it, so `allowedRepositories` alone means "whoever can write
 that repository's workflows may dispatch as this org". A deployment needing a tighter bound narrows
 further on claims the token already carries: `environment` (a GitHub Environment can require
-reviewers before a job runs), `ref`, or `job_workflow_ref` — a real choice belonging in config, not a
-comment. `environment` is a *conditional* claim, emitted only when the job references one, so a
-configured bound must refuse a token whose claim is absent, the same as one whose value differs —
-otherwise a job declaring no environment escapes the narrowing entirely.
+reviewers before a job runs), `ref`, or `job_workflow_ref` — set **per entry**, not for the org as a
+whole. An `allowedRepositories` entry is either the plain `"<owner>/<repo>"` string or an object
+carrying that same name plus its own `environment` / `ref` / `job_workflow_ref` bound, so one org can
+list a repository that runs under a GitHub Environment next to one that does not, with no second org
+needed just to hold the unbounded entry. `environment` is a *conditional* claim, emitted only when
+the job references one, so a configured bound must refuse a token whose claim is absent, the same as
+one whose value differs — otherwise a job declaring no environment escapes the narrowing entirely.
 
 One hazard belongs in the documentation rather than the code: a pull request from a fork does not
 receive `id-token: write` by default, but a `pull_request_target` workflow runs in the base
@@ -258,7 +265,10 @@ all — `revoke_identities` revokes by identity string, and its docstring says a
 is never touched. Give it a reserved form no GitHub login can collide with: a login cannot contain
 `/`, so `repo:<owner>/<repo>` (not a `users.id` — see the audit entry below). `revoke_identities`'s
 only caller today is org retirement; Unit 3 owns exposing a revocation path so an operator can revoke
-one outstanding session directly.
+a repository's outstanding machine sessions without retiring its org. That granularity is per
+repository, not per job — every session a repository mints shares one identity, so a revocation ends
+its concurrent pipelines too, and that shared identity is exactly what Unit 2's operator duty relies
+on.
 
 Run reads are **org**-scoped, not per-actor: the read paths take an `org_id` and never filter on
 `created_by`, the nullable foreign key to `users.id` that already exists on `runs`
@@ -341,6 +351,8 @@ JWKS and a locally signed token:
   refuses the same `jti` the first replica already consumed, not merely a token re-presented to the
   same one. A token older than the serve-side maximum age is refused even while its own `exp` is
   still in the future. A token carrying no `jti` is refused outright rather than skipping the cache.
+  A token carrying no `iat` is refused outright too, rather than exchanging with no origin for the
+  age ceiling to measure from.
 - A deployment that configures no expected `aud` refuses an otherwise valid OIDC token at the
   exchange, rather than accepting whichever audience it carries — so does one whose session store
   cannot enforce a per-session expiry, `InMemorySessionStore` included. The minted machine session's
@@ -356,6 +368,8 @@ JWKS and a locally signed token:
 - A deployment configuring an `environment`, `ref`, or `job_workflow_ref` bound refuses an otherwise
   valid token whose corresponding claim differs. For `environment` alone, it also refuses one
   whose claim is absent.
+- An org listing one repository under an `environment` bound and another with none exchanges both:
+  a bound applies to its own entry only, never to the org as a whole.
 - A machine's artifact upload (`bind_artifact`) and its exists-probe (`artifact_exists`) resolve the
   org its repository is listed under, not `default`, on a multi-org deployment — and so does a
   machine-dispatched run and a run read.
@@ -408,8 +422,8 @@ serve configuration.
       declared directly in the `oauth` extra, and its verification kept in its own lazily-imported
       module so `gate.py` stays free of it.
 - [ ] Unit 2 — `allowedRepositories` on `OrgConfig`, checked against the discrete claims for the org
-      the exchange request names, with the optional `environment` / `ref` / `job_workflow_ref`
-      narrowing and an `environment` bound refusing an absent claim.
+      the exchange request names, with the optional per-entry `environment` / `ref` /
+      `job_workflow_ref` narrowing and an `environment` bound refusing an absent claim.
 - [ ] Unit 3 — The machine session (identity `repo:<owner>/<repo>`, revocable) and its endpoint
       allowlist in `bajutsu/serve/gate.py`, added to `gate.is_open`'s POST arm and enforced
       unconditionally regardless of the database, the verified org carried on the machine session
