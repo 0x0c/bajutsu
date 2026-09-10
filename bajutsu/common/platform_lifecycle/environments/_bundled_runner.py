@@ -90,7 +90,7 @@ def bundled_runner_build_info() -> dict[str, str] | None:
 # matching the algorithm, not just the inputs, keeps a checkout mid-migration from seeing every
 # already-fresh bundle flip to "stale" at once.
 _HASH_SOURCE_PATHS = (
-    "BajutsuKit/Package.swift",
+    "Package.swift",
     "BajutsuKit/Sources",
     "BajutsuKit/Runner/Host",
     "BajutsuKit/Runner/Sources",

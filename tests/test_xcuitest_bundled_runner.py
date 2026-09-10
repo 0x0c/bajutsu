@@ -355,7 +355,7 @@ def _write_bajutsukit_fixture(root: Path) -> dict[str, bytes]:
     hashed line that changes.
     """
     contents = {
-        "BajutsuKit/Package.swift": b"swift-tools-version: 5.9",
+        "Package.swift": b"swift-tools-version: 5.9",
         "BajutsuKit/Sources/Foo.swift": b"struct Foo {}",
         "BajutsuKit/Runner/Host/main.m": b"int main() {}",
         "BajutsuKit/Runner/Sources/Runner.swift": b"class Runner {}",

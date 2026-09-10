@@ -47,6 +47,8 @@ Simulatorターゲットが`xcuitest.testRunner`を指定していないとき�
 
 このハッシュ算出（sha256の入れ子）を、`_bundled_runner.py`に`source_hash() -> str`として移植する。アルゴリズムはシェル版と一致させる。既存の`build-info.json`が記録済みの`sourceHash`と食い違うと、移行直後のすべてのバンドルが不必要に「失効」と判定されてしまう。
 
+実装時の補足を記す。実装の途中で`Package.swift`がリポジトリルートへ移動した（コミット「`chore(swift): move Package.swift to the repo root`」）。この移動を受けて、`_HASH_SOURCE_PATHS`の対象は`BajutsuKit/Package.swift`ではなく`Package.swift`にした。上の5項目は移植元のシェルスクリプトが対象にしていたものをそのまま記録している。以後の対象は`_bundled_runner.py`の`_HASH_SOURCE_PATHS`を正とする。
+
 `Makefile`の`runner-bundle`ターゲットも、`build-info.json`への書き込みでこの関数を呼ぶよう変更する（`uv run python -c "..."`経由）。ハッシュの算出箇所を1つに保ち、シェル版とPython版が別々に変化してずれることを防ぐ。`scripts/xcuitest-runner-hash.sh`はこの時点で呼び出し元がなくなるため削除する。
 
 ### ソース有無の判定
