@@ -402,6 +402,19 @@ def test_source_hash_ignores_files_outside_the_hashed_paths(tmp_path: Path) -> N
     assert _bundled_runner.source_hash(root=tmp_path) == before
 
 
+def test_source_hash_raises_on_a_missing_hashed_path(tmp_path: Path) -> None:
+    # A `_HASH_SOURCE_PATHS` entry that moves or is renamed (this project's own history hit exactly
+    # this with `BajutsuKit/Package.swift` -> `Package.swift`) must fail loudly rather than silently
+    # shrink the hashed set — a quietly smaller input would stop noticing edits under the moved path.
+    contents = _write_bajutsukit_fixture(tmp_path)
+    (tmp_path / "Package.swift").unlink()
+
+    with pytest.raises(FileNotFoundError, match=r"Package\.swift"):
+        _bundled_runner.source_hash(root=tmp_path)
+
+    assert "Package.swift" in contents  # sanity: the fixture really did write this path
+
+
 def test_runner_source_present_true_for_a_dev_checkout(tmp_path: Path) -> None:
     _write_bajutsukit_fixture(tmp_path)
     assert _bundled_runner.runner_source_present(root=tmp_path) is True

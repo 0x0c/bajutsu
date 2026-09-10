@@ -122,6 +122,11 @@ def source_hash(*, root: Path | None = None) -> str:
     (sorted by path), exactly as piping ``find | sort -z | xargs shasum -a 256 | shasum -a 256``
     formats them. Call only when ``runner_source_present()`` is true; a wheel install has nothing
     under these paths to hash. *root* overrides the checkout root (tests inject a ``tmp_path``).
+
+    Raises ``FileNotFoundError`` if a listed path is neither a file nor a directory: silently
+    dropping it would shrink the hashed set instead of failing loudly, so a future rename like
+    ``BajutsuKit/Package.swift`` -> ``Package.swift`` (which this project's own history hit mid-port)
+    would otherwise stop marking the bundle stale for edits under the moved path.
     """
     root = root or _repo_root()
     files: list[Path] = []
@@ -131,6 +136,8 @@ def source_hash(*, root: Path | None = None) -> str:
             files.append(target)
         elif target.is_dir():
             files.extend(p for p in target.rglob("*") if p.is_file())
+        else:
+            raise FileNotFoundError(f"source_hash: expected path is missing: {target}")
 
     def _relative(path: Path) -> str:
         return path.relative_to(root).as_posix()
