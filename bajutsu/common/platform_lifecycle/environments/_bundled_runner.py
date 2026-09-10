@@ -77,6 +77,64 @@ def bundled_runner_build_info() -> dict[str, str] | None:
     return {k: str(v) for k, v in raw.items()}
 
 
+# The source paths `scripts/xcuitest-runner-hash.sh` hashes to detect a stale bundle (relative to
+# the checkout root). Kept in the same order that script passes them to `find`, so `source_hash`
+# below reads the same value the shell script already stamped into an existing `build-info.json` —
+# matching the algorithm, not just the inputs, keeps a checkout mid-migration from seeing every
+# already-fresh bundle flip to "stale" at once.
+_HASH_SOURCE_PATHS = (
+    "BajutsuKit/Package.swift",
+    "BajutsuKit/Sources",
+    "BajutsuKit/Runner/Host",
+    "BajutsuKit/Runner/Sources",
+    "BajutsuKit/Runner/project.yml",
+)
+
+
+def _repo_root() -> Path:
+    """The checkout root one level above the installed ``bajutsu`` package, where ``BajutsuKit/`` lives."""
+    return Path(__file__).resolve().parents[4]
+
+
+def runner_source_present(*, root: Path | None = None) -> bool:
+    """Whether this checkout ships BajutsuKit's own source, as opposed to a wheel install.
+
+    ``pyproject.toml``'s ``packages = ["bajutsu"]`` never includes ``BajutsuKit/`` in a built wheel,
+    so its presence reliably tells a git checkout (where the bundled runner can be rebuilt) apart from
+    an installed distribution (where it can only ever be whatever the wheel shipped). *root* overrides
+    the checkout root (tests inject a ``tmp_path``).
+    """
+    return ((root or _repo_root()) / "BajutsuKit" / "Runner" / "project.yml").is_file()
+
+
+def source_hash(*, root: Path | None = None) -> str:
+    """Content hash of the sources that feed the bundled runner (BE-0292's freshness check).
+
+    Mirrors ``scripts/xcuitest-runner-hash.sh``'s shasum-of-shasums: hash each file under
+    ``_HASH_SOURCE_PATHS``, then hash the concatenation of ``"<digest>  <relative path>\\n"`` lines
+    (sorted by path), exactly as piping ``find | sort -z | xargs shasum -a 256 | shasum -a 256``
+    formats them. Call only when ``runner_source_present()`` is true; a wheel install has nothing
+    under these paths to hash. *root* overrides the checkout root (tests inject a ``tmp_path``).
+    """
+    root = root or _repo_root()
+    files: list[Path] = []
+    for rel in _HASH_SOURCE_PATHS:
+        target = root / rel
+        if target.is_file():
+            files.append(target)
+        elif target.is_dir():
+            files.extend(p for p in target.rglob("*") if p.is_file())
+
+    def _relative(path: Path) -> str:
+        return path.relative_to(root).as_posix()
+
+    lines = (
+        f"{hashlib.sha256(path.read_bytes()).hexdigest()}  {_relative(path)}\n"
+        for path in sorted(files, key=_relative)
+    )
+    return hashlib.sha256("".join(lines).encode()).hexdigest()
+
+
 def _cache_root() -> Path:
     """The per-user cache root for the materialized runner, honoring ``XDG_CACHE_HOME``."""
     base = os.environ.get("XDG_CACHE_HOME")

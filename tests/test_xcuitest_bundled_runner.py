@@ -308,6 +308,74 @@ def test_bundled_products_dir_absent_by_default() -> None:
     assert _bundled_runner.bundled_products_dir() is None
 
 
+# --- source_hash / runner_source_present: detecting a dev checkout and its freshness --- #
+
+
+def _write_bajutsukit_fixture(root: Path) -> dict[str, bytes]:
+    """Write a minimal BajutsuKit tree covering every `_HASH_SOURCE_PATHS` entry.
+
+    Returns the relative-path -> content map, so a test can flip one entry and know exactly which
+    hashed line that changes.
+    """
+    contents = {
+        "BajutsuKit/Package.swift": b"swift-tools-version: 5.9",
+        "BajutsuKit/Sources/Foo.swift": b"struct Foo {}",
+        "BajutsuKit/Runner/Host/main.m": b"int main() {}",
+        "BajutsuKit/Runner/Sources/Runner.swift": b"class Runner {}",
+        "BajutsuKit/Runner/project.yml": b"name: Runner",
+    }
+    for rel, data in contents.items():
+        path = root / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(data)
+    return contents
+
+
+def test_source_hash_matches_the_shasum_of_shasums_algorithm(tmp_path: Path) -> None:
+    # Computed independently of `source_hash`'s own helpers, so a bug in the algorithm itself (not
+    # just a typo'd path) would still be caught. Mirrors `scripts/xcuitest-runner-hash.sh`'s
+    # `find | sort -z | xargs shasum -a 256 | shasum -a 256`.
+    contents = _write_bajutsukit_fixture(tmp_path)
+    blob = "".join(
+        f"{hashlib.sha256(data).hexdigest()}  {rel}\n"
+        for rel, data in sorted(contents.items(), key=lambda kv: kv[0])
+    )
+    expected = hashlib.sha256(blob.encode()).hexdigest()
+
+    assert _bundled_runner.source_hash(root=tmp_path) == expected
+
+
+def test_source_hash_changes_when_a_hashed_file_changes(tmp_path: Path) -> None:
+    _write_bajutsukit_fixture(tmp_path)
+    before = _bundled_runner.source_hash(root=tmp_path)
+
+    (tmp_path / "BajutsuKit" / "Runner" / "Sources" / "Runner.swift").write_bytes(
+        b"class Runner2 {}"
+    )
+
+    assert _bundled_runner.source_hash(root=tmp_path) != before
+
+
+def test_source_hash_ignores_files_outside_the_hashed_paths(tmp_path: Path) -> None:
+    _write_bajutsukit_fixture(tmp_path)
+    before = _bundled_runner.source_hash(root=tmp_path)
+
+    (tmp_path / "BajutsuKit" / "README.md").write_bytes(b"not part of the hashed set")
+
+    assert _bundled_runner.source_hash(root=tmp_path) == before
+
+
+def test_runner_source_present_true_for_a_dev_checkout(tmp_path: Path) -> None:
+    _write_bajutsukit_fixture(tmp_path)
+    assert _bundled_runner.runner_source_present(root=tmp_path) is True
+
+
+def test_runner_source_present_false_without_bajutsukit(tmp_path: Path) -> None:
+    # A wheel install never ships `BajutsuKit/` (pyproject's `packages = ["bajutsu"]`), so an empty
+    # directory must read the same way.
+    assert _bundled_runner.runner_source_present(root=tmp_path) is False
+
+
 # --- runner_source: the same precedence, disclosed without acting on it (BE-0292) --- #
 
 
