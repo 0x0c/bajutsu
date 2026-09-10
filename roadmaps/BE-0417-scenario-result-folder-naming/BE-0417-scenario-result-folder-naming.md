@@ -1,14 +1,14 @@
-**English** · [日本語](BE-XXXX-scenario-result-folder-naming-ja.md)
+**English** · [日本語](BE-0417-scenario-result-folder-naming-ja.md)
 
-# BE-XXXX — Name a scenario's evidence directory after its source file
+# BE-0417 — Name a scenario's evidence directory after its source file
 
 <!-- BE-METADATA -->
 | Field | Value |
 |---|---|
-| Proposal | [BE-XXXX](BE-XXXX-scenario-result-folder-naming.md) |
+| Proposal | [BE-0417](BE-0417-scenario-result-folder-naming.md) |
 | Author | [@0x0c](https://github.com/0x0c) |
 | Status | **Proposal** |
-| Tracking issue | [Search](https://github.com/bajutsu-e2e/bajutsu/issues?q=is%3Aissue+label%3Aroadmap-tracking+in%3Atitle+"BE-XXXX") |
+| Tracking issue | [Search](https://github.com/bajutsu-e2e/bajutsu/issues?q=is%3Aissue+label%3Aroadmap-tracking+in%3Atitle+"BE-0417") |
 | Topic | Codebase quality & technical debt |
 | Related | [BE-0200](../BE-0200-run-id-contract/BE-0200-run-id-contract.md) |
 <!-- /BE-METADATA -->
