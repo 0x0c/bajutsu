@@ -275,7 +275,7 @@ targets:
   demos/docs-site/docs-site.config.yaml`）。Playwright backend で公開中の
   [ドキュメントサイト](https://bajutsu-e2e.github.io/bajutsu/)そのものを操作します。ローカルに立てる
   アプリはなく、対象は公開 URL です。
-- **[serve-ui](demos/serve-ui/README.ja.md)**（`make -C demos/serve-ui serve-ui`）。Playwright backend で
+- **[serve-ui](demos/serve-ui/README.ja.md)**（`make -C demos/serve-ui e2e`）。Playwright backend で
   `serve` の Web UI 自身の単一ページアプリを dogfooding します。Mac も Simulator も不要な、Web UI
   向けの決定的な回帰ネットです。
 

@@ -281,7 +281,7 @@ Runnable demos, all through one entry point — `make -C demos <target>` ([`demo
   demos/docs-site/docs-site.config.yaml`. The Playwright backend driving the public, live
   [docs site](https://bajutsu-e2e.github.io/bajutsu/) itself — no local app to serve, the target
   is a live URL.
-- **[serve-ui](demos/serve-ui/README.md)** — `make -C demos/serve-ui serve-ui`. The Playwright
+- **[serve-ui](demos/serve-ui/README.md)** — `make -C demos/serve-ui e2e`. The Playwright
   backend dogfooding the `serve` web UI's own single-page app, a deterministic regression net for
   the Web UI, no Mac or Simulator needed.
 
