@@ -25,11 +25,16 @@ let package = Package(
         // already resolve to.
         .package(url: "https://github.com/apple/swift-http-types", exact: "1.6.0"),
     ],
+    // Every target's `path:` is explicit and points back into BajutsuKit/: the manifest lives at
+    // the repo root so this package resolves over `.package(url:)` from another repo (SPM's
+    // git-based resolution requires Package.swift at the clone's root), but the Swift sources stay
+    // put alongside the rest of BajutsuKit's non-Swift tooling (Runner/, README.md) rather than
+    // moving to the repo root themselves.
     targets: [
-        .target(name: "BajutsuKit"),
+        .target(name: "BajutsuKit", path: "BajutsuKit/Sources/BajutsuKit"),
         // An Objective-C shim that catches a raised NSException so the resident runner can survive a
         // failed XCUITest interaction instead of aborting; see the header for why Swift needs it.
-        .target(name: "ObjCExceptionCatcher"),
+        .target(name: "ObjCExceptionCatcher", path: "BajutsuKit/Sources/ObjCExceptionCatcher"),
         .target(
             name: "BajutsuRunner",
             dependencies: [
@@ -37,9 +42,10 @@ let package = Package(
                 .product(name: "OpenAPIRuntime", package: "swift-openapi-runtime"),
                 .product(name: "HTTPTypes", package: "swift-http-types"),
             ],
+            path: "BajutsuKit/Sources/BajutsuRunner",
             plugins: [.plugin(name: "OpenAPIGenerator", package: "swift-openapi-generator")]
         ),
-        .testTarget(name: "BajutsuKitTests", dependencies: ["BajutsuKit"]),
-        .testTarget(name: "BajutsuRunnerTests", dependencies: ["BajutsuRunner"]),
+        .testTarget(name: "BajutsuKitTests", dependencies: ["BajutsuKit"], path: "BajutsuKit/Tests/BajutsuKitTests"),
+        .testTarget(name: "BajutsuRunnerTests", dependencies: ["BajutsuRunner"], path: "BajutsuKit/Tests/BajutsuRunnerTests"),
     ]
 )

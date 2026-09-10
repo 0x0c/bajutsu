@@ -16,7 +16,9 @@ settings:
     CODE_SIGNING_ALLOWED: NO
 packages:
   BajutsuKit:
-    path: ..
+    # Package.swift lives at the repo root (so this package resolves via `.package(url:)` from
+    # another repo, which SPM's git-based resolution requires), two levels up from here.
+    path: ../..
 targets:
   BajutsuRunnerHost:
     type: application

@@ -306,6 +306,12 @@ def test_ios_lane_surface() -> None:
     assert is_relevant(["bajutsu/common/drivers/xcuitest/xcuitest_driver.py"]) is True
     assert is_relevant(["bajutsu/common/drivers/xcuitest_live/web_driver_client.py"]) is True
     assert is_relevant(["BajutsuKit/Sources/x.swift"]) is True
+    # The SwiftPM manifest lives at the repo root, not under BajutsuKit/ (so it resolves via
+    # `.package(url:)` from another repo), but it's still this lane's own build input.
+    assert is_relevant(["Package.swift"]) is True
+    assert is_relevant(["Package.resolved"]) is True
+    assert is_relevant(["Package.swift"], "android") is False
+    assert is_relevant(["Package.swift"], "web") is False
     assert is_relevant(["demos/showcase/ios/swiftui/App.swift"]) is True
     assert is_relevant(["tests/test_driver_conformance_ondevice.py"]) is True
     assert is_relevant([".github/workflows/ios-e2e.yml"]) is True
