@@ -1575,6 +1575,10 @@ def test_the_end_of_step_guard_does_not_double_report_an_alert_reappearing_after
         AlertEvent(label="Allow"),
         AlertEvent(label="Allow"),
     ]  # A, then B — not A again
+    # Round 2's already_dismissed decline is A's fade reappearing, not three consecutive reads of
+    # a tap that never landed — B was tapped in between, so the round-exhaustion diagnosis must not
+    # fire here even though the round bound is spent on an already_dismissed round (BE-0418).
+    assert guard.blocked_note == ""
 
 
 def test_the_end_of_step_guard_preserves_an_uncleared_note_through_a_later_empty_round() -> None:

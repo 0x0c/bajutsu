@@ -41,8 +41,10 @@ def alert_block_note(buttons: Sequence[str]) -> str:
     shape this call has already answered (`AlertGuardConfig.__call__`, BE-0418). Empty means the
     block was inferred from the collapsed-tree proxy rather than enumerated — a surface
     `springboard.alerts` cannot see, or a backend with no native query at all — so the note hedges
-    rather than naming buttons nobody read. A prompt the policy *did* name and the in-tree dismiss
-    failed to clear is a different story, and gets `uncleared_prompt_note` below instead.
+    rather than naming buttons nobody read. A prompt the policy *did* name and a tap that did not
+    take is a different story, and gets `uncleared_prompt_note` below instead — the in-tree dismiss
+    giving up, or `__call__` spending its whole round bound on a native alert that keeps reading
+    back unchanged (BE-0418).
     """
     if buttons:
         return f"{_UNHANDLED_ALERT_NOTE} (buttons: {', '.join(buttons)})"
@@ -50,7 +52,9 @@ def alert_block_note(buttons: Sequence[str]) -> str:
 
 
 def uncleared_prompt_note(label: str) -> str:
-    """The in-tree dismiss's own give-up: a prompt it named and could not clear (BE-0402).
+    """A give-up on a prompt a rule named but could not clear (BE-0402): the in-tree dismiss's
+    own, or `AlertGuardConfig.__call__` spending its whole round bound on a native alert that
+    keeps reading back unchanged (BE-0418).
 
     Deliberately not `alert_block_note`: "unhandled" would tell the author no rule identified the
     alert, when their rule did identify it and only the tap failed — it did not take, or never
