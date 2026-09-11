@@ -18,21 +18,9 @@ finding a scannable severity signal:
   [Conventional Comments](https://conventionalcomments.org/) label and the `(non-blocking)`
   decoration, then the finding — e.g. `🤖 **Claude Code** — issue (non-blocking): …`. Use one of
   `issue`, `suggestion`, or `question` as the label. The `(non-blocking)`
-  decoration is **not optional**: every label you post carries it, because this review is advisory by
-  design (prime directive 1) — no finding you post is ever a merge blocker, and the visible decoration
-  is a running reminder of that.
-- **Mark a wording-only finding `(non-blocking, prose)`.** When — and *only* when — a finding comes
-  from one of the two prose-quality lenses below (Japanese prose quality; English documentation and
-  roadmap prose quality), write the decoration as `(non-blocking, prose)` in place of the plain
-  `(non-blocking)`, e.g. `🤖 **Claude Code** — suggestion (non-blocking, prose): …`. That marker is
-  read mechanically: a job applies such a finding's own `suggestion` block to a companion pull
-  request, so the wording fix costs the pull request no CI cycle of its own (BE-0343). Never put it
-  on a design, security, correctness, or any other non-wording finding, however small — a mismarked
-  finding would be applied without a human first weighing it. Two further conditions: mark only a
-  finding in a `docs/` or `roadmaps/` markdown file — the job refuses every other path, so Japanese
-  in a code comment keeps the plain `(non-blocking)` decoration — and give every finding you do mark
-  exactly one `suggestion` block holding the complete replacement text, since without one, or with
-  several, there is nothing unambiguous to apply.
+  decoration is **not optional**: every label you post carries it, including a finding from either
+  prose-quality lens below, because this review is advisory by design (prime directive 1) — no
+  finding you post is ever a merge blocker, and the visible decoration is a running reminder of that.
 - **Post only findings that clear the severity floor — functional impact only.** Every `issue` and
   `suggestion` must name a concrete functional consequence: a correctness bug, a security hole, a
   prime-directive violation, or design/maintenance debt that will actually cause a future bug or
@@ -191,14 +179,17 @@ Prime directive 2 is "determinism first"; hold the *test suite* to it too, not o
 - **Flakiness.** Flag a test whose pass/fail depends on wall-clock time or another non-deterministic
   input, which can flake under a slow CI run.
 
-## Prose-quality conventions — the one non-functional lens kept, because fixes are free
+## Prose-quality conventions — the one non-functional lens kept
 
 Wording-only findings are otherwise out of scope (see the severity floor above): style, naming,
 docstring formatting, bilingual-doc sync, terminology consistency, and roadmap-link hygiene are
 house conventions with no functional consequence, so leave them to human review. The two lenses
-below are the sole exception, because a `(non-blocking, prose)` finding costs the author nothing —
-a companion job applies it to a separate PR (BE-0343) — so they keep their own, already-strict floor
-rather than the blanket rule above.
+below are the sole exception, and they keep their own, already-strict floor rather than the blanket
+rule above, for two reasons: a concrete `suggestion` block already makes the fix a one-line apply on
+the same pull request, and this review is the only automated check on the bilingual-docs and
+`document-writing` house conventions [`CLAUDE.md`](../CLAUDE.md) already requires — textlint enforces
+mechanics, never wording quality itself. A finding from either lens is fixed like any other: the
+author pushes the rewrite to the same pull request that raised it.
 
 - **Japanese prose quality — raise the floor higher than the other lenses.** Any Japanese the PR
   adds or edits — `docs/ja/`, roadmap `*-ja.md`, or Japanese in comments — must follow the
@@ -208,7 +199,7 @@ rather than the blanket rule above.
   coined term, an omission, or a sentence a native reader would actually find confusing or
   ambiguous. Attach a concrete rewrite. Do **not** flag a sentence that is already grammatical,
   natural, and clear merely because you'd phrase it slightly differently — a same-quality
-  alternative is not a finding. Mark such a finding `(non-blocking, prose)`.
+  alternative is not a finding.
 - **English documentation and roadmap prose quality — same elevated floor as the bullet above.**
   Hold the English side to the same bar, since the bilingual-docs convention makes the two
   languages one document. Any English prose the PR adds or edits in `docs/*.md` or a roadmap
@@ -221,10 +212,9 @@ rather than the blanket rule above.
   mechanic (serial comma, *that* / *which*, dashes, numbers) — or a sentence that is actually
   confusing or ambiguous. Attach a concrete rewrite, never a general "this could read better." Do
   **not** flag a sentence that already reads clearly and correctly just because a different phrasing
-  would be marginally smoother — that is taste, not a finding, and every prose finding you post costs
-  the author a companion-PR review cycle (BE-0343) even though it is non-blocking, so only spend that
-  cost on a genuine violation. Mark such a finding `(non-blocking, prose)`. This lens judges only
-  *wording* within the prose itself — not bilingual sync, terminology, or any other convention above.
+  would be marginally smoother — that is taste, not a finding, so only spend a comment on a genuine
+  violation. This lens judges only *wording* within the prose itself — not bilingual sync,
+  terminology, or any other convention above.
 
 Keep every comment short and grounded in the diff, and make every actionable finding **concrete**:
 name exactly what to change and why, and attach a GitHub `suggestion` block whenever the fix is
