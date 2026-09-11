@@ -50,6 +50,7 @@ from bajutsu.common.orchestrator import (
     sanitize_source_stem,
     scenario_slug,
 )
+from bajutsu.common.orchestrator.evidence_rules import requested_intervals
 from bajutsu.common.orchestrator.types import _no_network
 from bajutsu.common.report import git_revision, run_provenance, scenario_render_inputs, write_report
 from bajutsu.common.runner.mailbox import build_mailbox_reader
@@ -409,8 +410,15 @@ class _ScenarioRunner:
                 failure=never_leased_failure,
                 # No device was ever leased, so no recording was ever attempted — disclose why the
                 # report's video player is empty instead of leaving it looking like a plain miss
-                # (BE-0020's channel, reused here rather than left to a bare "no recording").
-                skipped_captures=[SkippedCapture(kind="video", reason=never_leased_failure)],
+                # (BE-0020's channel, reused here rather than left to a bare "no recording"). Only
+                # when the scenario actually asked for video (BE-0028's opt-in): `SkippedCapture` means
+                # "requested but unavailable", so a scenario with no capturePolicy/`capture` naming
+                # video must stay silent here the same way `requested_intervals` itself does.
+                skipped_captures=(
+                    [SkippedCapture(kind="video", reason=never_leased_failure)]
+                    if "video" in requested_intervals(s, self.eff.capture)
+                    else []
+                ),
             )
         # Backend-crash recovery: a mid-scenario runner/host crash (base.BackendCrashError) is
         # backend infrastructure, not a verdict — discard the dead lease, lease a fresh device (a
@@ -436,6 +444,12 @@ class _ScenarioRunner:
                 failure=str(exc),
             )
         last_crash: BackendCrashError | None = None
+        # The newest crash whose own `partial_artifacts` is non-empty — kept apart from `last_crash`
+        # because the *last* crash is not necessarily the one that recorded anything: a later attempt
+        # can crash during lease bring-up, before `run_scenario` (and its interval finalize) is even
+        # entered, leaving that attempt's own `partial_artifacts` at its `None` default while an
+        # earlier attempt's recording still sits on disk.
+        partial_artifacts: list[Any] = []
         # The count + wall-clock retry decision; Unit 2 of BE-0334 wires the conformance harness onto
         # the same helper so the two recovery paths cannot drift. The wall-clock deadline it holds is set at the
         # *first* crash (so the first respawn is never blocked — a genuine one-off is still ridden
@@ -595,6 +609,8 @@ class _ScenarioRunner:
                     return self._run_on_lease(lz, handler, i, s, sid)
                 except BackendCrashError as crash:
                     last_crash = crash
+                    if crash.partial_artifacts:
+                        partial_artifacts = crash.partial_artifacts
                     if recovery_started is None:
                         recovery_started = self._now()
                     run_exhausted = self.run_crash_budget.exhausted()
@@ -728,20 +744,23 @@ class _ScenarioRunner:
                 f"backend crashed mid-run and did not recover across "
                 f"{budget.total_attempts} attempts: {last_crash}"
             )
-        # Reaching here (none of the branches above) means the for-loop ran out of attempts without
-        # ever leasing successfully, which only happens after at least one `except BackendCrashError`
-        # below set `last_crash` — the type-checker cannot see that across the elif chain above.
+        # Every branch above (the `if`/`elif` chain and this trailing `else`) is reached only after a
+        # crash: the `except BackendCrashError` above is the sole path that leaves the loop without
+        # returning (`break`) or that lets it run out of attempts, and it sets `last_crash` — which
+        # the type-checker cannot see from here.
         assert last_crash is not None
-        # The last attempt's own interval finalize (in `run_scenario`'s `finally`) still ran before
-        # its crash propagated, so a recording that was in flight when the backend died may already
-        # be on disk — `partial_artifacts` is how it reaches here. Only the video matters to the
-        # report's always-visible media area; a recovered `deviceLog`/`appTrace` still rides the
-        # normal artifact list rather than needing its own disclosure, since those panels simply
-        # don't appear when absent (unlike the video player, which would otherwise show nothing).
-        recovered = next(
-            (a for a in (last_crash.partial_artifacts or []) if a.kind == "video"),
-            None,
-        )
+        # `partial_artifacts` names the newest attempt that actually finalized a recording before
+        # crashing (not necessarily the last attempt — a later one can crash during lease bring-up,
+        # before `run_scenario`'s own finalize ever runs). Only the video is attached: it is what the
+        # report's always-visible media area surfaces, whereas a missing `deviceLog`/`appTrace`
+        # simply omits its own tab and has no confusing empty state to fix. A recovered
+        # `deviceLog`/`appTrace` is dropped here rather than attached — out of scope.
+        recovered = next((a for a in partial_artifacts if a.kind == "video"), None)
+        # `SkippedCapture` means "requested but unavailable" (BE-0020) — gate it on the scenario
+        # having actually asked for video (BE-0028's opt-in) the same way `requested_intervals`
+        # itself does, so an ordinary crashed scenario that never enabled video stays silent here
+        # instead of claiming a recording went missing that was never going to exist.
+        wanted_video = "video" in requested_intervals(s, self.eff.capture)
         return RunResult(
             scenario=s.name,
             ok=False,
@@ -750,12 +769,14 @@ class _ScenarioRunner:
             sid=sid,
             failure=failure,
             artifacts=[recovered] if recovered is not None else [],
-            # Disclose the gap only when no recording survives the crash — otherwise the video
-            # attached above already answers "where is the recording" and a skip entry would just
-            # contradict the player sitting right above it (BE-0020's channel).
-            skipped_captures=[]
-            if recovered is not None
-            else [SkippedCapture(kind="video", reason=failure)],
+            # Disclose the gap only when video was requested and no recording survived the crash —
+            # otherwise either the video attached above already answers "where is the recording", or
+            # this scenario was never going to have one, and a skip entry would falsely claim it was.
+            skipped_captures=(
+                [SkippedCapture(kind="video", reason=failure)]
+                if wanted_video and recovered is None
+                else []
+            ),
         )
 
     def _run_on_lease(
