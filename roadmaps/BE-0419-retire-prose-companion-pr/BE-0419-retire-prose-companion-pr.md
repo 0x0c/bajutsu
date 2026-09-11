@@ -1,14 +1,14 @@
-**English** · [日本語](BE-XXXX-retire-prose-companion-pr-ja.md)
+**English** · [日本語](BE-0419-retire-prose-companion-pr-ja.md)
 
-# BE-XXXX — Retire the prose companion-PR mechanism; fix wording findings in the source PR
+# BE-0419 — Retire the prose companion-PR mechanism; fix wording findings in the source PR
 
 <!-- BE-METADATA -->
 | Field | Value |
 |---|---|
-| Proposal | [BE-XXXX](BE-XXXX-retire-prose-companion-pr.md) |
+| Proposal | [BE-0419](BE-0419-retire-prose-companion-pr.md) |
 | Author | [@0x0c](https://github.com/0x0c) |
 | Status | **Implemented** |
-| Tracking issue | [Search](https://github.com/bajutsu-e2e/bajutsu/issues?q=is%3Aissue+label%3Aroadmap-tracking+in%3Atitle+"BE-XXXX") |
+| Tracking issue | [Search](https://github.com/bajutsu-e2e/bajutsu/issues?q=is%3Aissue+label%3Aroadmap-tracking+in%3Atitle+"BE-0419") |
 | Implementing PR | [#1983](https://github.com/bajutsu-e2e/bajutsu/pull/1983) |
 | Topic | Contributor workflow |
 | Related | [BE-0343](../BE-0343-prose-companion-pr/BE-0343-prose-companion-pr.md), [BE-0203](../BE-0203-claude-code-pr-review/BE-0203-claude-code-pr-review.md) |
@@ -86,7 +86,7 @@ finding, and the fix instead arrives as the contributor's own push to their own 
 - The `review` job itself, and everything BE-0347 governs about when it runs.
 - `roadmaps/BE-0343-prose-companion-pr/` stays `Implemented` — that was, and remains, an accurate
   record of what shipped. It gets a `Superseded by` link once this item's own id is allocated; the id
-  does not exist while this item still carries the `BE-XXXX` placeholder, so that link is a deferred
+  does not exist while this item still carries the `BE-0419` placeholder, so that link is a deferred
   follow-up (tracked in Progress below), the same way this item's own `Implementing PR` row is filled
   in only once its pull request exists.
 
