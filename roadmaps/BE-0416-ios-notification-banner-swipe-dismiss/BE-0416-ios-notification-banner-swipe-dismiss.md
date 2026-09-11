@@ -83,6 +83,15 @@ pressed the banner's button either — the application's `didReceive` delegate n
 "tapping the banner opens its app" hazard the Motivation names is a hazard of *this item's own
 implementation*, not a description of today's behavior.
 
+The same measurement retires the two claims beside that one. A step does not "tap the banner instead
+of the target". Nor does it "resolve against whichever element XCUITest's own hit-testing picks".
+Both are what the proposal assumed before Unit 1 ran. The interrupted tap landed on its intended
+target in every arrangement above. With both claims retired, the item's own falsification criterion
+goes too. It watches for that same landing, so it reads the same before and after and distinguishes
+nothing. What separates before and after sits elsewhere. Unit 1's measurement established two
+justifications instead. One is the spurious step defect measured next. The other is the corrupted
+`after.png` and visual-regression capture Unit 8 exists to reach.
+
 **A banner already fails a passing step whenever `systemAlertHandling` is on.** BE-0399's monitor
 asks the interrupting element for `alert.buttons`. A banner answers with exactly one button whose
 label is the notification's own text, so no rule can ever identify it, `recordDeclined` fires, and
