@@ -1362,10 +1362,11 @@ def test_the_end_of_step_guard_clears_a_native_alert_stacked_in_front_of_an_in_t
 def test_the_end_of_step_guard_leaves_the_tree_alone_while_a_springboard_alert_is_up() -> None:
     # The same licence the mid-wait gate needs: XCUITest answers an interrupting out-of-process alert
     # before it synthesizes any element interaction, so an app tap issued while one is up is not this
-    # guard's to make. Every round's native probe reports "unhandled" (no rule identifies the alert),
-    # and none of them reaches "absent" — the one answer that licenses the tree — so the same-labelled
-    # in-tree button underneath is never touched on any of them. "unhandled" settles and runs another
-    # round rather than ending the call (BE-0418), so the whole bound is spent declining alike.
+    # guard's to make. The native probe reports "unhandled" (no rule identifies the alert) rather
+    # than "absent" — the one answer that licenses the tree — so the same-labelled in-tree button
+    # underneath is never touched. This call has dismissed nothing of its own, so "unhandled" ends
+    # the call on this first round rather than spending the rest of the bound re-reading the same
+    # surface (BE-0418).
     driver = _fake_with_alert(["Weird Button"])  # up, and no rule identifies it
     driver.screen = [_button("Not Now")]
     guard = AlertGuardConfig(rules=[guard_rule("Not Now")])
@@ -1373,6 +1374,31 @@ def test_the_end_of_step_guard_leaves_the_tree_alone_while_a_springboard_alert_i
     assert not cleared and alerts == []
     assert not any(action[0] == "tap" for action in driver.actions)
     assert "Weird Button" in guard.blocked_note
+
+
+def test_the_end_of_step_guard_ends_on_the_first_unhandled_round_when_it_dismissed_nothing() -> (
+    None
+):
+    # Continuing past "unhandled" only makes sense when this call has dismissed something of its
+    # own -- the recovery is that answered alert's own fade draining to reveal a live one uniquely.
+    # With nothing yet dismissed there is no such fade, and continuing risks erasing this round's
+    # own diagnosis if the alert clears on its own before the bound is spent (BE-0418 review
+    # finding). Ending the call on this first round instead keeps it.
+    class _ClearsAfterFirstRead(FakeDriver):
+        def __init__(self) -> None:
+            super().__init__([])
+            self.probes = 0
+
+        def system_alert_labels(self) -> list[str]:
+            self.probes += 1
+            return ["Weird Button"] if self.probes == 1 else []
+
+    driver = _ClearsAfterFirstRead()
+    guard = AlertGuardConfig(rules=[guard_rule("Allow")])
+    cleared, alerts = _call(driver, guard)
+    assert not cleared and alerts == []
+    assert "Weird Button" in guard.blocked_note
+    assert driver.probes == 1  # never re-probed to see the alert clear itself
 
 
 def test_the_end_of_step_guard_leaves_a_second_native_alert_unhandled_after_clearing_the_first() -> (
@@ -1774,29 +1800,34 @@ def test_the_end_of_step_guard_never_retaps_a_native_alert_it_already_dismissed(
     assert settle_calls == 3
 
 
-def test_the_end_of_step_guard_reports_a_native_alert_uncleared_after_a_leading_unhandled_round() -> (
+def test_the_end_of_step_guard_reports_a_native_alert_uncleared_after_a_leading_tree_round() -> (
     None
 ):
     # `native_declines == round_index` measured position in the call, not declines since the
-    # dismissal: a round of any other kind before the tap -- an "unhandled" label collision here,
-    # BE-0418's own flagship case -- permanently left the decline count behind `round_index`, so a
-    # genuinely stuck alert preceded by one such round was never reported (review finding).
+    # dismissal: a round of any other kind before the tap -- an unrelated in-tree prompt tapped
+    # cleanly here -- permanently left the decline count behind `round_index`, so a genuinely stuck
+    # native alert preceded by one such round was never reported (review finding).
     rule = ResolvedAlertRule(
         identifying_labels=frozenset({"Allow", "Don't Allow"}), tap_label="Allow"
     )
-    driver = _fake_with_alert(["Allow", "Allow", "Don't Allow"])  # round 0: a bare label collision
+    other = ResolvedAlertRule(
+        identifying_labels=frozenset({"T"}), tap_label="T", native=False, in_tree=True
+    )
+
+    driver = FakeDriver([_button("T")])  # round 0: an unrelated in-tree prompt, tapped cleanly
     settle_count = 0
 
     def settle() -> None:
         nonlocal settle_count
         settle_count += 1
         if settle_count == 1:
-            driver.system_alert_buttons = [_button("Allow"), _button("Don't Allow")]  # resolves
+            # The native alert this test cares about only raises after round 0's tree round.
+            driver.system_alert_buttons = [_button("Allow"), _button("Don't Allow")]
 
-    guard = AlertGuardConfig(rules=[rule])
+    guard = AlertGuardConfig(rules=[rule, other])
     alerts: list[AlertEvent] = []
     cleared = guard(driver, alerts, settle=settle)
-    assert cleared and alerts == [AlertEvent(label="Allow")]  # tapped once, on round 1
+    assert cleared and alerts == [AlertEvent(label="T"), AlertEvent(label="Allow")]
     assert guard.blocked_note == uncleared_prompt_note("Allow")
 
 
@@ -1833,33 +1864,33 @@ def test_the_end_of_step_guard_clears_a_native_leftover_note_once_the_surface_re
     assert guard.blocked_note == ""
 
 
-def test_the_end_of_step_guard_clears_a_native_leftover_note_on_a_lingering_tree_round_too() -> (
+def test_the_end_of_step_guard_reports_an_unhandled_native_alert_after_an_unrelated_tree_dismiss() -> (
     None
 ):
-    # The tree-lingering-exclusion branch (a shape this call already cleared, still enumerable in
-    # the tree) settled and continued without clearing a native-sourced note -- the same asymmetry
-    # the sibling "genuinely nothing matched" branch just below was already fixed for. A native
-    # note is just as stale here: this round's own probe answered "absent" too.
-    class _AbsentThenUnhandledThenAbsentAgain(FakeDriver):
+    # An "unhandled" round with nothing native dismissed ends the call rather than continuing
+    # (BE-0418 review finding): a prior round's own tree activity -- dismissing T here -- does not
+    # change that, since the recovery "unhandled" exists for is specifically a *native* alert's own
+    # fade draining, and this call has never dismissed one. The diagnosis this round makes must
+    # still come out, not get lost to a further round this call has no reason to spend.
+    class _AbsentThenUnhandled(FakeDriver):
         def __init__(self) -> None:
             super().__init__([_button("T")])
             self.probes = 0
 
         def system_alert_labels(self) -> list[str]:
             self.probes += 1
-            if self.probes == 2:
-                return ["Weird Button"]  # an unhandled native alert, on round 1 only
-            return []  # absent on round 0 (tree dismiss proceeds) and round 2 (it's gone)
+            return [] if self.probes == 1 else ["Weird Button"]
 
-    driver = _AbsentThenUnhandledThenAbsentAgain()
+    driver = _AbsentThenUnhandled()
     rule = ResolvedAlertRule(
         identifying_labels=frozenset({"T"}), tap_label="T", native=False, in_tree=True
     )
     guard = AlertGuardConfig(rules=[rule])
     alerts: list[AlertEvent] = []
     cleared = guard(driver, alerts, settle=lambda: None)
-    assert cleared and alerts == [AlertEvent(label="T")]  # tapped once, on round 0
-    assert guard.blocked_note == ""
+    assert cleared and alerts == [AlertEvent(label="T")]  # T tapped on round 0
+    assert "Weird Button" in guard.blocked_note  # round 1's own diagnosis, not lost
+    assert driver.probes == 2  # ended on round 1 rather than spending the rest of the bound
 
 
 def test_the_end_of_step_guard_keeps_a_stuck_tree_note_on_a_lingering_tree_round_too() -> None:

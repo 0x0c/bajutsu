@@ -568,12 +568,20 @@ class AlertGuardConfig:
                 # uniqueness check for either and lands here rather than in `already_dismissed`.
                 # Filtering the already-answered labels out of the note (the same computation
                 # `already_dismissed` above makes) keeps the note from re-naming an alert this call
-                # already cleared. Settling and giving the fade another round, rather than ending
-                # the call, is that same branch's other half: once the answered alert's fade
-                # drains, the live one reads uniquely and resolves on a later round of its own.
+                # already cleared.
                 if stuck_tree_label is None:
                     leftover = _leftover_after_answered(buttons, dismissed_native)
                     note = alert_block_note(leftover) if leftover else ""
+                if not dismissed_native:
+                    # Settling and giving the fade another round, rather than ending the call, only
+                    # makes sense when this call has dismissed something of its own: the recovery
+                    # this branch exists for is that answered alert's own fade draining to reveal
+                    # the live one uniquely. With nothing yet dismissed there is no such fade, so a
+                    # later round can only re-read the same surface or find it gone on its own —
+                    # and ending on "absent" would erase the very diagnosis this round just made,
+                    # the bare `element not found` BE-0402 exists to prevent. Breaking here instead
+                    # keeps that diagnosis and costs nothing: nothing this call could still change.
+                    break
                 settle()
                 continue
             # "reserved" and "incapable" clear the note instead: neither is evidence of anything
