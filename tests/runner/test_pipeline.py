@@ -14,7 +14,7 @@ from conftest import AlertingDriver, guard_rule
 from bajutsu.common.backend_cli import simctl
 from bajutsu.common.config import Effective, XcuitestConfig
 from bajutsu.common.doctor import Score
-from bajutsu.common.drivers import base
+from bajutsu.common.drivers import base, tracing
 from bajutsu.common.drivers.fake import FakeDriver
 from bajutsu.common.evidence import NullSink
 from bajutsu.common.evidence.network import NetworkExchange, ScreenTransition
@@ -2141,3 +2141,96 @@ def test_the_run_resolves_a_system_alert_prompt_against_the_scenario_locale() ->
 
     assert [r.ok for r in results] == [True], results[0].failure
     assert driver.actions == [("handle_system_alert", ({"label": "許可"}, 0.0))]
+
+
+def test_trace_driver_writes_driver_trace_json(tmp_path: Path) -> None:
+    # `bajutsu run --trace-driver` (BE-0415): one `<sid>/driver_trace.json` per scenario, attributing
+    # every `driver`-category record to the step it happened during. The `fake` backend produces no
+    # `transport`/`subprocess` records (no host-device round trip to measure), so this proves the
+    # `driver`-category wrap and the file's own shape; `tests/test_driver_tracing.py` covers the
+    # transport/subprocess wraps directly against `XcuitestDriver`/`AdbDriver`.
+    scenario = Scenario.model_validate({"name": "a", "steps": [{"tap": {"id": "ok"}}]})
+    run_dir = tmp_path / "runs" / "run1"
+    results = run_all(_eff(), [scenario], _lease, run_dir=run_dir, trace_driver=True)
+    assert results[0].ok, results[0].failure
+    trace_path = run_dir / results[0].sid / "driver_trace.json"
+    assert trace_path.is_file()
+    doc = json.loads(trace_path.read_text(encoding="utf-8"))
+    assert doc["scenario"] == "a"
+    assert doc["steps"]  # one entry for the scenario's one `tap` step
+    driver_records = [r for r in doc["records"] if r["category"] == "driver"]
+    assert any(r["name"] == "tap" for r in driver_records)
+    assert all(r["step"] == "00:tap" for r in driver_records)
+    # `TracingDriver` must preserve `ActuationReporter` too (not just the two capability protocols
+    # BE-0407's trace_run.py measured): missing it silently drops every step's own actuation
+    # evidence for the whole run once `--trace-driver` is on.
+    assert results[0].steps[0].actuations
+
+
+def test_trace_driver_off_by_default_writes_no_file(tmp_path: Path) -> None:
+    scenario = Scenario.model_validate({"name": "a", "steps": [{"tap": {"id": "ok"}}]})
+    run_dir = tmp_path / "runs" / "run1"
+    results = run_all(_eff(), [scenario], _lease, run_dir=run_dir)
+    assert results[0].ok, results[0].failure
+    assert not (run_dir / results[0].sid / "driver_trace.json").exists()
+
+
+def test_trace_driver_attributes_records_to_their_crash_recovery_attempt(tmp_path: Path) -> None:
+    # One `TraceContext` spans every crash-recovery attempt, but each attempt's own `StepLoopState`
+    # restarts its step counter at 0 — so without an explicit attempt number, attempt 1's crashed
+    # "00:tap" and attempt 2's recovered "00:tap" would be indistinguishable in the trace.
+    lease, _events = _crash_then_ok_lease()
+    scenario = Scenario.model_validate({"name": "a", "steps": [{"tap": {"id": "ok"}}]})
+    run_dir = tmp_path / "runs" / "run1"
+    results = run_all(_eff(), [scenario], lease, run_dir=run_dir, trace_driver=True)
+    assert results[0].ok, results[0].failure
+    doc = json.loads((run_dir / results[0].sid / "driver_trace.json").read_text(encoding="utf-8"))
+    tap_records = [r for r in doc["records"] if r["name"] == "tap"]
+    assert {r["attempt"] for r in tap_records} == {1, 2}
+    assert {s["attempt"] for s in doc["steps"]} == {1, 2}
+
+
+def test_trace_driver_stamps_the_attempt_before_leasing() -> None:
+    # The attempt number must be stamped *before* `self.lease(...)` runs: that call is what
+    # constructs the attempt's own driver (a cold respawn on attempt >= 2), and a real
+    # `XcuitestDriver`/`AdbDriver` installs its transport/subprocess wraps at construction time —
+    # stamped any later, a respawn's own readiness round trips would be misattributed to the
+    # previous attempt. `FakeDriver` does no such construction-time wrapping, so this checks the
+    # context's `attempt` value at the moment `lease()` itself is called, directly.
+    seen_attempts: list[int | None] = []
+
+    def lease(eff: Effective, scenario: Scenario) -> Lease:
+        ctx = tracing.current_trace()
+        seen_attempts.append(None if ctx is None else ctx.attempt)
+        driver = _crashing_driver() if len(seen_attempts) == 1 else _fake_driver()
+        return Lease(
+            driver=driver,
+            sink=NullSink(),
+            relaunch=None,
+            control=None,
+            collector=None,
+            release=lambda: None,
+        )
+
+    scenario = Scenario.model_validate({"name": "a", "steps": [{"tap": {"id": "ok"}}]})
+    results = run_all(_eff(), [scenario], lease, trace_driver=True)
+    assert results[0].ok, results[0].failure
+    assert seen_attempts == [1, 2]
+
+
+def test_trace_driver_write_failure_is_warned_about_not_raised(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Diagnostic only, like `--zip` / `--evidence-store`: a failed `driver_trace.json` write must
+    # not end the run or displace the scenario's own in-flight result/exception.
+    from bajutsu.common.evidence.sink import RunArtifactWriter
+
+    def _boom(self: RunArtifactWriter, name: str, data: object) -> Path:
+        raise OSError("disk full (test)")
+
+    monkeypatch.setattr(RunArtifactWriter, "write_json", _boom)
+    scenario = Scenario.model_validate({"name": "a", "steps": [{"tap": {"id": "ok"}}]})
+    run_dir = tmp_path / "runs" / "run1"
+    results = run_all(_eff(), [scenario], _lease, run_dir=run_dir, trace_driver=True)
+    assert results[0].ok, results[0].failure
+    assert not (run_dir / results[0].sid / "driver_trace.json").exists()

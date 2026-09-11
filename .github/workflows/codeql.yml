@@ -56,7 +56,7 @@ jobs:
         id: filter
         with:
           filters: |
-            # Scoped to what the Swift job actually builds (`swift build --package-path BajutsuKit`),
+            # Scoped to what the Swift job actually builds (`swift build --package-path .`),
             # not to every Swift file in the tree. A `**/*.swift` filter also fired on the showcase
             # demo apps under demos/showcase/ios, whose sources the BajutsuKit-only build never
             # extracts — so such a change bought a full BajutsuKit analysis that examined none of it,
@@ -64,6 +64,8 @@ jobs:
             # at just over 30 minutes), turning an unrelated edit into a cancelled required check.
             swift:
               - "BajutsuKit/**"
+              - "Package.swift"
+              - "Package.resolved"
               - ".github/workflows/codeql.yml"
             android:
               - "demos/showcase/android/**"
@@ -136,7 +138,7 @@ jobs:
           languages: swift
           build-mode: manual
       - name: Build
-        run: swift build --package-path BajutsuKit
+        run: swift build --package-path .
       - name: Perform CodeQL analysis
         uses: github/codeql-action/analyze@c35d1b164463ee62a100735382aaaa525c5d3496 # codeql-bundle-v2.25.6
         with:

@@ -455,7 +455,10 @@ Android; on iOS it rests on the fast suite's bookkeeping proof alone.
   `xcuitest.build` is named, the environment resolves to the Simulator runner bundled in the wheel as
   package data, materialized into a content-hash-keyed writable cache on first use — an explicit
   `testRunner`/`build` still overrides it, and `deviceType: device` still requires an explicit signed
-  runner (BE-0292)
+  runner (BE-0292). In a checkout that ships `BajutsuKit/`'s own source, that bundle rebuilds itself
+  whenever the source has moved past it — `bajutsu run`, pytest, and `make serve` alike resolve the
+  runner through the same rebuild-if-stale function
+  (`docs/specs/xcuitest-bundled-runner-auto-refresh.md`)
 - Reading `SFSafariViewController`'s element tree from the process that draws it, `com.apple.SafariViewService`
   (BE-0396): on iOS 26 the app's own XCTest snapshot stops at that process boundary, so the XCUITest
   backend merges in a second snapshot taken from the service's own handle whenever it is foregrounded,
@@ -940,7 +943,7 @@ Android; on iOS it rests on the fast suite's bookkeeping proof alone.
 
 | Feature | Status | Location |
 |---|---|---|
-| `mockServer` (external mock command) | config schema only; the `cmd`/`port` external server is **not implemented** — superseded by scenario `mocks` (declarative in-protocol stubs, implemented) | `config/schema.py` `MockServer` |
+| `mockServer` (external mock command) | config schema only; the `cmd`/`port` external server is **not implemented** — superseded by scenario `mocks` (declarative in-protocol stubs, implemented) | `common/config/schema/mock_server.py` `MockServer` |
 | `appTrace` interval evidence on the **web** backend | `appTrace` is `os_log`/simctl-based (iOS only); the Playwright backend implements the `video` and `deviceLog`-equivalent (console / page-error) interval kinds instead (BE-0054), but has no `appTrace` analogue | `common/evidence/intervals` · `common/drivers/playwright` |
 | `nativeZ` on a **SwiftUI** or **Jetpack Compose** screen | Both reporting paths are shipped (BE-0355), but each declarative toolkit generates its own accessibility elements and exposes no underlying one to measure: SwiftUI materializes its elements only for an assistive technology attached to the process, so the app's own view tree carries no identifiers, and Compose forwards no app-declared extra-data key through its node generation. UIKit and Android `View` screens in an opted-in app report a position; SwiftUI and Compose screens read `None`. Diagnostic only — no selector or occlusion check reads it | `BajutsuKit/Sources/BajutsuKit/BajutsuZOrder.swift` · `BajutsuAndroid/…/BajutsuZOrder.kt` |
 

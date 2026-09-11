@@ -289,6 +289,11 @@ _LANE_PATHS: dict[str, str] = {
         # the web lane never invokes it and must not re-run its whole fleet when it changes.
         r"|scripts/assert_pool_isolation\.py$"
         r"|BajutsuKit/"
+        # The SwiftPM manifest lives at the repo root (not under BajutsuKit/) so it resolves via
+        # `.package(url:)` from another repo, which SPM's git-based resolution requires — but it's
+        # still the iOS lane's own build input, so it's claimed here rather than the shared sweep.
+        r"|Package\.swift$"
+        r"|Package\.resolved$"
         r"|demos/showcase/ios/swiftui/"
         r"|demos/showcase/ios/uikit/"
         # The main config and the BE-0292 bundled-runner config the `bundled-runner (xcuitest)` job runs.

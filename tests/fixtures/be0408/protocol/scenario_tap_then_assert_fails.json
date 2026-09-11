@@ -1,0 +1,39 @@
+{
+  "schema": 1,
+  "operation": "scenario",
+  "request": {
+    "steps": [
+      {
+        "kind": "tap",
+        "payload": { "selector": { "id": "auth.signOut" } }
+      },
+      {
+        "kind": "assert",
+        "payload": {
+          "kind": "value",
+          "selector": { "id": "auth.status" },
+          "equals": "signed-out"
+        }
+      }
+    ]
+  },
+  "response": {
+    "results": [
+      {
+        "status": "ok"
+      },
+      {
+        "status": "failed",
+        "elements": [
+          {
+            "traits": ["staticText"],
+            "frame": [0.0, 0.0, 120.0, 20.0],
+            "handle": "h14",
+            "identifier": "auth.status",
+            "value": "signed-in"
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -1,0 +1,530 @@
+openapi: 3.1.0
+info:
+  title: Bajutsu device-side step-execution protocol
+  version: 0.1.0
+  description: >-
+    The new endpoints a device-side executor adds to the existing per-platform loopback contracts
+    — the iOS XCUITest runner (`BajutsuKit/Sources/BajutsuRunner/openapi.yaml`) and the Android
+    resident instrumentation server (`BajutsuAndroidUIAutomatorServer/server/`) — so a `wait`,
+    a screen-closed `assert`, or a bundled step sequence resolves and evaluates on the device
+    instead of polling the host every 50 milliseconds. BE-0408
+    (`roadmaps/BE-0408-step-latency-device-executor-protocol/`) defines this document; it is a
+    draft, not a live contract. Neither runner implements it yet. `README.md`, beside this file,
+    carries the full design narrative — stage-by-stage rationale, the cancellation design, and the
+    Android transport recommendation — that a schema's own `description` field is too short to
+    hold; every "see the README" reference in this document points there.
+
+
+    **This document does not live in either platform's own build.** iOS's live contract
+    (`BajutsuKit/Sources/BajutsuRunner/openapi.yaml`) feeds Swift OpenAPI Generator's build plugin,
+    which regenerates `APIProtocol` — the interface `APIHandler.swift` implements — at every
+    build. Adding a path here directly to that file would grow `APIProtocol` with a method
+    `APIHandler` does not yet implement, breaking the iOS build immediately, in an item that
+    touches no Swift code. BE-0409 merges these paths into that live document in the same commit
+    that adds the matching `APIHandler` conformance. BE-0410 implements the same schemas by hand
+    over the Android resident server's `org.json` (see the README's *Android transport* section);
+    whether it also adopts OpenAPI-generated Kotlin model classes, and against what schema subset,
+    is BE-0410's own recorded decision — the README gives this document's recommendation and why
+    it stops short of prescribing the tooling.
+
+
+    **What the existing endpoints keep unchanged.** iOS's existing eighteen paths and Android's
+    `/act` / `/source` / `/clock` are shipped, measured behavior (BE-0407) and are out of this
+    document's scope. A single already-optimized call (`/tap`, `/act`) does not get faster by
+    changing its wire format — it is already one round trip. The endpoints below are new; where
+    stage 4 (`POST /scenario`) bundles an actuation kind that already has a standalone endpoint, it
+    reuses that endpoint's existing request shape rather than inventing a second one — see the
+    README's *Stage 4* section.
+
+
+    **Staged, and revisable.** Stage 1 (`POST /wait`) is the first the roadmap item's own rollout
+    names; stages 2 through 4 are defined here at the same contract level, ahead of an
+    implementation, because BE-0409 cannot begin until this document is complete and BE-0409's own
+    checklist already expects stage 4 to exist when it does. Defining every stage now — rather than
+    waiting for implementation feedback that cannot arrive before BE-0409 is allowed to start — is
+    the deliberate resolution of that ordering. A stage that a real implementation later finds
+    wrong is revised here, in a new dated entry under the README's *Revision history*, with the
+    schema version bumped; nothing in this document is meant to freeze on first contact with a
+    real runner.
+servers:
+  - url: http://127.0.0.1
+    description: >-
+      Both platforms' loopback listener. iOS's port is assigned per lease
+      (`BajutsuKit/Sources/BajutsuRunner/openapi.yaml`); Android's resident server binds a fixed
+      port (`PORT = 6790`, `ResidentServerTest.kt`).
+paths:
+  /wait:
+    post:
+      operationId: wait
+      summary: >-
+        Stage 1. Evaluate a `for` / `until: gone` / `until: screenChanged` / `until: settled`
+        condition on the device, in a bounded per-call budget the host repeats until its own
+        timeout.
+      description: >-
+        See `README.md`'s *Stage 1* section for the full design: the wait kinds this covers, the
+        applicability boundary that keeps an alert-guarded or `interrupts`-declared wait on the
+        legacy host-polled path, and why the request carries a `pollBudgetMs` rather than the
+        step's whole `timeoutMs` in one call.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/WaitRequest"
+      responses:
+        "200":
+          description: The wait's outcome for this one bounded call.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WaitReply"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+  /assert:
+    post:
+      operationId: assertScreen
+      summary: >-
+        Stage 3. Evaluate one screen-closed assertion kind (`exists`, `value`, `label`, `count`,
+        `enabled`, `disabled`, `selected`) against the device's own current tree.
+      description: >-
+        See `README.md`'s *Stage 3* section. Every kind this covers already resolves through
+        `resolve_unique` or `find_all` on the host today
+        (`bajutsu/common/assertions/evaluate/_functions.py`); this endpoint moves that same
+        resolution onto the device, one assertion per call. `request` / `event` /
+        `requestSequence` / `responseSchema` / `visual` / `clipboard` / `golden` never resolve a
+        selector at all and stay host-side, unaffected by this document.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AssertRequest"
+      responses:
+        "200":
+          description: The assertion's verdict, plus the tree it was evaluated against.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AssertReply"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+  /scenario:
+    post:
+      operationId: runScenarioSegment
+      summary: >-
+        Stage 4. Run a bundled sequence of steps in one call — the point at which a scenario
+        segment costs at most one round trip, matching this item's own motivation.
+      description: >-
+        See `README.md`'s *Stage 4* section: which step kinds bundle, how `tap` differs from
+        its standalone form, and the two questions this document leaves open for BE-0409/BE-0410's
+        first implementation to settle (mid-bundle failure handling, and evidence retrieval).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ScenarioRequest"
+      responses:
+        "200":
+          description: One result per step, in step order.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ScenarioReply"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+components:
+  responses:
+    BadRequest:
+      description: A missing, malformed, or incomplete request body.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorReply"
+  schemas:
+    ErrorReply:
+      type: object
+      additionalProperties: false
+      required: [status, message]
+      properties:
+        status:
+          type: string
+          enum: [error]
+        message:
+          type: string
+    Selector:
+      type: object
+      additionalProperties: false
+      description: >-
+        The wire form of `bajutsu/common/drivers/base/selector.py`'s `Selector` TypedDict. A
+        device-side resolver implementing this document must resolve every field exactly as
+        `bajutsu/common/drivers/base/_functions.py`'s `find_all` / `resolve_unique` do — see
+        `docs/selectors.md`'s *Porting contract for a device-side resolver* section, and the
+        machine-checked fixtures at `tests/fixtures/be0408/` that pin it. A field's key is omitted
+        entirely when unset; an explicit `null` is never sent and must not be treated as "present
+        but empty" if one arrives.
+      properties:
+        id:
+          oneOf:
+            - type: string
+            - type: array
+              items:
+                type: string
+              minItems: 1
+          description: A single id, or a list of OR candidates (BE-0221).
+        idMatches:
+          oneOf:
+            - type: string
+            - type: array
+              items:
+                type: string
+              minItems: 1
+          description: >-
+            A single glob pattern, or a list of OR candidates. `fnmatch.fnmatchcase` semantics —
+            fully anchored, case-sensitive.
+        label:
+          type: string
+        labelMatches:
+          type: string
+          description: '`re.search` semantics — unanchored, case-sensitive.'
+        traits:
+          type: array
+          items:
+            type: string
+        value:
+          type: string
+        within:
+          $ref: "#/components/schemas/Selector"
+        index:
+          type: integer
+    Element:
+      type: object
+      additionalProperties: false
+      description: >-
+        Identical in shape to the existing iOS `Element` schema
+        (`BajutsuKit/Sources/BajutsuRunner/openapi.yaml`) — reused here rather than redefined, so a
+        driver-side reader needs exactly one `Element` decoder regardless of which endpoint the
+        reply came from. `nativeZ` is not carried: the existing `/elements` reply does not carry
+        it either, it is diagnostic-only (BE-0355), and no selector or occlusion check reads it.
+      required: [traits, frame]
+      properties:
+        traits:
+          type: array
+          items:
+            type: string
+        frame:
+          type: array
+          description: '`[x, y, width, height]` in points.'
+          items:
+            type: number
+          minItems: 4
+          maxItems: 4
+        handle:
+          type: string
+          description: >-
+            Optional and iOS-specific — Android's `Element` model
+            (`bajutsu/common/drivers/adb/_functions.py`'s `_to_element`) has no handle concept at
+            all, and nothing in this document's own new endpoints consumes one: the elements this
+            document returns serve only as `after` evidence, and the one bundled actuation
+            (`ScenarioTapRequest`) resolves a fresh `selector` instead of round-tripping a handle.
+            Where a future extension does need one, it belongs in that extension's own schema, not
+            as a silent obligation on every platform via this shared `Element`.
+        identifier:
+          type: string
+        label:
+          type: string
+        value:
+          type: string
+
+    # --- Stage 1: POST /wait ---
+    WaitRequest:
+      type: object
+      additionalProperties: false
+      required: [mode, timeoutMs, pollBudgetMs]
+      description: >-
+        Mirrors `bajutsu/common/scenario/models/assertions/wait.py`'s `Wait` model. `mode` selects
+        which of `Wait.for_` / `Wait.until` this call evaluates; `until: request` is not covered
+        (it polls the observed network, never the device tree, so moving it here would not remove
+        a device round trip).
+      properties:
+        mode:
+          type: string
+          enum: [for, gone, screenChanged, settled]
+        selector:
+          $ref: "#/components/schemas/Selector"
+        timeoutMs:
+          type: integer
+          minimum: 1
+          description: >-
+            The wait's whole deadline, in milliseconds — `Wait.timeout` converted from seconds.
+            The host re-issues `POST /wait` in a loop, each call bounded by `pollBudgetMs`, until
+            either a call reports `ok` or this whole deadline passes.
+        pollBudgetMs:
+          type: integer
+          minimum: 1
+          description: >-
+            The upper bound on how long *this one call* may block before it must reply — see
+            `README.md`'s *Cancellation and the `pollBudgetMs` design* section for why this is a
+            required field rather than one call covering the whole `timeoutMs`. A value of zero or
+            less would let a conforming device reply instantly on every call, turning the host's
+            re-issue loop into a busy spin until `timeoutMs` — `minimum: 1` rules that out.
+      allOf:
+        - if:
+            properties: { mode: { enum: [for, gone] } }
+          then:
+            required: [selector]
+        - if:
+            properties: { mode: { enum: [screenChanged, settled] } }
+          then:
+            not:
+              required: [selector]
+    WaitReply:
+      type: object
+      additionalProperties: false
+      required: [status, elements]
+      properties:
+        status:
+          type: string
+          enum: [ok, timeout]
+          description: >-
+            `timeout` means only that this one bounded call's `pollBudgetMs` elapsed without the
+            condition holding — the host is expected to call again if its own `timeoutMs` has not
+            yet passed. It is not the step's final verdict.
+        elements:
+          type: array
+          items:
+            $ref: "#/components/schemas/Element"
+          description: >-
+            The last tree this call queried, `for` / `gone` / `screenChanged` / `settled` alike —
+            reused by the host as the step's `after` evidence (BE-0259) instead of a second
+            `/elements` round trip.
+        trace:
+          $ref: "#/components/schemas/WaitTrace"
+          description: >-
+            Present only when `mode: for` and `status: timeout` — mirrors `WaitTrace`
+            (`bajutsu/common/orchestrator/waits/wait_trace.py`), which today is populated only on
+            that same branch.
+    WaitTrace:
+      type: object
+      additionalProperties: false
+      required: [polls, elementsAtTimeout]
+      properties:
+        polls:
+          type: integer
+          minimum: 0
+          description: Poll count within this one bounded call (resets to zero on the next call).
+        firstNonemptyMs:
+          type: integer
+          minimum: 0
+          description: Milliseconds from this call's start to the first non-empty tree read. Omitted if the tree stayed empty throughout.
+        elementsAtTimeout:
+          type: integer
+          minimum: 0
+
+    # --- Stage 3: POST /assert ---
+    AssertRequest:
+      type: object
+      additionalProperties: false
+      required: [kind, selector]
+      description: >-
+        One screen-closed assertion kind, per `bajutsu/common/scenario/models/assertions/`'s
+        `Exists` / `TextMatch` / `CountMatch` models and the `enabled` / `disabled` / `selected`
+        kinds' bare `Selector`. `allOf` below enforces, per `kind`, exactly which fields may or
+        must be set — matching each source model's own "exactly one" rule structurally, not only
+        in prose, so a malformed assertion is rejected before it ever reaches the device.
+      properties:
+        kind:
+          type: string
+          enum: [exists, value, label, count, enabled, disabled, selected]
+        selector:
+          $ref: "#/components/schemas/Selector"
+        negate:
+          type: boolean
+          description: '`exists` only.'
+        equals:
+          oneOf:
+            - type: string
+            - type: integer
+          description: '`value` / `label` only, as a string; `count` only, as an integer.'
+        contains:
+          type: string
+          description: '`value` / `label` only.'
+        matches:
+          type: string
+          description: '`value` / `label` only, `re.search` semantics.'
+        atLeast:
+          type: integer
+          minimum: 0
+          description: '`count` only.'
+        atMost:
+          type: integer
+          minimum: 0
+          description: '`count` only.'
+      allOf:
+        - if:
+            properties: { kind: { const: exists } }
+          then:
+            not:
+              anyOf:
+                - required: [equals]
+                - required: [contains]
+                - required: [matches]
+                - required: [atLeast]
+                - required: [atMost]
+        - if:
+            properties: { kind: { enum: [value, label] } }
+          then:
+            properties: { equals: { type: string } }
+            oneOf:
+              - required: [equals]
+              - required: [contains]
+              - required: [matches]
+            not:
+              anyOf:
+                - required: [negate]
+                - required: [atLeast]
+                - required: [atMost]
+        - if:
+            properties: { kind: { const: count } }
+          then:
+            properties: { equals: { type: integer, minimum: 0 } }
+            oneOf:
+              - required: [equals]
+              - required: [atLeast]
+              - required: [atMost]
+            not:
+              anyOf:
+                - required: [negate]
+                - required: [contains]
+                - required: [matches]
+        - if:
+            properties: { kind: { enum: [enabled, disabled, selected] } }
+          then:
+            not:
+              anyOf:
+                - required: [negate]
+                - required: [equals]
+                - required: [contains]
+                - required: [matches]
+                - required: [atLeast]
+                - required: [atMost]
+    AssertReply:
+      type: object
+      additionalProperties: false
+      required: [ok, elements]
+      properties:
+        ok:
+          type: boolean
+        elements:
+          type: array
+          items:
+            $ref: "#/components/schemas/Element"
+          description: The tree the assertion was evaluated against, for evidence and diagnosis.
+
+    # --- Stage 4: POST /scenario ---
+    ScenarioRequest:
+      type: object
+      additionalProperties: false
+      required: [steps]
+      properties:
+        steps:
+          type: array
+          minItems: 1
+          items:
+            $ref: "#/components/schemas/ScenarioStep"
+    ScenarioStep:
+      type: object
+      additionalProperties: false
+      required: [kind, payload]
+      description: >-
+        See `README.md`'s *Stage 4* section for which `kind`s bundle today (`tap`, `type`,
+        `wait`, `assert`) and why `swipe` / `scroll` are named but not yet specified. `allOf`
+        below ties `payload`'s shape to `kind`, so a bundled step's request is validated exactly
+        as strictly as that same request would be as a standalone call.
+      properties:
+        kind:
+          type: string
+          enum: [tap, type, wait, assert]
+        payload: {}
+      allOf:
+        - if:
+            properties: { kind: { const: tap } }
+          then:
+            properties: { payload: { $ref: "#/components/schemas/ScenarioTapRequest" } }
+        - if:
+            properties: { kind: { const: type } }
+          then:
+            properties: { payload: { $ref: "#/components/schemas/TypeRequest" } }
+        - if:
+            properties: { kind: { const: wait } }
+          then:
+            properties: { payload: { $ref: "#/components/schemas/WaitRequest" } }
+        - if:
+            properties: { kind: { const: assert } }
+          then:
+            properties: { payload: { $ref: "#/components/schemas/AssertRequest" } }
+    TypeRequest:
+      type: object
+      additionalProperties: false
+      required: [text]
+      description: >-
+        Identical in shape to the existing standalone iOS `/type` endpoint's `TypeRequest`
+        (`BajutsuKit/Sources/BajutsuRunner/openapi.yaml`) — defined here, rather than only
+        referenced, because Android has no standalone JSON schema of its own to point to; a
+        bundled `type` step on either platform validates against this one definition.
+      properties:
+        text:
+          type: string
+    ScenarioTapRequest:
+      type: object
+      additionalProperties: false
+      required: [selector]
+      description: >-
+        Deliberately not the existing standalone `TapRequest` shape (`handle` or raw `point`).
+        A bundled tap resolves its own `selector` fresh, at the moment it acts, the same way every
+        other step in this document does — so a handle minted earlier in a long bundle can never
+        go stale by the time this step runs.
+      properties:
+        selector:
+          $ref: "#/components/schemas/Selector"
+        taps:
+          type: integer
+          minimum: 1
+          description: Tap count; clamped to at least 1. Absent means a single tap.
+        duration:
+          type: number
+          minimum: 0
+          description: Press duration in seconds; clamped to at least 0. Absent means a plain tap.
+    ScenarioReply:
+      type: object
+      additionalProperties: false
+      required: [results]
+      properties:
+        results:
+          type: array
+          items:
+            $ref: "#/components/schemas/ScenarioStepResult"
+    ScenarioStepResult:
+      type: object
+      additionalProperties: false
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [ok, stale, not-found, not-hittable, value-not-found, timeout, failed]
+          description: >-
+            The union of `ActuationReply.status`'s five values (`tap` / `type`), `ok` / `timeout`
+            (`wait`), and `ok` / `failed` (`assert`) — one closed vocabulary rather than each step
+            kind's own free string, so a hand-written Android encoder cannot silently diverge from
+            what Swift's generated model emits.
+        elements:
+          type: array
+          items:
+            $ref: "#/components/schemas/Element"
+          description: Present for `wait` / `assert` kinds; carries that step's own resolved tree.
+        evidenceToken:
+          type: string
+          description: >-
+            An opaque handle for this step's screenshot and tree, fetched separately and off the
+            critical path (BE-0409's own design), rather than inlined into this reply. The
+            retrieval endpoint's shape is left to BE-0409/BE-0410's first implementation.

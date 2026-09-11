@@ -615,6 +615,63 @@ def test_run_zip_writes_artifact_after_the_verdict(
     assert (manifest.parent.parent / f"{manifest.parent.name}.zip").is_file()
 
 
+def test_run_trace_driver_flag_reaches_run_and_report(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # `--trace-driver` (BE-0415) threads through `_RunPlan` to `run_and_report`'s own `trace_driver`
+    # kwarg. `_stub_execution` replaces `run_and_report` outright (see its own docstring), so the
+    # only way to prove the flag actually reaches it — rather than just being parsed — is to swap in
+    # a fake that records its kwargs, the way `tests/runner/test_pipeline.py`'s own trace_driver
+    # tests prove the pipeline side end to end without any CLI stubbing.
+    from bajutsu.common.orchestrator import RunResult
+
+    manifest = _manifest_at(tmp_path)
+    calls: list[dict[str, Any]] = []
+
+    def _fake_run_and_report(*_args: object, **kwargs: object) -> tuple[list[RunResult], Path]:
+        calls.append(kwargs)
+        return [RunResult("demo", True, [])], manifest
+
+    monkeypatch.setattr(
+        "bajutsu.common.backend_cli.simctl.resolve_udid", lambda u, run=None: "FAKE-UDID"
+    )
+    monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
+    monkeypatch.setattr("bajutsu.run.cli.device_pool", lambda *a, **k: (object(), lambda: None))
+    monkeypatch.setattr("bajutsu.run.cli.run_and_report", _fake_run_and_report)
+
+    cfg, scn = _fake_run(tmp_path)
+    r = runner.invoke(
+        app, _run_argv(cfg, scn, tmp_path, "--trace-driver", "--no-system-alert-handling")
+    )
+    assert r.exit_code == 0
+    assert calls[0]["trace_driver"] is True
+
+
+def test_run_without_trace_driver_flag_defaults_to_off(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from bajutsu.common.orchestrator import RunResult
+
+    manifest = _manifest_at(tmp_path)
+    calls: list[dict[str, Any]] = []
+
+    def _fake_run_and_report(*_args: object, **kwargs: object) -> tuple[list[RunResult], Path]:
+        calls.append(kwargs)
+        return [RunResult("demo", True, [])], manifest
+
+    monkeypatch.setattr(
+        "bajutsu.common.backend_cli.simctl.resolve_udid", lambda u, run=None: "FAKE-UDID"
+    )
+    monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
+    monkeypatch.setattr("bajutsu.run.cli.device_pool", lambda *a, **k: (object(), lambda: None))
+    monkeypatch.setattr("bajutsu.run.cli.run_and_report", _fake_run_and_report)
+
+    cfg, scn = _fake_run(tmp_path)
+    r = runner.invoke(app, _run_argv(cfg, scn, tmp_path, "--no-system-alert-handling"))
+    assert r.exit_code == 0
+    assert calls[0]["trace_driver"] is False
+
+
 @pytest.mark.parametrize(
     ("provider", "key"),
     [(None, None), (None, "sk-test"), ("bedrock", None)],
@@ -1042,6 +1099,103 @@ def test_xcuitest_runner_summary_warns_on_a_bundled_toolchain_mismatch(
     assert "⚠" in lines[1]
     assert "Xcode 16.0 (bundled runner) vs 15.4 (host)" in lines[1]
     assert "xcuitest.testRunner" in lines[1]
+
+
+def _bundled_tier_eff() -> Effective:
+    from bajutsu.common.config import XcuitestConfig
+    from bajutsu.common.scenario import Redact
+
+    return Effective(
+        target="app",
+        platform_config=IosConfig(bundle_id="com.example.demo", xcuitest=XcuitestConfig()),
+        backend=["xcuitest"],
+        device="",
+        locale="en_US",
+        launch_env={},
+        launch_args=[],
+        id_namespaces=[],
+        reserved_namespaces=[],
+        mock_server=None,
+        setup=None,
+        capture=[],
+        redact=Redact(),
+    )
+
+
+def test_xcuitest_runner_summary_warns_when_the_bundle_is_stale(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # docs/specs/xcuitest-bundled-runner-auto-refresh.md step 7: a dev checkout whose staged bundle
+    # no longer matches BajutsuKit's own source gets a note that it will rebuild on the next run —
+    # without doctor rebuilding it itself.
+    from bajutsu.cli.commands import doctor
+    from bajutsu.common.platform_lifecycle.environments import _bundled_runner
+    from bajutsu.common.platform_lifecycle.environments.xcuitest import _functions as xc
+
+    monkeypatch.setattr(xc, "bundled_products_dir", lambda: tmp_path)
+    monkeypatch.setattr(_bundled_runner, "bundled_products_dir", lambda: tmp_path)
+    monkeypatch.setattr(_bundled_runner, "runner_source_present", lambda: True)
+    monkeypatch.setattr(_bundled_runner, "source_hash", lambda: "new-hash")
+    monkeypatch.setattr(
+        _bundled_runner, "bundled_runner_build_info", lambda: {"sourceHash": "old-hash"}
+    )
+    # bundled_runner_is_stale itself never shells out (unlike ensure_bundled_runner_fresh, which
+    # this disclosure path never calls at all); the host-toolchain probe the toolchain-mismatch note
+    # makes is a separate, legitimate subprocess call this test leaves untouched.
+    monkeypatch.setattr(doctor, "_host_toolchain", lambda: (None, None))
+
+    lines = doctor.xcuitest_runner_summary(_bundled_tier_eff(), "xcuitest")
+
+    assert lines[0] == "xcuitest runner: bundled (wheel-shipped Simulator runner)"
+    assert any("stale" in line and "⚠" in line for line in lines[1:])
+
+
+def test_xcuitest_runner_summary_silent_when_the_bundle_is_fresh(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from bajutsu.cli.commands import doctor
+    from bajutsu.common.platform_lifecycle.environments import _bundled_runner
+    from bajutsu.common.platform_lifecycle.environments.xcuitest import _functions as xc
+
+    monkeypatch.setattr(xc, "bundled_products_dir", lambda: tmp_path)
+    monkeypatch.setattr(_bundled_runner, "bundled_products_dir", lambda: tmp_path)
+    monkeypatch.setattr(_bundled_runner, "runner_source_present", lambda: True)
+    monkeypatch.setattr(_bundled_runner, "source_hash", lambda: "same-hash")
+    monkeypatch.setattr(
+        _bundled_runner, "bundled_runner_build_info", lambda: {"sourceHash": "same-hash"}
+    )
+
+    lines = doctor.xcuitest_runner_summary(_bundled_tier_eff(), "xcuitest")
+
+    assert lines == ["xcuitest runner: bundled (wheel-shipped Simulator runner)"]
+
+
+def test_xcuitest_runner_summary_warns_on_a_fresh_clone_with_no_bundle_staged_yet(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A dev checkout that has never run `make runner-bundle` resolves `runner_source` to "none: ...
+    # (set xcuitest.testRunner)" — advice that was correct before this change but is now wrong, since
+    # ensure_bundled_runner_fresh builds the bundle automatically on the next real run. The staleness
+    # note must fire here too, not just for "staged but stale", so doctor doesn't send a contributor
+    # on a fresh clone to configure a testRunner they don't actually need.
+    from bajutsu.cli.commands import doctor
+    from bajutsu.common.platform_lifecycle.environments import _bundled_runner
+    from bajutsu.common.platform_lifecycle.environments.xcuitest import _functions as xc
+
+    monkeypatch.setattr(xc, "bundled_products_dir", lambda: None)
+    monkeypatch.setattr(_bundled_runner, "bundled_products_dir", lambda: None)
+    monkeypatch.setattr(_bundled_runner, "runner_source_present", lambda: True)
+    monkeypatch.setattr(_bundled_runner, "source_hash", lambda: "abc123")
+    monkeypatch.setattr(_bundled_runner, "bundled_runner_build_info", lambda: None)
+    monkeypatch.setattr(doctor, "_host_toolchain", lambda: (None, None))
+
+    lines = doctor.xcuitest_runner_summary(_bundled_tier_eff(), "xcuitest")
+
+    assert (
+        lines[0]
+        == "xcuitest runner: none: no bundled runner in this build (set xcuitest.testRunner)"
+    )
+    assert any("stale" in line and "⚠" in line for line in lines[1:])
 
 
 def test_current_screen_fake_backend_queries_the_driver(monkeypatch: pytest.MonkeyPatch) -> None:

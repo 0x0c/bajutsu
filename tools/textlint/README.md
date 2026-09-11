@@ -33,6 +33,18 @@ unprotected; the lockfile's integrity hashes pin all of them by content, a broad
 guarantee. To bump a version, edit `package.json`, run `npm install` once, and always commit the
 updated `package-lock.json`.
 
+### Security overrides
+
+`overrides` in `package.json` holds floors that resolve npm advisories in transitive dependencies —
+**keep them when bumping a rule.** Removing one silently reintroduces the advisory:
+
+- `hono: ^4.13.5` (via `@modelcontextprotocol/sdk`) — GHSA-gqvv-2mrq-wpjv, GHSA-g6gw-c38x-mqfc,
+  GHSA-crvj-82cr-hjcx
+- `js-yaml: ^4.3.2`, with per-parent `^3.15.2` for `prh`, `textlint-rule-ja-hiragana-fukushi`, and
+  `textlint-rule-ja-hiragana-hojodoushi` (which require the 3.x line) — GHSA-2883-xcg3-v3hh
+
+After any bump, re-run `npm audit` in this directory and confirm it still reports 0 vulnerabilities.
+
 ## The rules enabled today
 
 The enabled rules fall into three groups by target language. `.textlintrc.json`'s `rules` are

@@ -39,6 +39,7 @@ from ._functions import _spawn_cold_with_retry as _spawn_cold_with_retry
 from ._functions import _terminate_process_group as _terminate_process_group
 from ._functions import _zorder_client as _zorder_client
 from ._functions import (
+    bundled_runner_staleness_note,
     bundled_runner_toolchain_note,
     bundled_runner_toolchain_warning,
     effective_device_type,
@@ -56,6 +57,7 @@ from .xcuitest_environment import XcuitestEnvironment
 
 __all__ = [
     "XcuitestEnvironment",
+    "bundled_runner_staleness_note",
     "bundled_runner_toolchain_note",
     "bundled_runner_toolchain_warning",
     "effective_device_type",

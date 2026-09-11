@@ -6,7 +6,7 @@
 > specification to exactly one match. Every execution path (orchestrator / drivers /
 > assertions) depends on this module. Bajutsu's determinism logic is implemented here.
 >
-> Implementation: `bajutsu/common/drivers/base.py`.
+> Implementation: `bajutsu/common/drivers/base/_functions.py`.
 
 Related: [the determinism principles](concepts.md#3-determinism-first-four-concrete-mechanisms) · [the DSL in scenarios](scenarios.md#assertion-dsl) · [drivers](drivers.md)
 
@@ -70,7 +70,7 @@ Addresses an element. **All provided fields are AND-ed.**
 ### Authoring vs. runtime representation
 
 - The scenario-side [selector](glossary.md#scenario-authoring) is `scenario/models/selector.py`'s `Selector` (pydantic, with aliases like `idMatches`).
-- What reaches resolution is `common/drivers/base.py`'s `Selector` (TypedDict).
+- What reaches resolution is `common/drivers/base/selector.py`'s `Selector` (TypedDict).
 - The conversion is `Selector.as_selector()` (drops `None`, turns it into a TypedDict).
 
 ## Resolution semantics
@@ -133,7 +133,7 @@ ambiguity count above. Otherwise, a dropped `other` would shift every later posi
 > the classification gap on the parent is not needed to set a date picker's value.
 
 ```python
-# common/drivers/base.py (excerpt)
+# common/drivers/base/_functions.py (excerpt)
 def resolve_unique(elements, sel):
     candidates = _collapse_identical_duplicates(find_all(elements, sel))
     if len(candidates) > 1 and "other" not in sel.get("traits", []):
@@ -204,9 +204,131 @@ Each backend derives `identifier` from its own accessibility id. XCUITest uses
 `data-testid`. Each normalizes into `Element.identifier`. The `id` selector then resolves directly
 against that normalized form.
 
+## Porting contract for a device-side resolver
+
+[BE-0408](../roadmaps/BE-0408-step-latency-device-executor-protocol/BE-0408-step-latency-device-executor-protocol.md)
+ports `find_all` and `resolve_unique` to Swift and Kotlin. A device-side executor then resolves a
+selector without a host round trip. Both ports must resolve every selector to the same element
+this module's Python code would pick. Both must fail the same way on an ambiguous match. This
+section states rules a literal reading of the code above could miss. It also names two
+divergences a port must keep, not close.
+
+`tests/fixtures/be0408/` holds this contract in executable form.
+`selector_resolution.json` replays `find_all` and `resolve_unique` against 42 cases.
+`android_derived_label.json` replays Android's label-derivation rule against 9 more.
+`tests/test_selector_fixtures.py` checks every case against this module's own functions. A change
+here that breaks a fixture fails the fast gate first, before it ever reaches a port.
+
+### Two distinct matching engines
+
+`idMatches` and `labelMatches` do not share one matching engine. `idMatches` uses
+`fnmatch.fnmatchcase`: a glob, fully anchored, case-sensitive. `labelMatches` uses `re.search`: a
+regular expression, unanchored, case-sensitive. A glob library's default anchoring often differs
+from a regex engine's default anchoring. A port must reproduce Python's own anchoring for each
+field, not the port language's own default. That means fully anchored for `idMatches` and
+unanchored for `labelMatches`.
+
+### A present field is not a non-null field
+
+The scenario-side `Selector` model drops every `None` field before it reaches resolution. This
+happens in `as_selector()`, defined in `bajutsu/common/scenario/models/selector.py`. A field's
+absence from the wire form always means "not specified". It never means "specified as empty". A
+port must never treat an explicit null for a selector field as "present but empty".
+
+### `find_all` never raises, and returns elements in document order
+
+`find_all` has no concept of ambiguity. It returns every matching element, in the input list's own
+order. `within` scopes that result to elements whose frame sits inside a container's frame. This
+containment is geometric: edge-inclusive, over a flat element list with no parent pointer. A
+`within` selector may nest to any depth. Containment includes the boundary case where a candidate's
+own frame equals its container's frame. An element that scopes to itself meets this test. Treat
+that outcome as expected, not as a bug to guard against.
+
+A `within` selector that itself matches nothing produces an empty scope list. The whole result is
+then empty too. This is never an unscoped pass-through, and never an error. `contains` never runs
+against zero scopes. `any()` over an empty sequence is false for every candidate. A port might read
+a missing container as "nothing to scope by, fall back to unscoped" instead. That port then
+resolves a selector the host fails on. That is the one-side-resolves, other-side-fails divergence
+this whole contract exists to rule out.
+
+### The duplicate-collapse key
+
+`resolve_unique` first collapses identical-content candidates into one representative. One known
+XCUITest quirk motivates this collapse. A standard alert button sometimes registers twice,
+indistinguishably. The collapse key is:
+
+- `identifier`
+- `label`
+- the trait *set* (order does not matter)
+- `value`
+- an exact frame match
+
+`nativeZ` stays out of the key on purpose: this field exists for diagnostics, not identity. Two
+candidates that agree on every other field still collapse. Their `nativeZ` values may differ by any
+amount.
+
+The collapse keeps the *first* candidate carrying a given key, in `find_all`'s own document order.
+It drops the rest. `index` then counts positions in that same order. A plain hash map has no
+defined iteration order — Swift's `Dictionary`, for one. A port reaching for one gets this wrong.
+It would pick a different survivor from run to run, on any screen where the collapse fires. That
+makes an `index`-addressed tap nondeterministic. This rule exists for that same screen. A port
+needs an insertion-ordered structure for the collapse. Another structure works too, as long as it
+preserves first-seen order explicitly.
+
+### The `other`-trait drop, and where `index` counts from
+
+Before judging ambiguity, `resolve_unique` drops every candidate carrying the `other` trait. Two
+exceptions leave the tie untouched. The selector itself may target `other`, or every remaining
+candidate may already be `other`. `index` then counts positions in that filtered set, never the raw
+`find_all` result. A dropped `other` candidate must never shift a later position by one. An `index`
+against zero candidates is out of range, not "no match". A port's own error taxonomy needs that
+same two-way split. The Python message text is Japanese and implementation-specific. A port needs
+the classification alone, never the exact words.
+
+### Android's derived-label rule
+
+A clickable Android node with no `text` or `content-desc` derives a label from its descendants.
+The join runs depth-first, in pre-order. This is `_derived_label`, in
+`bajutsu/common/drivers/adb/_functions.py`. `_derived_label` skips a nested clickable descendant
+whole, subtree included. That descendant is its own control. It carries its own label. Its text
+never folds into its parent's label. A non-clickable container never derives a label at all.
+Derivation fires for a clickable node alone.
+
+The join folds in a descendant's `text`, never its `content-desc`. `content-desc` is this
+driver's own *value* channel. The showcase app mirrors assertion state into it. Folding it into a
+derived label risks that mirrored value leaking into the label instead. A descendant that carries
+`content-desc` and no `text` contributes nothing to the join.
+`android_derived_label.json`'s `descendant_content_desc_is_never_folded_into_the_join` case pins
+this: a port that also folds `content-desc` in fails that case before it ever reaches a device.
+
+This rule runs one layer before selector resolution. It builds the `Element`
+a selector later matches against. A device-side Android executor's own accessibility read must
+reach the same label. The host's `/source` read would reach that same label too. Otherwise a
+label-based selector could resolve on one side of a run and fail on the other.
+
+### Two divergences a port must keep, not close
+
+Two existing Swift behaviors differ from this module on purpose. A new port must not "correct"
+either one toward Python's own behavior.
+
+`PositionPath.framesEqual` allows one point of slack on each of a frame's four values. This lives
+in `BajutsuKit/Sources/BajutsuRunner/PositionPath.swift`. This module's own duplicate-collapse key
+compares frames as an exact match instead. The two frames come from different moments. A
+duplicate-collapse frame comes from one atomic snapshot. An exact match is the right test for that
+case. `PositionPath`'s frame comes from its own live re-fetch, per candidate. A point of slack there
+absorbs the noise a second read can introduce. Sync the fields the two keys compare. Never sync the
+tolerance between them.
+
+`PositionPath.attributesMatch` compares `traits` as an ordered array. This module's own `matches`
+treats `traits` as a set instead. The two answer different questions. `PositionPath` asks whether a
+specific, already-recorded element is still the same element. A device that reports its traits in a
+fixed order can compare that order too. A fresh `resolve_unique` call has no recorded order to
+compare against. It treats the field as the set it semantically is.
+
 ## Assertion evaluation
 
-Implementation: `bajutsu/assertions/` (`evaluate.py`, split from a single module in BE-0250).
+Implementation: `bajutsu/common/assertions/evaluate/_functions.py`. BE-0250 split it from a single
+module, then BE-0411 packaged it per class.
 `evaluate(elements, assertions) -> list[AssertionResult]`
 evaluates each assertion, and `passed(results)` ANDs them. **Evaluation is total**: a resolution
 failure (not-found / ambiguous) is returned as a failed `AssertionResult` rather than an exception

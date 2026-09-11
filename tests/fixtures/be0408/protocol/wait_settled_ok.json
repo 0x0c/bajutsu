@@ -1,0 +1,21 @@
+{
+  "schema": 1,
+  "operation": "wait",
+  "request": {
+    "mode": "settled",
+    "timeoutMs": 2000,
+    "pollBudgetMs": 1000
+  },
+  "response": {
+    "status": "ok",
+    "elements": [
+      {
+        "traits": ["staticText"],
+        "frame": [0.0, 0.0, 200.0, 40.0],
+        "handle": "h5",
+        "identifier": "screen.title",
+        "label": "Results"
+      }
+    ]
+  }
+}

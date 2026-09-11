@@ -97,7 +97,7 @@ preflight:
 
 # Shell scripts the gate lints. pre-push/pre-commit/prepare-commit-msg have no .sh suffix, so
 # they're listed explicitly.
-SHELL_SCRIPTS := .githooks/pre-push .githooks/commit-msg .githooks/pre-commit .githooks/prepare-commit-msg scripts/serve.sh scripts/install.sh scripts/worktree.sh scripts/preflight.sh scripts/worktree_cleanup.sh scripts/check_worktree_config.sh scripts/merge-uv-lock.sh scripts/merge-apm-generated.sh scripts/install-no-verify-guard.sh scripts/xcuitest-runner-hash.sh scripts/collect_android_diagnostics.sh scripts/android_pool_e2e.sh .claude/hooks/session-start.sh demos/tour/demo.sh
+SHELL_SCRIPTS := .githooks/pre-push .githooks/commit-msg .githooks/pre-commit .githooks/prepare-commit-msg scripts/serve.sh scripts/install.sh scripts/worktree.sh scripts/preflight.sh scripts/worktree_cleanup.sh scripts/check_worktree_config.sh scripts/merge-uv-lock.sh scripts/merge-apm-generated.sh scripts/install-no-verify-guard.sh scripts/collect_android_diagnostics.sh scripts/android_pool_e2e.sh .claude/hooks/session-start.sh demos/tour/demo.sh
 
 # Modules whose public surface has migrated to the Google-style docstring standard (BE-0065),
 # enforced by `lint-docstrings`. This list GROWS module-by-module as more migrate; keep it the
@@ -400,7 +400,8 @@ docs-diagrams:
 # its test bundles. The output is gitignored and force-included via pyproject `artifacts`. A
 # build-info.json records the Xcode / Simulator SDK the runner was built against, so `doctor` can warn
 # when the host toolchain differs from it (BE-0292) rather than surfacing an opaque xcodebuild error;
-# it also records a content hash of the runner's own sources (scripts/xcuitest-runner-hash.sh), so
+# it also records a content hash of the runner's own sources
+# (bajutsu.common.platform_lifecycle.environments._bundled_runner.source_hash), so
 # `scripts/serve.sh` can tell a stale bundle from a current one without re-running xcodebuild.
 runner-bundle:
 	$(MAKE) -C demos/showcase runner-build
@@ -410,7 +411,7 @@ runner-bundle:
 	printf '{"xcode": "%s", "sdk": "%s", "sourceHash": "%s"}\n' \
 		"$$(xcodebuild -version | awk 'NR==1 {print $$2}')" \
 		"$$(xcodebuild -version -sdk iphonesimulator SDKVersion 2>/dev/null | tr -d '[:space:]')" \
-		"$$(scripts/xcuitest-runner-hash.sh)" \
+		"$$(uv run python -c 'from bajutsu.common.platform_lifecycle.environments._bundled_runner import source_hash; print(source_hash())')" \
 		> bajutsu/_xcuitest_runner/build-info.json
 
 # Showcase build / on-device targets live with the fixture (demos/showcase/, the single iOS app):

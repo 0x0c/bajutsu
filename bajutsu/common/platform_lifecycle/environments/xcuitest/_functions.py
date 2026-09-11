@@ -21,6 +21,8 @@ from bajutsu.common.drivers.zorder import ZOrderResponder, ZOrderSource
 from bajutsu.common.platform_lifecycle.environments._bundled_runner import (
     bundled_products_dir,
     bundled_runner_build_info,
+    bundled_runner_is_stale,
+    ensure_bundled_runner_fresh,
     materialize,
 )
 
@@ -515,7 +517,9 @@ def _resolve_runner(xcfg: XcuitestConfig | None, device_type: str) -> Path:
     Precedence keeps explicit config above the default. A configured `testRunner` is used, built on
     demand via `build` when the file is missing. With neither configured, a Simulator run falls back
     to the wheel-bundled generic runner (BE-0292), materialized into a writable cache; a real device
-    instead fails loudly, since its runner must be signed (BE-0288) and is not bundled.
+    instead fails loudly, since its runner must be signed (BE-0288) and is not bundled. In a dev
+    checkout, `ensure_bundled_runner_fresh` rebuilds that fallback first when BajutsuKit's own source
+    has moved past it, so this tier never silently serves a stale bundle.
     """
     tier, test_runner, build = _classify_runner(xcfg, device_type)
 
@@ -540,6 +544,7 @@ def _resolve_runner(xcfg: XcuitestConfig | None, device_type: str) -> Path:
             "xcuitest.deviceType: device requires an explicit xcuitest.testRunner "
             "(a real-device runner must be signed and is not bundled; see BE-0288)"
         )
+    ensure_bundled_runner_fresh()
     products = bundled_products_dir()
     if products is None:
         raise simctl.DeviceError(
@@ -642,6 +647,21 @@ def bundled_runner_toolchain_note(
         return None
     host_xcode, host_sdk = host_toolchain()
     return bundled_runner_toolchain_warning(bundled_runner_build_info(), host_xcode, host_sdk)
+
+
+def bundled_runner_staleness_note(xcfg: XcuitestConfig | None, device_type: str) -> str | None:
+    """A "bundle is stale" note, but only when the target resolves to the bundled runner (BE-0292).
+
+    Shares `_classify_runner`'s precedence with `bundled_runner_toolchain_note`, so the note is
+    confined the same way. Pure disclosure: reads the staged `build-info.json` and computes
+    `source_hash()`, but never calls `ensure_bundled_runner_fresh`'s rebuild.
+    """
+    tier, _, _ = _classify_runner(xcfg, device_type)
+    if tier != "bundled":
+        return None
+    if not bundled_runner_is_stale():
+        return None
+    return "bundled runner is stale — will rebuild on next run"
 
 
 def _runner_host_bundle_ids(runner_path: Path) -> tuple[str, ...]:

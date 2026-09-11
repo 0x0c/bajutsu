@@ -27,7 +27,10 @@ def test_run_flag_surface_is_fully_classified() -> None:
     base_handled = {"target_name", "scenario", "config", "progress"}
     # ios_tipkit_handling stays CLI-only: it is a per-scenario iOS guard, and a serve user sets it as
     # `iosTipKitHandling` in the scenario file serve already edits, rather than as a run-wide toggle.
-    not_serve_exposed = {"evidence_store", "score", "ios_tipkit_handling"}
+    # trace_driver (BE-0415) is the same kind of investigator-only diagnostic as score, not an
+    # artifact serve's UI offers a download for the way --zip's runs/<id>.zip is; wiring it through
+    # would add commands.py/dispatch.py plumbing this item's own design never asked for.
+    not_serve_exposed = {"evidence_store", "score", "ios_tipkit_handling", "trace_driver"}
     pass_through = {
         "backend",
         "udid",

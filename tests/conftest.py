@@ -69,6 +69,32 @@ def _fresh_clone_resident_gate(monkeypatch: pytest.MonkeyPatch) -> None:
     )
 
 
+@pytest.fixture(autouse=True)
+def _fresh_checkout_bundled_runner_gate(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Pin the xcuitest bundled-runner freshness check to "no BajutsuKit source" for every test.
+
+    `ensure_bundled_runner_fresh` (docs/specs/xcuitest-bundled-runner-auto-refresh.md) checks real
+    ambient state — whether this checkout ships `BajutsuKit/` — before falling back to the
+    wheel-bundled runner. On a machine that has it (this repo's own checkout, unlike an installed
+    wheel), an unrelated test exercising the bundled tier would have it shell out to a real `make
+    runner-bundle` (an `xcodebuild` invocation) instead of raising cleanly — the same ambient-state
+    trap BE-0245 hit for the Android resident server (see `_fresh_clone_resident_gate` above).
+
+    Only the ambient, argument-less call (what `ensure_bundled_runner_fresh` makes) is answered
+    "absent"; an explicit-`root` call — `test_xcuitest_bundled_runner.py`'s own tests of
+    `runner_source_present` itself — forwards to the real function, since the path it asks about is
+    its own fixture, not this machine's checkout.
+    """
+    import bajutsu.common.platform_lifecycle.environments._bundled_runner as bundled_runner
+
+    real = bundled_runner.runner_source_present
+    monkeypatch.setattr(
+        bundled_runner,
+        "runner_source_present",
+        lambda *a, **kw: real(*a, **kw) if a or kw else False,
+    )
+
+
 class ShotDriver(FakeDriver):
     """A FakeDriver whose screenshot writes real PNG bytes, so callers that read the
     capture back (the alert guard, the crawl guide's vision path) get an image."""

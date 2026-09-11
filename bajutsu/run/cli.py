@@ -949,6 +949,9 @@ class _RunPlan:
     # `_filter_scenarios` resolving every scenario's `preconditions.erase` to a concrete bool, since
     # that resolved value can no longer distinguish an explicit opt-out from "nobody asked".
     force_erase_on_retry: bool
+    # `--trace-driver` (BE-0415): one `<sid>/driver_trace.json` per scenario, recording every
+    # Python<->driver call. Diagnostic only, off by default, never on the verdict path.
+    trace_driver: bool
 
 
 def _print_score(score: Score) -> None:
@@ -1052,6 +1055,7 @@ def _dispatch_single(
             # the Ready/Partial/Blocked tell without a separate `doctor` that cold-spawns a second
             # XCUITest runner. Off by default, so an ordinary run is unchanged.
             on_score=_print_score if plan.score else None,
+            trace_driver=plan.trace_driver,
             force_erase_on_retry=plan.force_erase_on_retry,
             cancelled=plan.cancelled,
         )
@@ -1102,6 +1106,7 @@ def _dispatch_matrix(
                 golden_context=plan.golden_context,
                 # Each engine pass scores its own entry screen once (`--score`); off by default.
                 on_score=_print_score if plan.score else None,
+                trace_driver=plan.trace_driver,
                 force_erase_on_retry=plan.force_erase_on_retry,
                 cancelled=plan.cancelled,
             )
@@ -1278,6 +1283,14 @@ def run(
         help="print the app's entry-screen convention score (doctor's Ready/Partial/Blocked grade) "
         "to stderr, computed from this run's own first launch — so CI reads the tell without a "
         "separate `doctor` that cold-spawns a second runner. Diagnostic only; never affects pass/fail",
+    ),
+    trace_driver: bool = typer.Option(
+        False,
+        "--trace-driver",
+        help="write <sid>/driver_trace.json per scenario, recording every Python<->driver call — "
+        "the driver method invoked, its host-device round trips, and (on Android) which fell back "
+        "to a subprocess — attributed to the step it happened during. Diagnostic only; never "
+        "affects pass/fail",
     ),
     touch_markers: bool = typer.Option(
         False,
@@ -1491,6 +1504,7 @@ def run(
                 evidence_store=evidence_store,
                 upload_exec=upload_exec,
                 score=score,
+                trace_driver=trace_driver,
                 # `erase` is the pre-`_filter_scenarios` CLI flag: None (unset) and explicit `--erase` both
                 # mean "no operator opt-out", only `--no-erase` (False) does.
                 force_erase_on_retry=erase is not False,

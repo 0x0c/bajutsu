@@ -32,6 +32,7 @@ from bajutsu.common.devices import errors as device_errors
 from bajutsu.common.doctor import DoctorProbeError, probe_screen, render, score
 from bajutsu.common.drivers import base
 from bajutsu.common.platform_lifecycle.environments.xcuitest import (
+    bundled_runner_staleness_note,
     bundled_runner_toolchain_note,
     effective_device_type,
     runner_source,
@@ -139,10 +140,13 @@ def xcuitest_runner_summary(eff: Effective, actuator: str) -> list[str]:
     """Which runner-resolution tier the target's xcuitest config would use (BE-0292).
 
     Informational only — `runner_source` is a pure precedence check, so this discloses the source
-    without running a configured `build` command or materializing the bundled runner. When the target
-    resolves to the bundled runner, a second line warns if the host Xcode / Simulator SDK differs from
-    the toolchain that runner was built against, naming the `testRunner` / `build` escape hatch.
-    Empty for any actuator other than `xcuitest`, since no other backend resolves a runner this way.
+    without running a configured `build` command, materializing the bundled runner, or rebuilding it.
+    When the target resolves to the bundled runner, a second line warns if the host Xcode / Simulator
+    SDK differs from the toolchain that runner was built against, naming the `testRunner` / `build`
+    escape hatch; a third notes when a dev checkout's staged bundle no longer matches BajutsuKit's own
+    source (it rebuilds automatically on the next run that needs it — see `ensure_bundled_runner_fresh`
+    — this just surfaces that it will). Empty for any actuator other than `xcuitest`, since no other
+    backend resolves a runner this way.
     """
     if actuator != "xcuitest":
         return []
@@ -153,6 +157,8 @@ def xcuitest_runner_summary(eff: Effective, actuator: str) -> list[str]:
     # explicit testRunner spawns no xcodebuild/xcrun.
     if note := bundled_runner_toolchain_note(xcfg, device_type, _host_toolchain):
         lines.append(f"  ⚠ {note}")
+    if staleness := bundled_runner_staleness_note(xcfg, device_type):
+        lines.append(f"  ⚠ {staleness}")
     return lines
 
 
