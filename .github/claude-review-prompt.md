@@ -186,10 +186,10 @@ docstring formatting, bilingual-doc sync, terminology consistency, and roadmap-l
 house conventions with no functional consequence, so leave them to human review. The two lenses
 below are the sole exception, and they keep their own, already-strict floor rather than the blanket
 rule above, for two reasons: a concrete `suggestion` block already makes the fix a one-line apply on
-the same pull request, and this review is the only automated check on the bilingual-docs and
-`document-writing` house conventions [`CLAUDE.md`](../CLAUDE.md) already requires — textlint enforces
-mechanics, never wording quality itself. A finding from either lens is fixed like any other: the
-author pushes the rewrite to the same pull request that raised it.
+the same pull request, and this review is the only automated check on the `document-writing` prose
+norms [`CLAUDE.md`](../CLAUDE.md) already requires — textlint enforces mechanics, never wording
+quality itself. A finding from either lens is fixed like any other: the author pushes the rewrite to
+the same pull request that raised it.
 
 - **Japanese prose quality — raise the floor higher than the other lenses.** Any Japanese the PR
   adds or edits — `docs/ja/`, roadmap `*-ja.md`, or Japanese in comments — must follow the
