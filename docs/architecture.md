@@ -767,19 +767,20 @@ Android; on iOS it rests on the fast suite's bookkeeping proof alone.
   stacked behind that fade another round rather than ending the call on a lingering fade this loop
   exists to see past. An alert no rule identifies settles and tries again too, rather than ending
   the call outright, but only when continuing could still change what a later round reads. That
-  holds once this call has itself dismissed something, or once a rule's own shape is already
-  present in the read, though not uniquely. Two rules can share a tapped label (`notifications` and
-  `tracking` both grant `"Allow"`), so a round reading one's still-fading buttons alongside the
-  other's now-live ones fails the per-label uniqueness check for either. That collision can be this
-  call's own first round, before anything has been dismissed, since both alerts can already be on
-  the screen. Only settling past the fade lets the live one read uniquely and resolve on a later
-  round of its own — the note such a round reports filters out one occurrence per label this call
-  has already answered, so the alert already cleared is not re-named while a second, still-live
-  alert's own copy of a shared label is. With nothing dismissed and no rule's shape present in the
-  read, there is no fade of this call's own making to drain and no live collision to wait out, so
-  the round ends the call instead. A later round could only re-read the same surface or find the
-  alert gone on its own, and continuing risks losing this round's own diagnosis to that second case.
-  A native alert whose fade outlasts that settle still reads back, unchanged, on a later round.
+  holds once this call has already dismissed a native alert, or once a native rule's own shape is
+  already present in the read, though not uniquely. Two rules can share a tapped label
+  (`notifications` and `tracking` both grant `"Allow"`), so a round reading one's still-fading
+  buttons alongside the other's now-live ones fails the per-label uniqueness check for either. That
+  collision can be this call's own first round, before any native alert has been dismissed, since
+  both alerts can already be on the screen. Only settling past the fade lets the live one read
+  uniquely and resolve on a later round of its own — the note such a round reports filters out one
+  occurrence per label this call has already answered, so the alert already cleared is not re-named
+  while a second, still-live alert's own copy of a shared label is. With no native alert dismissed
+  and no native rule's shape present in the read, there is no fade of this call's own making to
+  drain and no live collision to wait out, so the round ends the call instead. A later round could
+  only re-read the same surface or find the alert gone on its own, and continuing risks losing this
+  round's own diagnosis to that second case. A native alert whose fade outlasts that settle still
+  reads back, unchanged, on a later round.
   Matched against a shape a previous round already dismissed, or a narrower
   rendering of one — two of a `savePassword` policy's three rules nest that way, though only on the
   in-tree surface that prompt ever reaches, and both tap the same button — that round declines to
