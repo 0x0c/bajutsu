@@ -153,6 +153,31 @@ def test_expand_file_returns_scenarios_and_file_description(tmp_path: Path) -> N
     assert [s.name for s in scenarios] == ["demo"]
 
 
+def test_expand_file_sets_source_stem_from_the_file_name(tmp_path: Path) -> None:
+    # BE-0417: every expanded scenario carries the loaded file's own stem, independent of its name:.
+    path = tmp_path / "login_flow.yaml"
+    path.write_text(
+        "- name: Login succeeds with a valid password\n  steps:\n    - tap: { id: ok }\n",
+        encoding="utf-8",
+    )
+    scenarios, _ = _expand_file(path, _eff(), root=tmp_path)
+    assert [s.source_stem for s in scenarios] == ["login_flow"]
+
+
+def test_expand_file_data_driven_rows_all_share_the_source_stem(tmp_path: Path) -> None:
+    # Every row a data-driven scenario expands into is set *after* expand_data, so it carries the
+    # same stem as the file it came from, not just the pre-expansion source scenario.
+    path = tmp_path / "login_flow.yaml"
+    path.write_text(
+        '- name: login\n  data: [{target: "a"}, {target: "b"}]\n'
+        '  steps:\n    - tap: { id: "${row.target}" }\n',
+        encoding="utf-8",
+    )
+    scenarios, _ = _expand_file(path, _eff(), root=tmp_path)
+    assert len(scenarios) == 2
+    assert [s.source_stem for s in scenarios] == ["login_flow", "login_flow"]
+
+
 def test_expand_file_missing_setup_ref_exits_2(tmp_path: Path) -> None:
     # A setup prelude resolved relative to the file's dir; a missing file is a usage error (exit 2).
     path = tmp_path / "s.yaml"

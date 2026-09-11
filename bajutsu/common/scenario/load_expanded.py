@@ -83,10 +83,13 @@ def load_expanded_scenarios(path: Path, root: Path | None = None) -> list[Scenar
     expand_components(
         scenarios, lambda ref: _parse_yaml_named(contained_ref(root, base, ref), load_component)
     )
-    return expand_data(
+    expanded = expand_data(
         scenarios,
         lambda ref: read_csv(contained_ref(root, base, ref).read_text(encoding="utf-8")),
     )
+    for s in expanded:
+        s.set_source_stem(path.stem)
+    return expanded
 
 
 def load_scenarios_dir(scenarios_dir: Path) -> list[Scenario]:

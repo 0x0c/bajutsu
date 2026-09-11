@@ -24,6 +24,43 @@ def _scenarios(*names: str) -> list[Scenario]:
     return [Scenario.model_validate({"name": n, "steps": [{"tap": {"id": "ok"}}]}) for n in names]
 
 
+def test_cancelled_matrix_pass_sid_prefers_source_stem_over_name_and_sanitizes_it(
+    tmp_path: Path,
+) -> None:
+    """`_cancelled_pass`'s `sid` follows the same source-stem-over-name rule as `run_one` (BE-0417).
+
+    The stem carries a `#` so this actually exercises `sanitize_source_stem` at this call site too.
+    """
+    scenarios = _scenarios("Login succeeds with a valid password")
+    scenarios[0].set_source_stem("login#1")
+    results = run_matrix_and_report(
+        _eff(),
+        scenarios,
+        ["chromium"],
+        lambda engine, run_dir: [],  # never reached: cancelled() is already True
+        tmp_path / "runs",
+        "run1",
+        cancelled=lambda: True,
+    )[0]
+    assert [r.sid for r in results] == ["00-login_1"]
+
+
+def test_cancelled_matrix_pass_sid_falls_back_to_name_slug_with_no_source_stem(
+    tmp_path: Path,
+) -> None:
+    """`_cancelled_pass` keeps `scenario_slug(s.name)` when no source file is known (BE-0417)."""
+    results = run_matrix_and_report(
+        _eff(),
+        _scenarios("Login succeeds"),
+        ["chromium"],
+        lambda engine, run_dir: [],  # never reached: cancelled() is already True
+        tmp_path / "runs",
+        "run1",
+        cancelled=lambda: True,
+    )[0]
+    assert [r.sid for r in results] == ["00-login-succeeds"]
+
+
 def test_a_cancel_before_the_run_fails_every_scenario_in_order() -> None:
     results = run_all(_eff(), _scenarios("a", "b", "c"), _lease, cancelled=lambda: True)
     # One result per scenario, in declaration order: nothing downstream has to know a cancellation

@@ -197,6 +197,8 @@ def _expand_file(path: Path, eff: Effective, root: Path) -> tuple[list[Scenario]
     except (OSError, ValueError) as e:
         typer.echo(f"data の展開に失敗: {e}")
         raise typer.Exit(2) from None
+    for s in scenarios:
+        s.set_source_stem(path.stem)
     return scenarios, scenario_file.description
 
 

@@ -46,6 +46,7 @@ from bajutsu.common.orchestrator import (
     RunResult,
     push_interruption_policy,
     run_scenario,
+    sanitize_source_stem,
     scenario_slug,
 )
 from bajutsu.common.orchestrator.types import _no_network
@@ -76,6 +77,19 @@ __all__ = [
 ]
 
 _logger = logging.getLogger(__name__)
+
+
+def _evidence_sid(i: int, s: Scenario) -> str:
+    """The `NN-slug` evidence-dir id for scenario `s` at run-order index `i` (BE-0417).
+
+    The slug is `s`'s own source file's stem, sanitized for safe use in an unescaped HTML
+    attribute / URL path segment, or `scenario_slug(s.name)` for a scenario with no known source
+    file (e.g. one built directly, outside the file loaders).
+    """
+    slug = (
+        sanitize_source_stem(s.source_stem) if s.source_stem is not None else scenario_slug(s.name)
+    )
+    return f"{i:02d}-{slug}"
 
 
 def _resolve_now(clock: Clock | None) -> Callable[[], float]:
@@ -267,7 +281,7 @@ class _ScenarioRunner:
             i: The scenario's zero-based index, used for its ordered `NN-slug` evidence dir.
             s: The scenario to run.
         """
-        sid = f"{i:02d}-{scenario_slug(s.name)}"
+        sid = _evidence_sid(i, s)
         if not self.trace_driver:
             return self._run_one_impl(i, s, sid)
         # BE-0415: opened *before* `_run_one_impl` leases a device, so the driver it constructs
@@ -1236,7 +1250,7 @@ def _cancelled_pass(scenarios: list[Scenario], engine: str) -> list[RunResult]:
             steps=[],
             backend="",
             engine=engine,
-            sid=f"{i:02d}-{scenario_slug(s.name)}",
+            sid=_evidence_sid(i, s),
             failure=CANCELLED_FAILURE,
         )
         for i, s in enumerate(scenarios)
