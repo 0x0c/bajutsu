@@ -9,6 +9,7 @@
 | Author | [@0x0c](https://github.com/0x0c) |
 | Status | **Implemented** |
 | Tracking issue | [Search](https://github.com/bajutsu-e2e/bajutsu/issues?q=is%3Aissue+label%3Aroadmap-tracking+in%3Atitle+"BE-0417") |
+| Implementing PR | [#1977](https://github.com/bajutsu-e2e/bajutsu/pull/1977) |
 | Topic | Codebase quality & technical debt |
 | Related | [BE-0200](../BE-0200-run-id-contract/BE-0200-run-id-contract.md) |
 <!-- /BE-METADATA -->
@@ -157,6 +158,20 @@ that holds its evidence, with no detour through `manifest.json`.
 - [x] Unit 5 — Tests for all of the above, including the `_cancelled_pass` matrix path, the
   data-driven-expansion case for both loaders, `sanitize_source_stem()`'s character replacement,
   and that `source_stem` never appears in `model_dump()`.
+
+Log:
+
+- [#1977](https://github.com/bajutsu-e2e/bajutsu/pull/1977) — All 5 units, completing the item.
+  Added `Scenario.source_stem` (a load-time `PrivateAttr` never leaked by `model_dump()`), the two
+  device-free loaders setting it on their final expanded scenario list, and `sanitize_source_stem()`
+  beside `scenario_slug()`. `pipeline.py`'s `run_one` and `_cancelled_pass` now build `sid` from the
+  source file's stem through a shared `_evidence_sid()` helper, falling back to `scenario_slug(name)`
+  when no source file is known. One deviation from the literal design: the sanitizer's replaced
+  character class is `[^\w.-]` (Unicode word characters), not the spec's ASCII-only
+  `[^A-Za-z0-9_.-]` — found in a self-review pass, since the ASCII-only class silently collapsed a
+  Japanese-named scenario file's stem to a run of underscores, defeating this item's own motivation
+  for exactly that file. Also corrected a "Not doing" bullet that named a `_matrix()` collision
+  already fixed independently by #1970 before this PR began.
 
 ## References
 

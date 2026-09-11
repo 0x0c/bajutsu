@@ -9,6 +9,7 @@
 | 提案者 | [@0x0c](https://github.com/0x0c) |
 | 状態 | **実装済み** |
 | トラッキング Issue | [検索](https://github.com/bajutsu-e2e/bajutsu/issues?q=is%3Aissue+label%3Aroadmap-tracking+in%3Atitle+"BE-0417") |
+| 実装 PR | [#1977](https://github.com/bajutsu-e2e/bajutsu/pull/1977) |
 | トピック | コードベース品質・技術的負債 |
 | 関連 | [BE-0200](../BE-0200-run-id-contract/BE-0200-run-id-contract-ja.md) |
 <!-- /BE-METADATA -->
@@ -172,6 +173,21 @@
 - [x] 作業単位 5——上記すべてに対するテストを追加しました。`_cancelled_pass` のマトリクス経路、
   両ローダーのデータ駆動展開ケース、`sanitize_source_stem()` の文字置換、そして `source_stem`
   が `model_dump()` に現れないことを確認しています。
+
+ログ：
+
+- [#1977](https://github.com/bajutsu-e2e/bajutsu/pull/1977)——作業単位すべて（5つ）を実装し、本項目
+  を完了しました。`Scenario.source_stem`（`model_dump()` に一切現れない、読み込み時専用の
+  `PrivateAttr`）、それを展開後の最終的なシナリオ一覧に設定する2つのデバイス不要ローダー、そして
+  `scenario_slug()` の隣に `sanitize_source_stem()` を追加しました。`pipeline.py` の `run_one` と
+  `_cancelled_pass` は、共通の `_evidence_sid()` ヘルパーを介して読み込み元ファイルの語幹から
+  `sid` を組み立て、読み込み元ファイルが不明なときは `scenario_slug(name)` にフォールバック
+  します。設計の字面からの逸脱が1点あります：サニタイザーが置換する文字クラスを、仕様どおりの
+  ASCII 限定 `[^A-Za-z0-9_.-]` ではなく `[^\w.-]`（Unicode の単語構成文字）にしています。セルフ
+  レビューの過程で見つかったもので、ASCII 限定の文字クラスでは日本語のシナリオファイル名の語幹が
+  黙ってアンダースコアの連なりに潰れてしまい、まさにそのファイルに対して本項目自身の動機を損なう
+  ためです。また、`_matrix()` の衝突について、本 PR に着手する前に #1970 で独立に修正済みだった
+  内容を指していた「やらないこと」の記述も訂正しました。
 
 ## 参考
 
