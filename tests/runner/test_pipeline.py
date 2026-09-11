@@ -18,7 +18,8 @@ from bajutsu.common.drivers import base, tracing
 from bajutsu.common.drivers.fake import FakeDriver
 from bajutsu.common.evidence import NullSink
 from bajutsu.common.evidence.network import NetworkExchange, ScreenTransition
-from bajutsu.common.orchestrator import RunResult, sanitize_source_stem
+from bajutsu.common.orchestrator import RunResult, sanitize_source_stem, scenario_slug
+from bajutsu.common.orchestrator.types._functions import _MAX_SLUG_BYTES
 from bajutsu.common.report.format import video_seconds
 from bajutsu.common.runner import Lease, run_all, run_and_report, run_matrix_and_report
 from bajutsu.common.scenario import Scenario
@@ -1260,6 +1261,84 @@ def test_sanitize_source_stem_replaces_only_the_unsafe_characters() -> None:
     assert sanitize_source_stem("login#1") == "login_1"
     assert sanitize_source_stem("a?b") == "a_b"
     assert sanitize_source_stem("a??b") == "a__b"  # one replacement per unsafe character
+
+
+# --- the shared slug length cap (BE-0420) ---
+
+# The kind of name `record` auto-generates with no `--out`: the recording's whole goal, verbatim.
+_LONG_GOAL = (
+    "log in with a saved card, confirm the checkout total matches the cart, "
+    "and check the confirmation email arrives"
+)
+
+
+def test_scenario_slug_caps_an_overlong_name_without_a_trailing_hyphen() -> None:
+    slug = scenario_slug(_LONG_GOAL)
+    assert len(slug.encode("utf-8")) <= _MAX_SLUG_BYTES
+    assert slug == "log-in-with-a-saved-card-confirm-the-checkout-total-matches"
+    assert not slug.endswith("-")
+
+
+def test_scenario_slug_drops_a_hyphen_the_cut_leaves_dangling() -> None:
+    # 59 alphanumerics then a separator: the byte slice lands exactly on the hyphen.
+    assert scenario_slug("a" * 59 + " tail") == "a" * 59
+
+
+def test_sanitize_source_stem_caps_an_overlong_ascii_stem() -> None:
+    stem = "checkout_" * 20
+    capped = sanitize_source_stem(stem)
+    assert len(capped.encode("utf-8")) == _MAX_SLUG_BYTES
+    assert capped == stem[:_MAX_SLUG_BYTES]
+
+
+def test_sanitize_source_stem_caps_a_multibyte_stem_without_splitting_a_character() -> None:
+    """An overlong Japanese stem comes back as valid UTF-8 at or under the byte budget (BE-0420).
+
+    The leading `ab` is what makes the budget land *inside* a character rather than neatly between
+    two: without it the repeated 15-byte `決済フロー` divides the 60 evenly, and the test would
+    pass just as well against a naive character slice.
+    """
+    capped = sanitize_source_stem("ab" + "決済フロー" * 10)
+    encoded = capped.encode("utf-8")
+    assert len(encoded) <= _MAX_SLUG_BYTES
+    assert encoded.decode("utf-8") == capped  # valid UTF-8, no partial trailing character
+    assert capped == "ab" + "決済フロー" * 3 + "決済フロ"
+
+
+def test_recorded_scenario_with_no_out_flag_yields_a_sid_within_the_cap() -> None:
+    """The `record`-with-no-`--out` path: a verbose goal becomes a file name, then an evidence dir.
+
+    `scenario_out_name` itself stays uncapped (the item's *Not doing*) — a long `*.yaml` name is
+    legible on disk and blocks nothing; what must stay bounded is the directory every later run of
+    that file creates.
+    """
+    from bajutsu.common.runner.pipeline import _evidence_sid
+    from bajutsu.serve.helpers import scenario_out_name
+
+    scenario = Scenario.model_validate({"name": _LONG_GOAL, "steps": [{"tap": {"id": "ok"}}]})
+    scenario.set_source_stem(Path(scenario_out_name(_LONG_GOAL)).stem)
+
+    sid = _evidence_sid(0, scenario)
+    assert len(sid.encode("utf-8")) <= len("00-") + _MAX_SLUG_BYTES
+    assert sid == "00-log_in_with_a_saved_card__confirm_the_checkout_total_matches"
+
+
+def test_slugs_colliding_after_truncation_still_get_distinct_sids() -> None:
+    """Truncation adds no collision the run-order prefix does not already resolve (BE-0420).
+
+    Why the item adds no duplicate-suffix counter: every `sid` `_evidence_sid` builds carries the
+    `{i:02d}-` index, which is what keeps two scenarios apart within a run — capped slug or not.
+    """
+    from bajutsu.common.runner.pipeline import _evidence_sid
+
+    shared = "checkout_" * 20
+    first = Scenario.model_validate({"name": "a", "steps": [{"tap": {"id": "ok"}}]})
+    second = Scenario.model_validate({"name": "b", "steps": [{"tap": {"id": "ok"}}]})
+    first.set_source_stem(shared + "_one")
+    second.set_source_stem(shared + "_two")
+
+    assert sanitize_source_stem(shared + "_one") == sanitize_source_stem(shared + "_two")
+    assert _evidence_sid(0, first) != _evidence_sid(1, second)
 
 
 def test_scenario_runner_sid_prefers_source_stem_over_name_and_sanitizes_it() -> None:

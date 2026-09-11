@@ -36,6 +36,15 @@ the scenario's own source file (`login_flow.yaml` → `login_flow`), or a slug o
 ([BE-0417](../roadmaps/BE-0417-scenario-result-folder-naming/BE-0417-scenario-result-folder-naming.md)).
 `stepId` is `step.name` or `step<i>`.
 
+Bajutsu caps both of those slugs at 60 bytes
+([BE-0420](../roadmaps/BE-0420-scenario-slug-length-cap/BE-0420-scenario-slug-length-cap.md)).
+The cap counts bytes in the 8-bit Unicode Transformation Format (UTF-8), not characters. A
+source-file stem keeps its Unicode letters, and the
+filesystem limit is itself a byte limit. A scenario whose file name or `name:` field runs past the
+budget still runs to completion. Its evidence directory merely keeps the recognizable lead of the
+name. `Scenario.name` stays untouched, so `manifest.json` and `report.html` carry the full name.
+Two scenarios whose slugs truncate alike stay apart by the run-order index every `sid` carries.
+
 ## manifest.json
 
 `RunResult` and its parts are all dataclasses, so `manifest_dict` drops the step / expect results

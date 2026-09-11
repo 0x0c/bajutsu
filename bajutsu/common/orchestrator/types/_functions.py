@@ -202,10 +202,32 @@ def drain_actuations(driver: base.Driver) -> Drained:
     return Drained(records=[], dropped=0)
 
 
+# The budget both evidence-dir slugs share (BE-0420). Counted in UTF-8 bytes, since
+# `sanitize_source_stem` preserves multi-byte characters and a filesystem's own limit is a byte one.
+_MAX_SLUG_BYTES = 60
+
+
+def _cap_bytes(slug: str) -> str:
+    """Cut `slug` to `_MAX_SLUG_BYTES`, dropping a character the cut would split (BE-0420).
+
+    `errors="ignore"` is what discards that partial trailing character rather than raising, so the
+    result is always valid UTF-8 and at or under the budget.
+    """
+    encoded = slug.encode("utf-8")
+    if len(encoded) <= _MAX_SLUG_BYTES:
+        return slug
+    return encoded[:_MAX_SLUG_BYTES].decode("utf-8", errors="ignore")
+
+
 def scenario_slug(name: str) -> str:
-    """A filesystem-safe id derived from a scenario name (for its evidence dir)."""
+    """A filesystem-safe id derived from a scenario name (for its evidence dir).
+
+    Capped at `_MAX_SLUG_BYTES` (BE-0420): the output is pure ASCII, so the byte slice is exactly a
+    character slice. `rstrip` drops a hyphen the cut can leave dangling; uniqueness does not rest on
+    the slug, since every `sid` carries its own run-order index prefix.
+    """
     slug = re.sub(r"[^0-9a-zA-Z]+", "-", name).strip("-").lower()
-    return slug or "scenario"
+    return _cap_bytes(slug).rstrip("-") or "scenario"
 
 
 def sanitize_source_stem(stem: str) -> str:
@@ -215,5 +237,11 @@ def sanitize_source_stem(stem: str) -> str:
     characters are ordinary in this codebase's own scenario names), so a plain stem like
     `login_flow` or `決済フロー` passes through unchanged; only a character unsafe in an unescaped
     HTML attribute / URL path segment (`#`, `?`, `/`, whitespace, …) is replaced.
+
+    Capped at `_MAX_SLUG_BYTES` (BE-0420) — a `record` session with no `--out` names its file after
+    the recording's whole natural-language goal, and every later run of that file would otherwise
+    try to create an evidence directory exactly that long. No fallback is needed for an empty
+    result: the smallest encoded character is one byte, so only an already-empty stem can produce
+    one, and `Path.stem` never yields that for a real `*.yaml` file.
     """
-    return re.sub(r"[^\w.-]", "_", stem)
+    return _cap_bytes(re.sub(r"[^\w.-]", "_", stem))

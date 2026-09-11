@@ -7,7 +7,7 @@
 |---|---|
 | 提案 | [BE-0420](BE-0420-scenario-slug-length-cap-ja.md) |
 | 提案者 | [@0x0c](https://github.com/0x0c) |
-| 状態 | **提案** |
+| 状態 | **実装済み** |
 | トラッキング Issue | [検索](https://github.com/bajutsu-e2e/bajutsu/issues?q=is%3Aissue+label%3Aroadmap-tracking+in%3Atitle+"BE-0420") |
 | トピック | コードベース品質・技術的負債 |
 | 関連 | [BE-0417](../BE-0417-scenario-result-folder-naming/BE-0417-scenario-result-folder-naming-ja.md)、[BE-0031](../BE-0031-data-driven-scenarios/BE-0031-data-driven-scenarios-ja.md) |
@@ -157,7 +157,34 @@ CSV展開後の各行が、自分自身の `key=value` というパラメータ�
 > 作業分解(作業の単位ごとに1つ)に対応し、ログには変更内容と時期(古い順)を PR へのリンクと
 > ともに記録します。
 
-- [ ] 未着手。
+- [x] 作業単位 1——`bajutsu/common/orchestrator/types/_functions.py` の `scenario_slug()` と
+  `sanitize_source_stem()` の隣に、`_MAX_SLUG_BYTES = 60` とプライベートな `_cap_bytes()`
+  ヘルパーを追加しました。文字列を UTF-8 に符号化し、上限を超えた場合だけ符号化後のバイト列を
+  上限まで切り出します。復号時に `errors="ignore"` を指定しているので、切断面にかかった文字は
+  例外を送出せずに捨てられます。
+- [x] 作業単位 2——`scenario_slug()` は、小文字化とハイフンへの畳み込みを終えた結果を
+  `_cap_bytes()` に通し、続けて `.rstrip("-")` で切断面に残りうる区切り文字を落とします。記号
+  だけの名前に対する既存の `"scenario"` フォールバックは、これまでどおり働きます。
+- [x] 作業単位 3——`sanitize_source_stem()` は、`re.sub()` の結果を `_cap_bytes()` に通します。
+  追加のフォールバックは不要です。符号化後の最小の文字が1バイトである以上、空文字列を生みうる
+  入力は、もともと空だった語幹だけだからです。
+- [x] 作業単位 4——設計どおり、呼び出し側は1箇所も変更していません。`_evidence_sid()` の2つの
+  分岐は、いずれも上限付きの2つの関数のどちらかを直接呼んでいます。素のフォールバック2箇所
+  （`loop/_functions.py:645` と `report/manifest.py:127`）も同じです。そのため、定義1箇所への
+  変更だけで上限がすべてに行き渡ります。
+- [x] 作業単位 5——`docs/reporting.md` と `docs/ja/reporting.md` の、既存の `runId` / `sid` /
+  `stepId` を説明する箇所に段落を1つ追加しました。共通の上限、文字数ではなくバイト数で数える
+  理由、そして `Scenario.name` 自体は切り詰めないことを説明しています。
+- [x] 作業単位 6——`tests/runner/test_pipeline.py` の、BE-0417 の既存のスラグのテストの隣に、
+  ユニットテストを6つ追加しました。設計が挙げた5つより1つ多いのは、区切り文字が切断面に残る
+  ケースを、長い名前のテストの2つ目のアサーションではなく独立したテストにしたためです。回帰した
+  ときに、どの性質が壊れたのかがテスト名でわかります。6つの内訳は次のとおりです。
+  - 末尾にハイフンが残らない ASCII のスラグ
+  - 切断面が区切り文字に当たるケース
+  - 上限で切り詰めた ASCII の語幹
+  - 上限が文字の内側に落ちるマルチバイトの語幹
+  - `scenario_out_name()` を経由する `record` の `--out` なしの経路
+  - 切り詰めた結果スラグが衝突しても、`{i:02d}-` の接頭辞によって `sid` が区別されること
 
 ## 参考
 

@@ -7,7 +7,7 @@
 |---|---|
 | Proposal | [BE-0420](BE-0420-scenario-slug-length-cap.md) |
 | Author | [@0x0c](https://github.com/0x0c) |
-| Status | **Proposal** |
+| Status | **Implemented** |
 | Tracking issue | [Search](https://github.com/bajutsu-e2e/bajutsu/issues?q=is%3Aissue+label%3Aroadmap-tracking+in%3Atitle+"BE-0420") |
 | Topic | Codebase quality & technical debt |
 | Related | [BE-0417](../BE-0417-scenario-result-folder-naming/BE-0417-scenario-result-folder-naming.md), [BE-0031](../BE-0031-data-driven-scenarios/BE-0031-data-driven-scenarios.md) |
@@ -152,7 +152,33 @@ completion and writes its evidence directory.
 > *Detailed design* (one box per unit of work); the log records what changed and when
 > (oldest first), linking the PRs.
 
-- [ ] Not started.
+- [x] Unit 1 — `_MAX_SLUG_BYTES = 60` and a private `_cap_bytes()` helper. Both sit beside the two
+  slug functions in `bajutsu/common/orchestrator/types/_functions.py`. The helper encodes to UTF-8.
+  It slices the encoding to the budget when the encoding runs past it. Decoding with
+  `errors="ignore"` then drops a character the cut would split, rather than raising.
+- [x] Unit 2 — `scenario_slug()` passes its lowercased result through `_cap_bytes()` last. A
+  `.rstrip("-")` follows, dropping a separator the cut can leave dangling. The existing
+  `"scenario"` fallback still covers an all-symbol name.
+- [x] Unit 3 — `sanitize_source_stem()` passes its `re.sub()` result through `_cap_bytes()` last.
+  The change needs no further fallback. The smallest encoded character is one byte. An empty stem
+  is then the sole input that could yield an empty result.
+- [x] Unit 4 — No call site changed, as designed. Both `_evidence_sid()` branches call one of the
+  two capped functions directly. The two bare fallbacks do the same, at `loop/_functions.py:645`
+  and `report/manifest.py:127`. The cap reaches every one of them from its single definition.
+- [x] Unit 5 — `docs/reporting.md` and `docs/ja/reporting.md` each gained a paragraph. It sits
+  beside the existing `runId` / `sid` / `stepId` line. The paragraph names the shared cap and why
+  the cap counts bytes rather than characters. It also records that `Scenario.name` itself stays
+  untruncated.
+- [x] Unit 6 — Six unit tests in `tests/runner/test_pipeline.py`, beside the existing BE-0417 slug
+  tests. The count is one more than the design's five. The dangling-separator case became its own
+  test, not a second assertion on the overlong-name one. A regression then names the broken
+  property. The six cases:
+  - an ASCII slug capped with no trailing hyphen;
+  - a cut landing on a separator;
+  - a capped ASCII stem;
+  - a multi-byte stem whose budget lands inside a character;
+  - the `record`-with-no-`--out` path through `scenario_out_name()`;
+  - colliding truncated slugs still drawing distinct `sid`s from the `{i:02d}-` prefix.
 
 ## References
 
