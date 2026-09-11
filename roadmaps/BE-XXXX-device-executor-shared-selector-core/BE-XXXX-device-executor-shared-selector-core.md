@@ -124,17 +124,29 @@ Selector pattern matching needs a named engine, not just a signature. `idMatches
 [`regex`](https://docs.rs/regex) crate for `labelMatches`, and reimplements `fnmatch`'s own
 translation of a shell-glob pattern into a regular expression string for `idMatches` — the same
 approach Python's `fnmatch` module itself takes internally — compiling the result with that same
-`regex` crate, so the crate carries exactly one pattern engine rather than two. `regex` rejects
-several constructs Python's `re` accepts: lookaround (`(?=…)`, `(?!…)`), backreferences, the `\Z`
-end-of-string anchor (`regex` offers only `\z`), atomic groups and possessive quantifiers, and
-conditional patterns (`(?(id)yes|no)`). A `labelMatches` pattern using any of them compiles on the
-host and fails to compile in the crate — the
-same host/device disagreement this item exists to remove, relocated rather than closed. The crate
-therefore treats a pattern it cannot compile as a distinct, loud failure at first use — folded into
-the shared error enum below — rather than a silent non-match a caller cannot tell apart from "the
-element isn't there." A case added to the fixture corpus (see Verification) pins one such pattern, so a
-future change to either engine
-that reopens the gap fails the suite instead of surfacing as a flaky scenario.
+`regex` crate, so the crate carries exactly one pattern engine rather than two. That translation
+alone is not enough: `fnmatch.translate` emits an end anchor of `\Z`, which `regex` does not
+recognize (it offers only `\z`), and `fnmatchcase` gets its start anchor from calling `re.match`,
+not from the pattern itself, while `regex`'s own match call is unanchored. The crate's `idMatches`
+therefore rewrites the translated pattern's `\Z` to `\z` and wraps the whole thing in `^(?:…)\z`
+before compiling, reproducing [`docs/selectors.md`](../../docs/selectors.md)'s own instruction that
+a port must reproduce Python's anchoring for each field rather than inherit the port language's own
+default — fully anchored for `idMatches`, unanchored for `labelMatches`.
+
+`labelMatches` carries its own gap `idMatches` does not: `regex` rejects several constructs Python's
+`re` accepts — lookaround (`(?=…)`, `(?!…)`), backreferences, the `\Z` end-of-string anchor, atomic
+groups and possessive quantifiers, and conditional patterns (`(?(id)yes|no)`) — and a pattern using
+any of them compiles on the host and fails to compile in the crate, the same host/device
+disagreement this item exists to remove, relocated rather than closed. A bare `$` is worse than a
+rejection, because it compiles in both engines and means something different in each: Python's `$`
+(without `MULTILINE`) also matches just before a trailing newline, while `regex`'s `$` matches only
+at the true end of the haystack. `regex` has no lookahead to express Python's version, so the crate
+rejects `$` outright rather than let it compile into a quietly different match. The crate treats
+every construct in this paragraph as a distinct, loud failure at first use — folded into the shared
+error enum below — rather than a silent non-match a caller cannot tell apart from "the element
+isn't there." A case added to the fixture corpus (see Verification) pins one such pattern, so a
+future change to either engine that reopens the gap fails the suite instead of surfacing as a flaky
+scenario.
 
 `gesture_anchor` is equally pure, but it stays out of this item's scope. BE-0408 moves `tap`, `type`,
 `swipe`, and `scroll` to the device — not the two-finger `pinch` / `rotate` gestures `gesture_anchor`
@@ -195,8 +207,16 @@ failing on the host does today.
 
 `_collapse_identical_duplicates` ports with no added parameter: the crate's version compares frames
 for exact equality, exactly like the host's, with no tolerance. `docs/selectors.md`'s porting
-contract states why this must stay that way, in a section titled *Two divergences a port must keep,
-not close*.
+contract carries a second rule for this function beyond the tolerance, in its *The duplicate-collapse
+key* section: the collapse keeps the *first* candidate carrying a given key, in `find_all`'s own
+document order, and a plain hash map has no defined iteration order to preserve that with — the
+contract names Swift's `Dictionary` as the concrete trap. Rust's `std::collections::HashMap` is the
+same trap, and a sharper one: its default hasher reseeds per process, so iteration order can vary
+between runs of the same binary, not only between platforms. The crate's port therefore uses an
+insertion-ordered map (such as the `indexmap` crate's `IndexMap`) for the collapse, keyed the same
+way the host's `seen` dict already is, rather than `HashMap`. `docs/selectors.md`'s porting
+contract states why the tolerance itself must stay divergent, in a section titled *Two divergences a
+port must keep, not close*.
 [`PositionPath.swift`](../../BajutsuKit/Sources/BajutsuRunner/PositionPath.swift)'s
 `resolvableMatchingIndex` and `attributesMatch` already diverge from this module on purpose: a point
 of slack on each frame value, and an ordered-array trait comparison rather than a set. Both exist
@@ -221,28 +241,44 @@ a single string with no further processing, and BE-0408's nine
 [`android_derived_label.json`](../../tests/fixtures/be0408/android_derived_label.json) cases already
 cover it, so the residual risk is far smaller than porting the whole matching path independently was.
 
-**iOS: `BajutsuRunner`.** [`BajutsuKit/Package.swift`](../../BajutsuKit/Package.swift) already builds
-`BajutsuRunner` with a Swift Package Manager build plugin, `OpenAPIGenerator`, that generates Swift
-source at build time, on every host that builds the package. A `uniffi-bindgen`-generated Swift file
-is a second generated-source path alongside that one, differing in one respect: its native half is a
-prebuilt `.xcframework` artifact, not something the plugin compiles fresh each time. `cargo build`
+**iOS: `BajutsuRunner`.** The package manifest is the repo-root
+[`Package.swift`](../../Package.swift), not a file under `BajutsuKit/`: it has to sit at the clone
+root for SwiftPM's git-based resolution, with every target's own `path:` pointing back into
+`BajutsuKit/Sources/`. It already builds `BajutsuRunner` with a Swift Package Manager build plugin,
+`OpenAPIGenerator`, that generates Swift source at build time, on every host that builds the
+package. A `uniffi-bindgen`-generated Swift file is a second generated-source path alongside that
+one, differing in one respect: its native half is a prebuilt `.xcframework` artifact, not something
+the plugin compiles fresh each time. `cargo build`
 targets `aarch64-apple-ios-sim` and `x86_64-apple-ios` for the Simulator, `aarch64-apple-ios` for
 [BE-0238](../BE-0238-ios-device-cloud-execution/BE-0238-ios-device-cloud-execution.md)'s real-device
 targeting, and `aarch64-apple-darwin` so [`swift.yml`](../../.github/workflows/swift.yml)'s plain
-Apple Silicon macOS runner — no Simulator, `swift build --package-path BajutsuKit` and `swift test
---package-path BajutsuKit` — keeps building and testing `BajutsuRunner` the way it does today. No
+Apple Silicon macOS runner — no Simulator, `swift build --package-path .` and `swift test
+--package-path .` — keeps building and testing the package the way it does today. No
 `x86_64-apple-darwin` slice is built, which narrows one host set: an Intel Mac keeps the Simulator
 slice it needs to run a scenario, but no longer builds or unit-tests the package natively, the way
 it does today. This item accepts that narrowing, since `swift.yml` already runs Apple Silicon only.
-`uniffi-bindgen` emits the Swift bindings and merges the four `cargo build` outputs into an
-`.xcframework` with three platform slices (the two Simulator triples merge into one universal
-Simulator slice), added to
-`Package.swift` as a binary target `BajutsuRunner` depends on. `BajutsuRunner` is bajutsu's own
+`uniffi-bindgen` emits the Swift bindings, a header, and a modulemap — nothing that merges
+`.xcframework` slices. `lipo` (for the universal Simulator slice) and `xcodebuild
+-create-xcframework` do that, merging the four `cargo build` outputs into an `.xcframework` with
+three platform slices, added to
+`Package.swift` as a binary target `BajutsuRunner` depends on.
+
+That one manifest is also the reason this binary target is not free: `Package.swift` publishes
+`BajutsuKit` and `BajutsuRunner` as two products from one target graph, the same graph an app
+depending on the `BajutsuKit` product alone still resolves. Unlike a build-time plugin, a binary
+target is something SwiftPM's resolver has to locate and validate for the whole manifest, not only
+for the product a consumer actually links — so an app that never touches `BajutsuRunner` may still
+pay a resolve-time cost for an artifact it never uses. That cuts against this item's own goal of
+keeping `BajutsuKit`, the in-app library, free of this build step, the same way BE-0405 keeps
+`IdentifierTool` free of `BajutsuAndroid`'s dependencies. Whether that cost is acceptable as is, or
+whether `BajutsuRunner` needs its own manifest to isolate it, is an open question this item leaves
+for implementation to settle — Progress names it rather than deciding it here.
+
+`BajutsuRunner` is bajutsu's own
 bundled test runner. It reaches a developer's machine pre-built, through
 [BE-0292](../BE-0292-xcuitest-bundled-runner/BE-0292-xcuitest-bundled-runner.md)'s content-hash-keyed
 cache — never compiled inside a consuming project's own build. This build step runs inside
-bajutsu's own release pipeline, never inside an app under test's build: the same boundary that
-already keeps `BajutsuKit`, the in-app library target, free of it.
+bajutsu's own release pipeline, never inside an app under test's build.
 
 **Android: `BajutsuAndroidUIAutomatorServer`.**
 [`BajutsuAndroidUIAutomatorServer/server/build.gradle.kts`](../../BajutsuAndroidUIAutomatorServer/server/build.gradle.kts)
@@ -334,16 +370,22 @@ whether the shared logic itself carries the defect.
   mirrored as UniFFI records and the three selector errors plus `UnsupportedPattern` as one UniFFI
   error enum.
 - [ ] Implement `idMatches` and `labelMatches` matching on top of the [`regex`](https://docs.rs/regex)
-  crate alone: reimplement `fnmatch`'s glob-to-regex translation for `idMatches`, compile
-  `labelMatches` directly, and return `UnsupportedPattern` for a pattern `regex` cannot compile.
+  crate alone. For `idMatches`, reimplement `fnmatch`'s glob-to-regex translation, rewrite its `\Z`
+  to `\z`, and wrap the result in `^(?:…)\z` before compiling, reproducing Python's start anchoring
+  from `re.match` as well as its end anchoring. For `labelMatches`, compile the pattern unanchored,
+  and reject `$` outright alongside lookaround, backreferences, `\Z`, atomic groups, possessive
+  quantifiers, and conditional patterns — returning `UnsupportedPattern` for any of them, since
+  `regex` cannot reproduce Python's optional-trailing-newline `$` without lookahead.
 - [ ] Port the nine selector and geometry functions from
   [`bajutsu/common/drivers/base/_functions.py`](../../bajutsu/common/drivers/base/_functions.py),
   changing `find_all` and `redirect_candidates` to return `Vec<u32>`, `resolve_unique` a `u32`
   (indices into the caller's `elements`) in place of elements, and `topmost_at_point` /
   `redirect_candidates` / `raise_if_covered` to take a `target_index: u32` in place of an `Element`.
   Port `_collapse_identical_duplicates` with no added parameter, comparing frames for exact equality
-  exactly like the host — `docs/selectors.md`'s porting contract keeps this divergent from
-  `resolvableMatchingIndex` on purpose, so no step here should unify the two:
+  exactly like the host, and keyed with an insertion-ordered map (such as `indexmap::IndexMap`)
+  rather than `std::collections::HashMap`, whose iteration order is not just platform-dependent but
+  reseeded per process. `docs/selectors.md`'s porting contract keeps the frame-tolerance divergence
+  from `resolvableMatchingIndex` on purpose, so no step here should unify the two:
   - `matches`
   - `find_all`
   - `resolve_unique`
@@ -365,9 +407,13 @@ whether the shared logic itself carries the defect.
   writes the matched indices, or the error variant and its structured detail, on standard output.
   Extend `test_selector_fixtures.py` with a second replay path that runs the existing corpus through
   this binary, alongside the path that already runs it through Python.
-- [ ] Wire `cargo` and `uniffi-bindgen` into the `BajutsuKit` Swift Package build, producing an
-  `.xcframework` (three platform slices merged from four `cargo build` targets: Simulator, device,
-  and macOS) binary target `BajutsuRunner` links against.
+- [ ] Wire `cargo`, `uniffi-bindgen`, `lipo`, and `xcodebuild -create-xcframework` into the
+  `BajutsuKit` Swift Package build, producing an `.xcframework` (three platform slices merged from
+  four `cargo build` targets: Simulator, device, and macOS) binary target `BajutsuRunner` links
+  against. Decide, before adding the target, whether the repo-root `Package.swift`'s single target
+  graph makes that binary target part of what an app depending on the `BajutsuKit` product alone
+  resolves — and, if so, whether to accept that cost or give `BajutsuRunner` its own manifest to
+  isolate it, the same way BE-0405 isolates `IdentifierTool` from `BajutsuAndroid`.
 - [ ] Wire `cargo-ndk` and `uniffi-bindgen` into `BajutsuAndroidUIAutomatorServer`'s Gradle build,
   producing the Kotlin bindings and `arm64-v8a` / `x86_64` `jniLibs` its executor links against.
 - [ ] Add a Rust CI lane (`cargo test`, `cargo fmt --check`, `clippy`) for `rust/selector-core/`, and

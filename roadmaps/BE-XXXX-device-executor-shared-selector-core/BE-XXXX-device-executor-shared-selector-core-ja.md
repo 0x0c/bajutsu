@@ -123,16 +123,27 @@ Pythonの`fnmatch.fnmatchcase`を、`labelMatches`は`re.compile(...).search`を
 `labelMatches`に[`regex`](https://docs.rs/regex)クレートを使い、`idMatches`には`fnmatch`自身が内部で
 行っているのと同じアプローチ、つまりシェルのglobパターンを正規表現文字列へ翻訳する処理を移植したうえで、
 同じ`regex`クレートでコンパイルします。こうすることで、クレートが抱えるパターンエンジンをちょうど1つに
-絞れます。`regex`は、Pythonの`re`が受け付ける複数の構文を拒否します。先読み・後読み
-（`(?=…)`、`(?!…)`）、後方参照、文字列終端アンカー`\Z`（`regex`が持つのは`\z`だけです）、原子グループと
-所有量指定子、そして条件付きパターン（`(?(id)yes|no)`）です。これらのいずれかを使った`labelMatches`の
-パターンは、ホストではコンパイルできますが、クレートではコンパイルできません。これは、本項目がなく
-そうとしているホストと端末の食い違いが、なくなったのではなく場所を移しただけということです。そのため
-クレートは、コンパイルできないパターンを、呼び出し元が「要素が存在しない」場合と区別できない静かな
-不一致にせず、初回使用時の明確で大きな失敗として扱います。この失敗は次節のエラー列挙型に組み込みます。
-フィクスチャ一式に追加する1件のケース（検証の節を参照）がそのようなパターンを固定しておけば、どちらか
-のエンジンへの将来の変更がこのギャップを再び開いたとき、不安定なシナリオとして表面化する前にスイート
-で検出できます。
+絞れます。この翻訳だけでは足りません。`fnmatch.translate`が出す終端アンカーは`\Z`ですが、`regex`は
+これを認識しません（`regex`が持つのは`\z`だけです）。さらに`fnmatchcase`の先頭アンカーはパターン自体
+ではなく`re.match`の呼び出しから来ており、`regex`側の照合はアンカーなしです。そのためクレートの
+`idMatches`は、翻訳済みパターンの`\Z`を`\z`へ書き換え、コンパイル前に全体を`^(?:…)\z`で包みます。
+これは[`docs/selectors.md`](../../docs/selectors.md)自身の指示、つまりポートは各フィールドについて
+ポート先言語自体の既定のアンカリングではなくPythonのアンカリングを再現しなければならない（`idMatches`
+は完全アンカー、`labelMatches`はアンカーなし）という指示を再現したものです。
+
+`labelMatches`には、`idMatches`にはない独自のギャップがあります。`regex`は、Pythonの`re`が受け付ける
+複数の構文を拒否します。先読み・後読み（`(?=…)`、`(?!…)`）、後方参照、文字列終端アンカー`\Z`、原子
+グループと所有量指定子、そして条件付きパターン（`(?(id)yes|no)`）です。これらのいずれかを使った
+`labelMatches`のパターンは、ホストではコンパイルできますが、クレートではコンパイルできません。これは、
+本項目がなくそうとしているホストと端末の食い違いが、なくなったのではなく場所を移しただけということ
+です。単なる`$`は、拒否されるより厄介です。両方のエンジンでコンパイルできてしまい、しかも意味が違う
+からです。Pythonの`$`（`MULTILINE`なし）は文字列末尾の直前の改行1つの手前にも一致しますが、`regex`の
+`$`は文字列の真の末尾にしか一致しません。`regex`には先読みがなくPythonの挙動を表現できないため、
+クレートは`$`を静かに違う一致へコンパイルさせるのではなく、そのまま拒否します。クレートは、この節の
+どの構文についても、呼び出し元が「要素が存在しない」場合と区別できない静かな不一致にせず、初回使用時の
+明確で大きな失敗として扱います。この失敗は次節のエラー列挙型に組み込みます。フィクスチャ一式に追加する
+1件のケース（検証の節を参照）がそのようなパターンを固定しておけば、どちらかのエンジンへの将来の変更が
+このギャップを再び開いたとき、不安定なシナリオとして表面化する前にスイートで検出できます。
 
 `gesture_anchor`も同じく純粋ですが、本項目の範囲外です。BE-0408が端末へ移すのは`tap`、`type`、`swipe`、
 `scroll`であり、`gesture_anchor`が支点を計算する2本指の`pinch`／`rotate`ではありません。この関数を今
@@ -192,8 +203,16 @@ PythonのコードとJavaScript object notation（JSON）のワイヤフォー�
 見え方になります。
 
 `_collapse_identical_duplicates`は引数を追加せずに移植します。クレート側の実装も、ホスト側とまったく
-同じように、許容差なしでフレームの完全一致を比較します。`docs/selectors.md`の移植契約は、これを
-そのまま保つべき理由を、「守るべきであり閉じてはならない2つの相違」という節で述べています。
+同じように、許容差なしでフレームの完全一致を比較します。`docs/selectors.md`の移植契約は、この関数に
+ついてもう1つ、許容差とは別の規則を「重複排除のキー」という節に持っています。この排除は、
+`find_all`自身の出現順で、あるキーを最初に持った候補を残すというものであり、単純なハッシュマップには
+それを保つための決まった反復順序がないため、契約自身がSwiftの`Dictionary`を具体的な落とし穴として
+名指ししています。Rustの`std::collections::HashMap`は同じ落とし穴であり、しかもさらに厄介です。
+既定のハッシャーはプロセスごとに再シードされるため、反復順序はプラットフォーム間だけでなく、同じ
+バイナリの実行のあいだでも変わりえます。そのためクレート側の移植では、この排除に`HashMap`ではなく
+挿入順を保つマップ（`indexmap`クレートの`IndexMap`など）を使い、ホスト側の`seen`辞書と同じキーで
+持たせます。`docs/selectors.md`の移植契約は、許容差そのものを分岐させたまま保つべき理由を、「守るべき
+であり閉じてはならない2つの相違」という節で述べています。
 [`PositionPath.swift`](../../BajutsuKit/Sources/BajutsuRunner/PositionPath.swift)の
 `resolvableMatchingIndex`と`attributesMatch`は、すでに意図的にこのモジュールから外れています。
 フレームの各値に1ポイントの許容差を認める点と、traitを集合ではなく順序ありの配列として比較する点です。
@@ -219,29 +238,46 @@ Kotlin側呼び出し元でも同じです。共有クレート側にAndroid固�
 これをカバーしています。この残存リスクは、照合パス全体を独立に移植していた場合よりはるかに小さく
 済みます。
 
-**iOS: `BajutsuRunner`。** [`BajutsuKit/Package.swift`](../../BajutsuKit/Package.swift)は、すでに
-Swift Package Managerのビルドプラグイン`OpenAPIGenerator`を使い、`BajutsuRunner`のソースをビルド
-するたびに、どのホストでも生成しています。`uniffi-bindgen`が生成するSwiftファイルは、これとは別の
-もう1つのソース生成経路です。違いは1点です。ネイティブ側の実体が、プラグインの都度コンパイルではなく、
-あらかじめビルド済みの`.xcframework`成果物である点です。`cargo build`の対象は、Simulator向けの
+**iOS: `BajutsuRunner`。** パッケージマニフェストは、リポジトリのルートにある
+[`Package.swift`](../../Package.swift)であり、`BajutsuKit/`配下のファイルではありません。SwiftPMの
+git連携解決の都合でクローンのルートに置く必要があり、各ターゲット自身の`path:`が`BajutsuKit/Sources/`
+配下を指し戻す形になっています。このマニフェストはすでに、Swift Package Managerのビルドプラグイン
+`OpenAPIGenerator`を使い、`BajutsuRunner`のソースをビルドするたびに、どのホストでも生成しています。
+`uniffi-bindgen`が生成するSwiftファイルは、これとは別のもう1つのソース生成経路です。違いは1点です。
+ネイティブ側の実体が、プラグインの都度コンパイルではなく、あらかじめビルド済みの`.xcframework`成果物
+である点です。`cargo build`の対象は、Simulator向けの
 `aarch64-apple-ios-sim`と`x86_64-apple-ios`、[BE-0238](../BE-0238-ios-device-cloud-execution/BE-0238-ios-device-cloud-execution-ja.md)
 の実機対応向けの`aarch64-apple-ios`、そして
 [`swift.yml`](../../.github/workflows/swift.yml)のSimulatorを使わない素のApple Silicon macOSランナー
-（`swift build --package-path BajutsuKit`と`swift test --package-path BajutsuKit`）が今日どおりビルド・
+（`swift build --package-path .`と`swift test --package-path .`）が今日どおりこのパッケージのビルド・
 テストを続けられるようにする`aarch64-apple-darwin`です。`x86_64-apple-darwin`のスライスはビルドしません。
 これは対応ホストの範囲を1つ狭めます。Intel Macは、シナリオの実行に必要なSimulatorスライスこそ持ち
 続けますが、今日のようにパッケージをネイティブにビルド・ユニットテストできなくなります。
 `swift.yml`がすでにApple Siliconだけで動いているため、本項目はこの狭まりを受け入れます。
-`uniffi-bindgen`は、Swiftバインディングと、
-この4つの`cargo build`成果物を統合した`.xcframework`（2つのSimulatorターゲットは1つのユニバーサル
-スライスへまとまるため、実質3系統のプラットフォームスライス）を生成します。それを`Package.swift`に
-バイナリターゲットとして追加し、
-`BajutsuRunner`はそれに依存します。`BajutsuRunner`は、bajutsu自身が同梱するテストランナーです。
+`uniffi-bindgen`が生成するのはSwiftバインディング、ヘッダー、モジュールマップだけであり、
+`.xcframework`のスライスを統合する機能は持ちません。それを行うのは`lipo`（ユニバーサルSimulator
+スライス用）と`xcodebuild -create-xcframework`です。これらが、4つの`cargo build`成果物を統合した
+`.xcframework`（2つのSimulatorターゲットは1つのユニバーサルスライスへまとまるため、実質3系統の
+プラットフォームスライス）を作り、それを`Package.swift`にバイナリターゲットとして追加し、
+`BajutsuRunner`はそれに依存します。
+
+このマニフェストが1つしかないことは、このバイナリターゲットが無償ではない理由でもあります。
+`Package.swift`は`BajutsuKit`と`BajutsuRunner`という2つのプロダクトを、1つのターゲットグラフから
+公開しています。同じグラフを、`BajutsuKit`プロダクトだけに依存するアプリも解決します。ビルド時
+プラグインと違い、バイナリターゲットはSwiftPMのリゾルバがマニフェスト全体に対して所在確認・検証を
+行う対象であり、消費者が実際にリンクするプロダクトだけに絞られません。そのため、`BajutsuRunner`に
+一切触れないアプリでも、使いもしない成果物の解決時コストを支払う可能性があります。これは、
+「`BajutsuKit`というアプリ組み込みライブラリをこのビルド手順から自由に保つ」という本項目自身の狙いに
+逆行します。BE-0405が`IdentifierTool`を`BajutsuAndroid`の依存から切り離しているのと同じ意味です。
+このコストをそのまま受け入れるか、`BajutsuRunner`を切り離すための独自のマニフェストを持たせるかは、
+本項目がここで決め切らず実装に委ねる、開かれた論点です。進捗の節はこれを決定としてではなく、
+論点として名指しします。
+
+`BajutsuRunner`は、bajutsu自身が同梱するテストランナーです。
 [BE-0292](../BE-0292-xcuitest-bundled-runner/BE-0292-xcuitest-bundled-runner-ja.md)のコンテンツハッシュ
 方式のキャッシュを通じて、開発者の手元にはビルド済みの状態で届きます。利用側プロジェクトのビルド内で
 コンパイルされることはありません。したがって、このビルド手順が走るのはbajutsu自身のリリースパイプライン
-の中だけです。テスト対象アプリ自身のビルドの中では走りません。これは、アプリ組み込みライブラリのター
-ゲットである`BajutsuKit`を、この手順から自由に保っているのと同じ境界です。
+の中だけです。テスト対象アプリ自身のビルドの中では走りません。
 
 **Android: `BajutsuAndroidUIAutomatorServer`。**
 [`BajutsuAndroidUIAutomatorServer/server/build.gradle.kts`](../../BajutsuAndroidUIAutomatorServer/server/build.gradle.kts)
@@ -333,16 +369,22 @@ wheelと常駐サーバのどちらにも同梱しません）が、同じJSON�
   として、3つのセレクタ関連エラーと`UnsupportedPattern`を合わせて1つのUniFFIエラー列挙型として、
   それぞれ用意します。
 - [ ] `idMatches`と`labelMatches`の照合を、[`regex`](https://docs.rs/regex)クレート1本の上に実装します。
-  `idMatches`には`fnmatch`自身のglob→正規表現変換ロジックを移植し、`labelMatches`は直接コンパイルし、
-  `regex`がコンパイルできないパターンには`UnsupportedPattern`を返します。
+  `idMatches`には`fnmatch`自身のglob→正規表現変換ロジックを移植し、その`\Z`を`\z`へ書き換えたうえで、
+  コンパイル前に全体を`^(?:…)\z`で包みます（Pythonの`re.match`が担う先頭アンカーも再現するため）。
+  `labelMatches`はアンカーなしでコンパイルし、先読み・後読み、後方参照、`\Z`、原子グループ、所有量
+  指定子、条件付きパターンに加えて`$`も拒否し、`regex`がコンパイルできないこれらのパターンには
+  `UnsupportedPattern`を返します（`regex`には先読みがなく、Pythonの`$`が持つ「末尾直前の改行を許容
+  する」挙動を再現できないためです）。
 - [ ] [`bajutsu/common/drivers/base/_functions.py`](../../bajutsu/common/drivers/base/_functions.py)から、
   9つのセレクタ・幾何関数を移植します。`find_all`と`redirect_candidates`は`Vec<u32>`を、
   `resolve_unique`は`u32`を（いずれも呼び出し元の`elements`へのインデックス）返し、
   `topmost_at_point`・`redirect_candidates`・`raise_if_covered`は`Element`の代わりに
   `target_index: u32`を受け取るよう変更します。`_collapse_identical_duplicates`は引数を追加せず、
-  ホスト側とまったく同じフレームの完全一致で移植します。`docs/selectors.md`の移植契約は、これを
-  `resolvableMatchingIndex`から意図的に切り離しておくためのものなので、ここでの手順が両者を1つに
-  まとめようとしてはなりません。
+  ホスト側とまったく同じフレームの完全一致で移植し、排除のキー付けには`std::collections::HashMap`
+  ではなく挿入順を保つマップ（`indexmap::IndexMap`など）を使います。`HashMap`の反復順序はプラット
+  フォーム依存であるだけでなく、プロセスごとに再シードされるためです。`docs/selectors.md`の移植契約は、
+  フレーム許容差の相違を`resolvableMatchingIndex`から意図的に切り離しておくためのものなので、ここでの
+  手順が両者を1つにまとめようとしてはなりません。
   - `matches`
   - `find_all`
   - `resolve_unique`
@@ -363,9 +405,14 @@ wheelと常駐サーバのどちらにも同梱しません）が、同じJSON�
   したインデックス、またはエラーのバリアントとその構造化された詳細を標準出力へ書く、CLI形式の適合
   ランナーバイナリを構築します。`test_selector_fixtures.py`に、既存のフィクスチャ一式をこのバイナリ
   経由で走らせる2つ目の照合経路を、Python経由の経路と並べて追加します。
-- [ ] `cargo`と`uniffi-bindgen`を`BajutsuKit`のSwift Packageビルドに組み込みます。`BajutsuRunner`が
-  リンクする`.xcframework`（Simulator、実機、macOS向けの4つの`cargo build`成果物を統合した、実質3系統
-  のプラットフォームスライス）バイナリターゲットを生成します。
+- [ ] `cargo`、`uniffi-bindgen`、`lipo`、`xcodebuild -create-xcframework`を`BajutsuKit`のSwift Package
+  ビルドに組み込みます。`BajutsuRunner`がリンクする`.xcframework`（Simulator、実機、macOS向けの4つの
+  `cargo build`成果物を統合した、実質3系統のプラットフォームスライス）バイナリターゲットを生成します。
+  このバイナリターゲットを追加する前に、リポジトリのルートにある`Package.swift`が1つのターゲットグラフ
+  しか持たないことにより、`BajutsuKit`プロダクトだけに依存するアプリもこのターゲットを解決してしまうか
+  どうかを確認し、確認できたなら、そのコストを受け入れるか、BE-0405が`IdentifierTool`を
+  `BajutsuAndroid`から切り離しているのと同じように、`BajutsuRunner`へ独自のマニフェストを持たせて
+  切り離すかを決めます。
 - [ ] `cargo-ndk`と`uniffi-bindgen`を`BajutsuAndroidUIAutomatorServer`のGradleビルドに組み込みます。
   実行エンジンがリンクする、Kotlinバインディングと`arm64-v8a`／`x86_64`向け`jniLibs`を生成します。
 - [ ] `rust/selector-core/`向けにRustのCIレーン（`cargo test`、`cargo fmt --check`、`clippy`）を追加し、
