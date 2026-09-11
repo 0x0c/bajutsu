@@ -96,22 +96,31 @@ def _resolve_alert_rule(
 
 
 def _leftover_after_answered(
-    buttons: Sequence[str], dismissed: frozenset[frozenset[str]]
+    buttons: Sequence[str], answered_reads: frozenset[frozenset[str]]
 ) -> list[str]:
     """The buttons an `already_dismissed` or `"unhandled"` round has not already accounted for.
 
-    Subtracted with multiplicity, not as a set: `answered = {label for labels in dismissed for
-    label in labels}` followed by `[b for b in buttons if b not in answered]` would treat one
-    already-answered shape as consuming *every* occurrence of its labels at once, so a second,
+    `answered_reads` is not the dismissed shapes' own `identifying_labels` — a matched rule's shape
+    is deliberately allowed to name only *some* of its alert's buttons (`ResolvedAlertRule`'s own
+    docstring: "not a demand that the shape's labels be the alert's whole button set"), so a rule
+    naming two of a real three-button alert's labels would leave the third stranded here, reported
+    as if a second, different, unhandled alert had joined the one already dismissed (review
+    finding). Each entry is instead the *whole* `buttons` a "dismissed" round actually read at the
+    moment it tapped that shape — the full alert's own button set as best this call ever observed
+    it, including whatever the matched rule itself did not bother to name.
+
+    Subtracted with multiplicity, not as a set: `answered = {label for read in answered_reads for
+    label in read}` followed by `[b for b in buttons if b not in answered]` would treat one
+    already-answered read as consuming *every* occurrence of its labels at once, so a second,
     genuinely live alert rendering the identical label pair — two permission prompts both offering
     "Allow" / "Don't Allow", say — would vanish from `leftover` along with the one already
     answered. Removing one occurrence per already-answered label instead leaves that second
-    alert's own copy behind to name, while two already-answered shapes sharing a label (BE-0418's
+    alert's own copy behind to name, while two already-answered reads sharing a label (BE-0418's
     own `notifications` / `tracking` pair, both granting "Allow") still cancel out to nothing.
     """
     leftover = list(buttons)
-    for shape in dismissed:
-        for label in shape:
+    for read in answered_reads:
+        for label in read:
             if label in leftover:
                 leftover.remove(label)
     return leftover
@@ -475,6 +484,12 @@ class AlertGuardConfig:
         stuck_tree_label: str | None = None
         dismissed_native: frozenset[frozenset[str]] = frozenset()
         dismissed_tree_shapes: frozenset[frozenset[str]] = frozenset()
+        # The whole `buttons` read a "dismissed" round actually made, one entry per fresh native
+        # tap — not `dismissed_native`'s own `identifying_labels`, which a rule may declare as only
+        # part of its alert's real button set (BE-0418 review finding). `_leftover_after_answered`
+        # needs the alert's whole observed shape to avoid mistaking its own unlisted buttons for a
+        # second, different, unhandled alert.
+        native_answered_reads: frozenset[frozenset[str]] = frozenset()
         # The shape and tap label of the native rule most recently tapped fresh, for
         # `_bound_exhaustion_note` to check against the final round's own read (BE-0418 review
         # finding) — the label is carried alongside the shape so that check can name it without a
@@ -502,6 +517,9 @@ class AlertGuardConfig:
                 rule = _resolve_alert_rule(self.native_rules, buttons, dismissed_native)
                 assert rule is not None  # the round that just dismissed this alert matched it
                 dismissed_native |= {rule.identifying_labels}
+                # The whole read, not just `rule.identifying_labels` — see `native_answered_reads`
+                # above and `_leftover_after_answered`'s own docstring for why (review finding).
+                native_answered_reads |= {frozenset(buttons)}
                 # A fresh tap, of any shape, is what `_bound_exhaustion_note` checks on the final
                 # round: whatever an earlier shape's own fade was doing says nothing about this one.
                 native_dismiss_shape = rule.identifying_labels
@@ -540,7 +558,7 @@ class AlertGuardConfig:
                     # declining the same rule never does, so it must check this itself. A leftover
                     # takes precedence over the exhaustion note: something else is demonstrably
                     # still up regardless of whether this round's own tap ever landed.
-                    leftover = _leftover_after_answered(buttons, dismissed_native)
+                    leftover = _leftover_after_answered(buttons, native_answered_reads)
                     note = alert_block_note(leftover) if leftover else exhaustion_note
                 settle()
                 continue
@@ -627,10 +645,22 @@ class AlertGuardConfig:
                 # uniqueness check for either and lands here rather than in `already_dismissed`.
                 # Filtering the already-answered labels out of the note (the same computation
                 # `already_dismissed` above makes) keeps the note from re-naming an alert this call
-                # already cleared.
+                # already cleared. A read that leaves nothing over still falls back to
+                # `_bound_exhaustion_note`, exactly like `already_dismissed` above: "unhandled" here
+                # is not only "no rule identifies this at all" — a per-label uniqueness collision on
+                # a read that *does* hold the tapped shape lands here too (the flagship pair just
+                # above is exactly that), and which of the two branches a torn-down alert's read
+                # lands in from one round to the next is not something the caller controls, so the
+                # diagnosis must not depend on it (review finding).
                 if stuck_tree_label is None:
-                    leftover = _leftover_after_answered(buttons, dismissed_native)
-                    note = alert_block_note(leftover) if leftover else ""
+                    exhaustion_note = _bound_exhaustion_note(
+                        dismiss_shape=native_dismiss_shape,
+                        dismiss_label=native_dismiss_label,
+                        buttons=buttons,
+                        round_index=round_index,
+                    )
+                    leftover = _leftover_after_answered(buttons, native_answered_reads)
+                    note = alert_block_note(leftover) if leftover else exhaustion_note
                 if not dismissed_native and not any(
                     rule.identifying_labels <= set(buttons) for rule in self.native_rules
                 ):

@@ -1936,6 +1936,71 @@ def test_the_end_of_step_guard_reports_a_native_alert_uncleared_past_an_interven
     assert guard.blocked_note == uncleared_prompt_note("Allow")
 
 
+def test_the_end_of_step_guard_reports_an_unhandled_native_alert_uncleared_at_the_bound() -> None:
+    # The "unhandled" branch must fall back to `_bound_exhaustion_note` exactly like its
+    # "already_dismissed" twin, not clear the note whenever `leftover` happens to be empty (review
+    # finding): "unhandled" is not only "no rule identifies this at all" -- a per-label uniqueness
+    # collision on a read that *does* fully cover every already-dismissed shape lands here too, and
+    # which of the two branches a torn-down alert's read falls into from one round to the next is
+    # not something the caller controls, so the diagnosis must not depend on it. Both notifications
+    # and tracking get cleanly dismissed at different rounds, then both fades collide on the final
+    # round: `leftover` comes back empty (every button is one of the two dismissed reads' own), but
+    # tracking's own shape -- the more recently tapped one -- is still fully present, and that must
+    # still be named rather than silently dropped.
+    notifications = ResolvedAlertRule(
+        identifying_labels=frozenset({"Allow", "Don't Allow"}), tap_label="Allow"
+    )
+    tracking = ResolvedAlertRule(
+        identifying_labels=frozenset({"Allow", "Ask App Not to Track"}), tap_label="Allow"
+    )
+    driver = _fake_with_alert(["Allow", "Don't Allow"])
+    settle_count = 0
+
+    def settle() -> None:
+        nonlocal settle_count
+        settle_count += 1
+        if settle_count == 1:
+            # Round 0's notifications fade is fully gone, so tracking's own alert dismisses cleanly.
+            driver.system_alert_buttons = [_button("Allow"), _button("Ask App Not to Track")]
+        elif settle_count == 2:
+            # Both fades now linger together, colliding on "Allow" -- neither dismissed shape reads
+            # uniquely, but each one's own labels are still fully accounted for between the two.
+            driver.system_alert_buttons = [
+                _button("Allow"),
+                _button("Don't Allow"),
+                _button("Allow"),
+                _button("Ask App Not to Track"),
+            ]
+
+    guard = AlertGuardConfig(rules=[notifications, tracking])
+    alerts: list[AlertEvent] = []
+    cleared = guard(driver, alerts, settle=settle)
+    assert cleared and alerts == [AlertEvent(label="Allow"), AlertEvent(label="Allow")]
+    assert guard.blocked_note == uncleared_prompt_note("Allow")
+
+
+def test_the_end_of_step_guard_does_not_report_a_dismissed_alerts_own_extra_button() -> None:
+    # `_leftover_after_answered` must subtract the *whole* read a dismissing round actually made,
+    # not just the matched rule's own `identifying_labels` -- a rule is deliberately allowed to name
+    # only some of its alert's buttons (`ResolvedAlertRule`'s own docstring), so a three-button alert
+    # identified by a two-label shape would otherwise leave its own third button stranded, reported
+    # as if a second, different, unhandled alert had joined the one already dismissed (review
+    # finding). Modeled on iOS's own three-button location prompt, whose "Allow Once" / "Allow While
+    # Using App" / "Don't Allow" the two-label form every entry in the real catalogue uses today
+    # would naturally encode as just "Allow Once" and "Don't Allow".
+    location = ResolvedAlertRule(
+        identifying_labels=frozenset({"Allow Once", "Don't Allow"}), tap_label="Allow Once"
+    )
+    driver = _fake_with_alert(["Allow Once", "Allow While Using App", "Don't Allow"])
+    guard = AlertGuardConfig(rules=[location])
+    alerts: list[AlertEvent] = []
+    cleared = guard(driver, alerts, settle=lambda: None)
+    assert cleared and alerts == [AlertEvent(label="Allow Once")]
+    # Not an "unhandled system alert" note naming the stranded third button: the rule *did*
+    # identify this alert, and only the tap's own outcome is in question.
+    assert guard.blocked_note == uncleared_prompt_note("Allow Once")
+
+
 def test_the_end_of_step_guard_clears_a_native_leftover_note_once_the_surface_reads_absent() -> (
     None
 ):
