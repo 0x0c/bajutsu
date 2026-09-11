@@ -1,14 +1,14 @@
-**English** · [日本語](BE-XXXX-scenario-slug-length-cap-ja.md)
+**English** · [日本語](BE-0420-scenario-slug-length-cap-ja.md)
 
-# BE-XXXX — Cap scenario evidence-directory slug length
+# BE-0420 — Cap scenario evidence-directory slug length
 
 <!-- BE-METADATA -->
 | Field | Value |
 |---|---|
-| Proposal | [BE-XXXX](BE-XXXX-scenario-slug-length-cap.md) |
+| Proposal | [BE-0420](BE-0420-scenario-slug-length-cap.md) |
 | Author | [@0x0c](https://github.com/0x0c) |
 | Status | **Proposal** |
-| Tracking issue | [Search](https://github.com/bajutsu-e2e/bajutsu/issues?q=is%3Aissue+label%3Aroadmap-tracking+in%3Atitle+"BE-XXXX") |
+| Tracking issue | [Search](https://github.com/bajutsu-e2e/bajutsu/issues?q=is%3Aissue+label%3Aroadmap-tracking+in%3Atitle+"BE-0420") |
 | Topic | Codebase quality & technical debt |
 | Related | [BE-0417](../BE-0417-scenario-result-folder-naming/BE-0417-scenario-result-folder-naming.md), [BE-0031](../BE-0031-data-driven-scenarios/BE-0031-data-driven-scenarios.md) |
 <!-- /BE-METADATA -->
