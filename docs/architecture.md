@@ -802,14 +802,16 @@ Android; on iOS it rests on the fast suite's bookkeeping proof alone.
   round that declines a repeat native tap still checks the buttons the probe read against every
   shape answered so far: a queued second alert no rule identifies can sit right alongside the one
   this call already dismissed, and the decline alone does not mean the rest of the surface is
-  clear. A button that never becomes reachable within the bound carries its own note, distinct from
-  the one an alert no rule identifies carries, rather than reading as a bare missing element. A
-  native alert the call did tap carries that same note once it is still the only thing on the
-  surface as the bound is spent: every read since the tap showing a live, policy-named alert is
-  evidence the tap never landed, not that its dismiss animation is merely still playing out. The
-  tree note survives a later round that finds nothing to match, or one that goes on to dismiss an
-  unrelated alert on either surface — native or in-tree — rather than either round erasing a real,
-  still-open diagnosis. A native leftover note does not survive that same kind of later round,
+  clear. A button that never becomes reachable within the bound carries its own note, distinct from the
+  one an alert no rule identifies carries, rather than reading as a bare missing element. A native
+  alert the call did tap carries that same note once it is still the only thing on the surface as
+  the bound is spent: every read since the tap showing a live, policy-named alert is evidence the
+  tap never landed, not that its dismiss animation is merely still playing out. An in-tree sheet
+  the call tapped carries it too, once the bound is spent with the sheet still enumerable —
+  `exclude` already keeps this call from tapping it again, so nothing later would otherwise report
+  a sheet that accepted the tap without actually closing. The tree note survives a later round that
+  finds nothing to match, or one that goes on to dismiss an unrelated alert on either surface —
+  native or in-tree — rather than either round erasing a real, still-open diagnosis. A native leftover note does not survive that same kind of later round,
   though: once its own probe proves the surface absent, that is a deterministic fact the diagnosis
   cannot outlive. XCUITest itself intervenes on an alert that interrupts an in-flight interaction
   *before* this guard ever polls, and left alone answers with the alert's own default button —

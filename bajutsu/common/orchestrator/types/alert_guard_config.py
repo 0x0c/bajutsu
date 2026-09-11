@@ -74,18 +74,17 @@ def _resolve_alert_rule(
 
     The plain match, unless its shape is one `dismissed` already names *or a subset of one* — a
     lingering fade of an already-answered alert, read with a subset of the buttons the dismissing
-    round itself matched on — in which case the search retries among the rules whose shape is not
-    a subset of any dismissed shape, so a real, not-yet-answered alert enumerable alongside that
-    fade (the stacked case this loop exists to clear) is still found rather than declined along
-    with the fade. The subset test, not equality, is what keeps a `savePassword`-style policy safe:
-    `choice: deny` there resolves to three rules, two of whose shapes nest (the web-form shape
-    naming "Save Password", "Never for This Website", and "Not Now"; the iOS 18.6 in-app shape
-    naming only "Save Password" and "Not Now" — the 26.5 shape, "Save" and "Not Now", shares
-    neither label with the widest and nests with neither), both tapping the same button, and a
-    fade that still enumerates the wider shape's buttons would otherwise match the narrower
-    sibling and tap it a second time. `__call__`
-    calls this again, over the same `buttons` a dismissing round just read, to learn which shape it
-    tapped without either probe growing a return member only one caller needs.
+    round itself matched on — in which case the search retries among the rules whose shape is not a
+    subset of any dismissed shape, so a real, not-yet-answered alert enumerable alongside that fade
+    (the stacked case this loop exists to clear) is still found rather than declined along with the
+    fade. The subset test, not equality, is what keeps a `savePassword`-style policy safe: `choice:
+    deny` there resolves to three rules, two of whose shapes nest (the web-form shape naming "Save
+    Password", "Never for This Website", and "Not Now"; the iOS 18.6 in-app shape naming only "Save
+    Password" and "Not Now" — the 26.5 shape, "Save" and "Not Now", nests with neither, sharing
+    only "Not Now" with the widest), both tapping the same button, and a fade that still enumerates
+    the wider shape's buttons would otherwise match the narrower sibling and tap it a second time.
+    `__call__` calls this again, over the same `buttons` a dismissing round just read, to learn
+    which shape it tapped without either probe growing a return member only one caller needs.
     """
     rule = matching_alert_rule(rules, buttons)
     if rule is not None and any(rule.identifying_labels <= shape for shape in dismissed):
@@ -116,6 +115,49 @@ def _leftover_after_answered(
             if label in leftover:
                 leftover.remove(label)
     return leftover
+
+
+def _bound_exhaustion_note(
+    *,
+    dismiss_shape: frozenset[str] | None,
+    dismiss_label: str | None,
+    dismiss_round: int | None,
+    declines: int,
+    buttons: Sequence[str],
+    round_index: int,
+) -> tuple[int, str]:
+    """Shared by `AlertGuardConfig.__call__`'s native and tree paths (BE-0418): whether the shape
+    most recently tapped on either surface is still enumerable on this round's read, and, once the
+    round bound is spent with it having read back unchanged on every round since the tap, the note
+    diagnosing that the tap never actually landed.
+
+    A direct containment check against `dismiss_shape`, not a re-match through `matching_alert_rule`:
+    that match's own arbitrary, dedup-blind pick among several still-enumerable shapes can return an
+    *earlier* dismissal's own lingering fade instead of the most recently tapped one, which would
+    otherwise leave the streak stuck at 0 forever once a surface has tapped two shapes in the same
+    call (review finding). `round_index`, not a running total, gates the diagnosis: a round of any
+    other kind (an "unhandled" collision on the native side, a stuck tree prompt on the other) can
+    sit between the tap and today's read just as easily as another decline does, and counting
+    position in the call rather than declines of the tapped shape would misread that gap as a broken
+    streak.
+
+    Returns the updated decline count and either `uncleared_prompt_note(dismiss_label)`, once every
+    round since the tap has re-observed the same shape and the bound is spent, or `""` when neither
+    holds yet. Both callers still decide for themselves whether an empty result here defers to a note
+    of their own (the native side's own leftover note; the tree side has no such concept, so it
+    applies the result directly), and whether to apply it at all (a still-open tree diagnosis,
+    `stuck_tree_label`, takes precedence over either surface's own streak note).
+    """
+    if dismiss_shape is not None and dismiss_shape <= set(buttons):
+        declines += 1
+    if (
+        round_index == _GUARD_CALL_MAX_ROUNDS - 1
+        and dismiss_round is not None
+        and round_index - dismiss_round == declines
+    ):
+        assert dismiss_label is not None  # the streak just closed, so a tap happened and set it
+        return declines, uncleared_prompt_note(dismiss_label)
+    return declines, ""
 
 
 @dataclass(frozen=True)
@@ -326,7 +368,7 @@ class AlertGuardConfig:
         `dismissed`): `savePassword`'s `choice: deny` resolves to three rules, two of whose shapes
         nest (the web-form shape naming "Save Password", "Never for This Website", and "Not Now";
         the iOS 18.6 in-app shape naming only "Save Password" and "Not Now" — the 26.5 shape,
-        "Save" and "Not Now", shares neither label with the widest and nests with neither), both
+        "Save" and "Not Now", nests with neither, sharing only "Not Now" with the widest), both
         tapping the same button, and a fade that still enumerates the wider shape's buttons would
         otherwise match the narrower sibling and tap it a second time.
 
@@ -431,15 +473,32 @@ class AlertGuardConfig:
         stuck_tree_label: str | None = None
         dismissed_native: frozenset[frozenset[str]] = frozenset()
         dismissed_tree_shapes: frozenset[frozenset[str]] = frozenset()
-        # The round a native shape was last freshly tapped, the shape itself, and how many rounds
-        # since have declined *that same shape* again — not `round_index` itself: a round of any
-        # other kind (an "unhandled" collision, an "absent" round the tree answers) sits between
-        # the dismissal and today's decline just as easily as another decline does, and counting
-        # position in the call rather than declines of the tapped shape would misread that gap as
-        # a broken streak (BE-0418 review finding).
+        # The round a native shape was last freshly tapped, the shape and tap label of that rule,
+        # and how many rounds since have declined *that same shape* again — not `round_index`
+        # itself: a round of any other kind (an "unhandled" collision, an "absent" round the tree
+        # answers) sits between the dismissal and today's decline just as easily as another decline
+        # does, and counting position in the call rather than declines of the tapped shape would
+        # misread that gap as a broken streak (BE-0418 review finding). The decline check itself is
+        # a direct containment test against `native_dismiss_shape`, not a re-match through
+        # `matching_alert_rule`: that match's own arbitrary pick among several still-enumerable
+        # shapes can return an *earlier* dismissal's own lingering fade instead of the most recently
+        # tapped one, which would leave the streak stuck at 0 forever once two native shapes have
+        # been tapped in the same call (BE-0418 review finding) — the label is carried alongside the
+        # shape so the streak's own close can name it without a second lookup.
         native_dismiss_round: int | None = None
         native_dismiss_shape: frozenset[str] | None = None
+        native_dismiss_label: str | None = None
         native_declines = 0
+        # The tree-side twin of the three fields above, for the identical bound-exhaustion
+        # diagnosis on a tapped-but-still-there in-tree sheet (BE-0418 review finding): the native
+        # branch already treats "tapped, and still reading back on every later round" as evidence
+        # the tap never landed, and `dismiss_from_tree_once` can reach the same state — an
+        # `AlertEvent` it returned whose shape then keeps enumerating in the tree, `exclude`
+        # guaranteeing this call never taps it again — with nothing naming it.
+        tree_dismiss_round: int | None = None
+        tree_dismiss_shape: frozenset[str] | None = None
+        tree_dismiss_label: str | None = None
+        tree_declines = 0
         for round_index in range(_GUARD_CALL_MAX_ROUNDS):
             state, event, buttons = self.probe_native(driver, dismissed=dismissed_native)
             if state == "dismissed":
@@ -457,6 +516,7 @@ class AlertGuardConfig:
                 # streak an earlier shape had going says nothing about this one.
                 native_dismiss_round = round_index
                 native_dismiss_shape = rule.identifying_labels
+                native_dismiss_label = rule.tap_label
                 native_declines = 0
                 cleared = True
                 if stuck_tree_label is None:
@@ -471,15 +531,17 @@ class AlertGuardConfig:
                 # reach "absent" — and any app-owned sheet stacked underneath — instead of
                 # spending the whole bound re-reading the same alert.
                 #
-                # Re-resolves the plain match (ignoring `dismissed_native`) to learn which shape is
-                # lingering this round: only a round that re-observes the *most recently tapped*
-                # shape counts toward its streak. A round re-observing some *earlier* dismissal
-                # instead (BE-0418's own A-then-B-then-A case) leaves the count exactly where it
-                # was, so the gap this round should have closed stays open and the streak can never
-                # re-equal `round_index` again for the rest of this call — no explicit reset needed.
-                plain_rule = matching_alert_rule(self.native_rules, buttons)
-                if plain_rule is not None and plain_rule.identifying_labels == native_dismiss_shape:
-                    native_declines += 1
+                # `_bound_exhaustion_note` tracks the decline streak directly against
+                # `native_dismiss_shape` — see its own docstring for why that must be a containment
+                # check, not a re-match through `matching_alert_rule` (BE-0418 review finding).
+                native_declines, streak_note = _bound_exhaustion_note(
+                    dismiss_shape=native_dismiss_shape,
+                    dismiss_label=native_dismiss_label,
+                    dismiss_round=native_dismiss_round,
+                    declines=native_declines,
+                    buttons=buttons,
+                    round_index=round_index,
+                )
                 if stuck_tree_label is None:
                     # `buttons` is the whole enumerable SpringBoard surface, not this one rule's
                     # own set, so declining a re-tap here does not mean nothing else is up: a
@@ -488,30 +550,11 @@ class AlertGuardConfig:
                     # anything else on the surface gets the same diagnosis a fresh "unhandled"
                     # probe would give it — the "dismissed" branch's own clear above self-corrects
                     # on a later round that re-probes fresh buttons, but a round that keeps
-                    # declining the same rule never does, so it must check this itself.
+                    # declining the same rule never does, so it must check this itself. A leftover
+                    # takes precedence over the streak's own note: something else is demonstrably
+                    # still up regardless of whether this round's own tap ever landed.
                     leftover = _leftover_after_answered(buttons, dismissed_native)
-                    if leftover:
-                        note = alert_block_note(leftover)
-                    elif (
-                        round_index == _GUARD_CALL_MAX_ROUNDS - 1
-                        and native_dismiss_round is not None
-                        and round_index - native_dismiss_round == native_declines
-                    ):
-                        # The bound is spent and every round since the most recent tap has declined
-                        # that same shape again: every read since the tap showing a live,
-                        # policy-named alert is evidence the tap never actually landed, not that
-                        # its dismiss animation is merely still playing out — nor that a round of some other
-                        # kind (an "unhandled" collision, an "absent" the tree answered) sat between
-                        # the tap and now, which would leave the gap short of `native_declines` and
-                        # this branch unreached. A call that cleared everything anyway never reaches
-                        # here, since a later round tapping a *different* shape restarts the count
-                        # above. Named the same way the in-tree branch below already names an
-                        # unlanded tap.
-                        assert plain_rule is not None  # the streak just closed on this round's own
-                        # plain match, per the note above — it cannot have closed on an earlier one
-                        note = uncleared_prompt_note(plain_rule.tap_label)
-                    else:
-                        note = ""
+                    note = alert_block_note(leftover) if leftover else streak_note
                 settle()
                 continue
             if state == "absent":
@@ -532,6 +575,13 @@ class AlertGuardConfig:
                     )
                     assert rule is not None  # the round that just dismissed this alert matched it
                     dismissed_tree_shapes |= {rule.identifying_labels}
+                    # A fresh tap, of any shape, restarts the consecutive-decline count: whatever
+                    # streak an earlier shape had going says nothing about this one (mirrors the
+                    # native branch above).
+                    tree_dismiss_round = round_index
+                    tree_dismiss_shape = rule.identifying_labels
+                    tree_dismiss_label = rule.tap_label
+                    tree_declines = 0
                     cleared = True
                     # No stuck diagnosis means whatever `note` holds is stale regardless — a native
                     # leftover note this round's own "absent" probe already disproves, say — so it
@@ -556,11 +606,25 @@ class AlertGuardConfig:
                 # presented, rather than ending the call on a lingering fade this loop exists to
                 # see past.
                 if any(shape <= set(tree_buttons) for shape in dismissed_tree_shapes):
-                    # This round's probe answered "absent" too, the same deterministic fact the
-                    # branch below acts on, so a native leftover note is stale here as well; only
-                    # a tree diagnosis survives, since a tree read alone cannot contradict it.
+                    # The tree twin of the native diagnosis above (BE-0418 review finding):
+                    # `dismiss_from_tree_once` reported a tap as landed, but a sheet that accepts a
+                    # tap without closing (a validation error re-presenting it, say) leaves this
+                    # call unable to ever act on it again (`exclude`), and otherwise the step would
+                    # fail on the bare `element not found` BE-0402 exists to prevent. This round's
+                    # probe answered "absent" too, the same deterministic fact the branch below acts
+                    # on, so a native leftover note is stale here as well — only a tree diagnosis
+                    # survives, since a tree read alone cannot contradict it, and the tree side has
+                    # no leftover concept of its own to prefer over the streak's note.
+                    tree_declines, streak_note = _bound_exhaustion_note(
+                        dismiss_shape=tree_dismiss_shape,
+                        dismiss_label=tree_dismiss_label,
+                        dismiss_round=tree_dismiss_round,
+                        declines=tree_declines,
+                        buttons=tree_buttons,
+                        round_index=round_index,
+                    )
                     if stuck_tree_label is None:
-                        note = ""
+                        note = streak_note
                     settle()
                     continue
                 # Otherwise this round's tree read may simply have caught a still-animating screen

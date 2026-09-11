@@ -1864,6 +1864,36 @@ def test_the_end_of_step_guard_reports_a_native_alert_uncleared_after_a_leading_
     assert guard.blocked_note == uncleared_prompt_note("Allow")
 
 
+def test_the_end_of_step_guard_reports_a_second_native_alert_stuck_behind_an_earlier_ones_fade() -> (
+    None
+):
+    # The decline streak must anchor on the *shape* of the most recently tapped alert directly, not
+    # on whichever shape `matching_alert_rule`'s own plain, dedup-blind pick happens to return: an
+    # earlier dismissal's own still-enumerable fade can crowd the recent one out of that pick, which
+    # would otherwise leave the streak stuck at 0 forever once two native shapes have been tapped in
+    # the same call (review finding). Wide (round 0) never actually clears, and narrow -- tapped on
+    # round 1 once wide's own fade excludes it -- never clears either; `matching_alert_rule`'s plain
+    # pick keeps returning wide (checked first, widest-first) on every later round even though
+    # narrow is the shape this streak is meant to be tracking.
+    wide = ResolvedAlertRule(identifying_labels=frozenset({"A1", "A2"}), tap_label="A1")
+    narrow = ResolvedAlertRule(identifying_labels=frozenset({"B1"}), tap_label="B1")
+    driver = _fake_with_alert(["A1", "A2"])
+    settle_count = 0
+
+    def settle() -> None:
+        nonlocal settle_count
+        settle_count += 1
+        if settle_count == 1:
+            # Round 0 tapped wide, but its fade lingers, and narrow's own alert now joins it.
+            driver.system_alert_buttons = [_button("A1"), _button("A2"), _button("B1")]
+
+    guard = AlertGuardConfig(rules=[wide, narrow])
+    alerts: list[AlertEvent] = []
+    cleared = guard(driver, alerts, settle=settle)
+    assert cleared and alerts == [AlertEvent(label="A1"), AlertEvent(label="B1")]
+    assert guard.blocked_note == uncleared_prompt_note("B1")
+
+
 def test_the_end_of_step_guard_clears_a_native_leftover_note_once_the_surface_reads_absent() -> (
     None
 ):
@@ -2030,12 +2060,16 @@ def test_the_end_of_step_guard_never_retaps_a_label_it_already_cleared_from_the_
     # round's match would land on it again — and unlike the native path, re-tapping it risks landing
     # on an application button the closing sheet has by then revealed, not just the same fading
     # sheet. `dismiss_from_tree_once`'s own `exclude` withholds a label already cleared this call
-    # from matching again at all, so the tap happens exactly once, not merely reported once.
+    # from matching again at all, so the tap happens exactly once, not merely reported once. A sheet
+    # that stays in the tree for the whole rest of the bound after being tapped is exactly the case
+    # `uncleared_prompt_note` exists for (review finding): `exclude` guarantees this call can never
+    # act on it again, so nothing later would otherwise report a sheet that accepted the tap without
+    # actually closing.
     driver = FakeDriver([_button("Not Now")])  # never removed: models a fade past `settle`
     guard = AlertGuardConfig(rules=[guard_rule("Not Now")])
     cleared, alerts = _call(driver, guard)
     assert cleared and alerts == [AlertEvent(label="Not Now")]
-    assert guard.blocked_note == ""
+    assert guard.blocked_note == uncleared_prompt_note("Not Now")
     assert sum(1 for action in driver.actions if action[0] == "tap") == 1
 
 
@@ -2224,7 +2258,10 @@ def test_the_end_of_step_guard_finds_a_second_tree_alert_behind_an_excluded_firs
     # The tree twin of the native "stacked alert behind a fading first match" case: excluding the
     # winning match must not end the search the instant it lands back on an already-answered
     # shape — a real, differently-shaped second alert revealed once the first tap lands (BE-0418's
-    # own stacked case) must still be found via the retry among the shapes not yet excluded.
+    # own stacked case) must still be found via the retry among the shapes not yet excluded. Neither
+    # tapped sheet is ever actually removed from the tree (the fake models no removal), so the round
+    # bound is spent with the most recently tapped one, "Later", still enumerable — the tree bound-
+    # exhaustion diagnosis names it (review finding), the same way it would a native alert.
     first = ResolvedAlertRule(
         identifying_labels=frozenset({"Not Now"}), tap_label="Not Now", native=False, in_tree=True
     )
@@ -2241,7 +2278,7 @@ def test_the_end_of_step_guard_finds_a_second_tree_alert_behind_an_excluded_firs
     cleared, alerts = _call(driver, guard)
     assert cleared
     assert alerts == [AlertEvent(label="Not Now"), AlertEvent(label="Later")]
-    assert guard.blocked_note == ""
+    assert guard.blocked_note == uncleared_prompt_note("Later")
 
 
 def test_the_end_of_step_guard_reports_two_native_alerts_sharing_a_tap_label() -> None:
