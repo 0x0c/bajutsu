@@ -1394,6 +1394,71 @@ def test_the_end_of_step_guard_leaves_a_second_native_alert_unhandled_after_clea
     assert "Weird Button" in guard.blocked_note
 
 
+def test_the_end_of_step_guard_recovers_the_stacked_case_when_labels_collide_mid_fade() -> None:
+    # BE-0418's own flagship stacked pair, with an added wrinkle: `notifications` and `tracking`
+    # both tap "Allow", so a round reading the first's still-fading buttons alongside the second's
+    # now-live ones fails `matching_alert_rule`'s per-label uniqueness check for either and lands
+    # on `"unhandled"` rather than `"already_dismissed"`. That round must settle and try again, the
+    # same as an ordinary already_dismissed fade, rather than ending the call and leaving a
+    # rule-named alert untapped.
+    notifications = ResolvedAlertRule(
+        identifying_labels=frozenset({"Allow", "Don't Allow"}), tap_label="Allow"
+    )
+    tracking = ResolvedAlertRule(
+        identifying_labels=frozenset({"Allow", "Ask App Not to Track"}), tap_label="Allow"
+    )
+    driver = _fake_with_alert(["Allow", "Don't Allow"])
+    settle_count = 0
+
+    def settle() -> None:
+        nonlocal settle_count
+        settle_count += 1
+        if settle_count == 1:
+            # notifications' own dismiss animation still enumerates its buttons, and tracking has
+            # now also queued -- the colliding-label read the "unhandled" fix must see past.
+            driver.system_alert_buttons = [
+                _button("Allow"),
+                _button("Don't Allow"),
+                _button("Allow"),
+                _button("Ask App Not to Track"),
+            ]
+        elif settle_count == 2:
+            # notifications' fade has now drained; only tracking remains, uniquely matchable.
+            driver.system_alert_buttons = [_button("Allow"), _button("Ask App Not to Track")]
+
+    guard = AlertGuardConfig(rules=[notifications, tracking])
+    alerts: list[AlertEvent] = []
+    cleared = guard(driver, alerts, settle=settle)
+    assert cleared
+    assert alerts == [AlertEvent(label="Allow"), AlertEvent(label="Allow")]
+    assert guard.blocked_note == ""
+
+
+def test_the_end_of_step_guard_keeps_a_pending_tree_note_through_a_later_unhandled_round() -> None:
+    # The `"unhandled"` branch's own note computation must defer to a pending tree diagnosis the
+    # same way `already_dismissed` and the tree-lingering branch already do: a native alert that
+    # shows up on a later round, and that no rule identifies, must not overwrite (or clear) a
+    # `NotTappable` note an earlier round is still standing by.
+    class _StuckTreeThenUnhandledNative(FakeDriver):
+        def __init__(self) -> None:
+            super().__init__([_button("Not Now")])
+            self.probes = 0
+
+        def tap(self, sel: base.Selector) -> None:
+            raise base.ElementNotTappable("the scrim never lifts")
+
+        def system_alert_labels(self) -> list[str]:
+            self.probes += 1
+            return [] if self.probes == 1 else ["Weird Button"]
+
+    driver = _StuckTreeThenUnhandledNative()
+    guard = AlertGuardConfig(rules=[guard_rule("Not Now", native=False, in_tree=True)])
+    cleared, alerts = _call(driver, guard)
+    assert not cleared and alerts == []
+    assert "Not Now" in guard.blocked_note  # the tree diagnosis, not the later native one
+    assert "Weird Button" not in guard.blocked_note
+
+
 def test_a_note_from_a_cleared_stacked_call_does_not_survive_a_retry_that_passes() -> None:
     # The step-runner's `not ok` conjunct, pinned (BE-0418 review finding): a cleared stacked call's
     # note explains a failure the retry still has, but when the dismiss reveals the step's own

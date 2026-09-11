@@ -479,15 +479,30 @@ class AlertGuardConfig:
                 if not tree_note_pending:
                     note = ""
                 break
-            # "unhandled": an alert is up that no rule identifies. BE-0402 leaves it alone rather
-            # than asking a model where to tap, so the step keeps failing — but on its own timeout
-            # with the alert named, not as an unexplained missing element. "reserved" and
-            # "incapable" clear the note instead: neither is evidence of anything blocking the
-            # screen that this call could have acted on. Both are also driver facts fixed for the
-            # whole call (a capability, or a step's own reserved selector — never passed here, so
-            # "reserved" cannot actually occur from this call site), so neither can follow a round
-            # that already found something concerning.
-            note = alert_block_note(buttons) if state == "unhandled" else ""
+            if state == "unhandled":
+                # An alert is up that no rule identifies — but `buttons` is the whole SpringBoard
+                # enumeration, not a fresh, self-contained read, and can still hold a label this
+                # call already answered: BE-0418's own flagship stacked pair, `notifications` and
+                # `tracking`, both grant `"Allow"`, so a round reading one's still-fading buttons
+                # alongside the other's now-live ones fails `matching_alert_rule`'s per-label
+                # uniqueness check for either and lands here rather than in `already_dismissed`.
+                # Filtering the already-answered labels out of the note (the same computation
+                # `already_dismissed` above makes) keeps the note from re-naming an alert this call
+                # already cleared. Settling and giving the fade another round, rather than ending
+                # the call, is that same branch's other half: once the answered alert's fade
+                # drains, the live one reads uniquely and resolves on a later round of its own.
+                if not tree_note_pending:
+                    answered = {label for labels in dismissed_native for label in labels}
+                    leftover = [b for b in buttons if b not in answered]
+                    note = alert_block_note(leftover) if leftover else ""
+                settle()
+                continue
+            # "reserved" and "incapable" clear the note instead: neither is evidence of anything
+            # blocking the screen that this call could have acted on. Both are also driver facts
+            # fixed for the whole call (a capability, or a step's own reserved selector — never
+            # passed here, so "reserved" cannot actually occur from this call site), so neither can
+            # follow a round that already found something concerning.
+            note = ""
             break
         self.blocked_note = note
         return cleared
