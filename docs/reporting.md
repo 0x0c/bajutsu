@@ -230,10 +230,9 @@ example, the `ctrf-io/github-test-reporter` action turns it into a PR comment / 
 A self-contained HTML for humans (inline CSS, no external assets). The header shows the run id and
 overall PASS/FAIL. Below that sits the **scenario file name** (`source_name`), the whole suite's
 label. `source_name` names the whole suite. A lone `--scenario` file gives its own name. A
-multi-file or whole-dir run gives the containing directory's name instead. The **file-level
-`description`** follows when present.
-
-Each scenario row's summary shows the **scenario name**. It also shows the scenario's **own
+overall PASS/FAIL. Below that sits the **scenario file name** (`source_name`), the whole suite's
+label: a lone `--scenario` file gives its own name, and a multi-file or whole-dir run gives the
+containing directory's name instead. The **file-level `description`** follows when present.
 originating file name** (`source_files`). This name is distinct from the header's whole-suite
 label. A `bajutsu run` that read the scenario off disk sets `source_files`; an offline re-render
 does not. When set, the **scenario-level `description`** sits beside the name. A run thus surfaces
@@ -275,9 +274,10 @@ scenario YAML. For a freshly baked `bajutsu run` report, that YAML is the scenar
 authored. Comments and formatting stay intact: the report slices this text straight from the
 source file. It never re-serializes the parsed model. A literal `totp.secret` still gets masked in
 place. A scenario whose `setup`/component expansion changed its step count keeps this verbatim
-text. The text stays accurate as written. It loses the `#` column's line numbers, for the same
-reason. An offline re-render (`bajutsu report`, below) falls back to the structured re-dump it
-always used. The original file's raw text was never persisted into the run.
+text — still accurate as authored — but loses the `#` column's line numbers, which the expansion
+would leave pointing at the wrong steps. An offline re-render (`bajutsu report`, below) falls back
+to the structured re-dump it always used: the original file's raw text was never persisted into
+the run.
 
 A `visual` expectation renders an **interactive baseline-vs-actual comparator** beneath its row,
 with four modes: **Swipe** (drag a divider to wipe between the two), **Onion** (a slider cross-fades
