@@ -7,7 +7,7 @@
 |---|---|
 | 提案 | [BE-0418](BE-0418-ios-alert-guard-one-shot-retry-ja.md) |
 | 提案者 | [@0x0c](https://github.com/0x0c) |
-| 状態 | **提案** |
+| 状態 | **実装済み** |
 | トラッキング Issue | [検索](https://github.com/bajutsu-e2e/bajutsu/issues?q=is%3Aissue+label%3Aroadmap-tracking+in%3Atitle+"BE-0418") |
 | トピック | Platform support |
 | 関連 | [BE-0269](../BE-0269-ios-alert-guard-early-wait-intervention/BE-0269-ios-alert-guard-early-wait-intervention-ja.md), [BE-0315](../BE-0315-ios-native-system-alert-handling/BE-0315-ios-native-system-alert-handling-ja.md), [BE-0399](../BE-0399-ios-system-alert-interruption-policy/BE-0399-ios-system-alert-interruption-policy-ja.md), [BE-0402](../BE-0402-run-alert-guard-drop-vision-fallback/BE-0402-run-alert-guard-drop-vision-fallback-ja.md), [BE-0406](../BE-0406-system-alert-declared-prompts/BE-0406-system-alert-declared-prompts-ja.md) |
@@ -239,11 +239,27 @@ docstring には、シートの登場アニメーションが終わるまでボ�
 > （MECE）を映し、作業単位ごとに 1 つの箱を用意します。ログには変更内容と日付を古い順に記録し、
 > 関連する PR へリンクします。
 
-- [ ] 未着手です。
+- [x] ユニット 1 — 画面が晴れるか上限に達するまで `AlertGuardConfig.__call__` をループさせる
+- [x] ユニット 2 — ツリー内タップでも、`wait` 中のガードと同じ着地レースを取りこぼさないようにする
+- [x] ユニット 3 — `__call__` の契約を、解消したアラートをすべて報告する形に変える
+- [x] ユニット 4 — テスト
+- [x] ユニット 5 — ドキュメント
 
 ログ：
 
-まだありません。
+- 5 つのユニットをすべて実装しました。`AlertGuardConfig.__call__` は `_GUARD_CALL_MAX_ROUNDS`
+  （3）まで内部でループし、解消した `AlertEvent` を呼び出し側が渡すリストへ追記し、1 件以上
+  片付けたかどうかを真偽値で返します。`dismiss_from_tree_once` には `NotTappable` という帰結と `exclude`
+  引数を追加し、着地レースに対する有界の再試行を実装しました。2 か所の呼び出し元
+  （`loop/_step_runner.py`、`loop/_functions.py`）はどちらも新しい
+  `(driver, alerts, *, settle) -> bool` という契約に移行し、注記の追記条件を、呼び出しが何かを
+  片付けたかどうかではなく注記そのものの有無だけに揃えました。`docs/architecture.md` とその
+  日本語版には、この複数ラウンドの挙動を追記しました。高速なテストスイートは、設計が挙げている
+  スタック済みアラート・着地レース・恒久的に塞がれたプロンプト・ラウンド上限を使い切るケースに
+  加え、セルフレビュー中に見つかった 2 つの取りこぼしにも対応しています。1 つは、別のアラートが
+  間に挟まっても、今回の呼び出しで片付けたどのアラートかを覚えておかないと、同じネイティブ
+  アラートが再び現れたときに二重で報告してしまう問題です。もう 1 つは、ツリー側の診断が、もう
+  一方の面での無関係なネイティブアラートの解消によって黙って消えてしまう問題です。
 
 ## 参考
 

@@ -24,7 +24,12 @@ from ._functions import (
 from ._shared import BlockedHandler, NetworkSource, ProgressFn, RelaunchFn, WallClock
 from .alert_event import AlertEvent
 from .alert_guard_config import _NATIVE_TAP_TIMEOUT as _NATIVE_TAP_TIMEOUT
-from .alert_guard_config import DEFAULT_ALERT_POLL_INTERVAL, AlertGuardConfig, NativeAlertState
+from .alert_guard_config import (
+    DEFAULT_ALERT_POLL_INTERVAL,
+    AlertGuardConfig,
+    NativeAlertState,
+    NotTappable,
+)
 from .clock import Clock
 from .device_control import DeviceControl
 from .drained_interruption_events import DrainedInterruptionEvents
@@ -48,6 +53,7 @@ __all__ = [
     "MailboxReader",
     "NativeAlertState",
     "NetworkSource",
+    "NotTappable",
     "ProgressFn",
     "RealClock",
     "RelaunchFn",

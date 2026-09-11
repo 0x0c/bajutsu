@@ -10,6 +10,7 @@ with alert buttons, so nothing here needs a Simulator; the on-device confirmatio
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from typing import cast
 
 import pytest
@@ -65,6 +66,51 @@ def _fake_with_alert(labels: list[str], react: object = None) -> FakeDriver:
     driver = FakeDriver([], react=react)  # type: ignore[arg-type]
     driver.system_alert_buttons = [_button(label) for label in labels]
     return driver
+
+
+def _call(
+    driver: base.Driver,
+    guard: AlertGuardConfig,
+    *,
+    settle: Callable[[], None] | None = None,
+) -> tuple[bool, list[AlertEvent]]:
+    """`guard(driver, ...)` (BE-0418) with a fresh `alerts` list and a no-op `settle` by default.
+
+    Nothing here needs the real `settle_after_alert_dismiss` sweep: the fake driver never animates,
+    so a no-op stands in unless a test cares whether/when `settle` itself ran.
+    """
+    alerts: list[AlertEvent] = []
+    cleared = guard(driver, alerts, settle=settle or (lambda: None))
+    return cleared, alerts
+
+
+def _clearing_native(labels_left: list[str]) -> Callable[[FakeDriver, str, object], None]:
+    """A `react` hook: dismissing a SpringBoard alert actually clears it, as a real device would.
+
+    `FakeDriver.handle_system_alert` never removes the tapped button on its own — a test opts into
+    that, exactly as the mid-wait gate's own tests already do — so without this a BE-0418 loop
+    round would re-probe the same still-seeded alert and re-dismiss it.
+    """
+
+    def react(d: FakeDriver, kind: str, _arg: object) -> None:
+        if kind == "handle_system_alert":
+            d.system_alert_buttons = [_button(label) for label in labels_left]
+
+    return react
+
+
+def _clearing_tree_tap(label: str) -> Callable[[FakeDriver, str, object], None]:
+    """A `react` hook: a landed in-tree tap actually removes the button, as a real dismiss would.
+
+    `FakeDriver.tap` never mutates `screen` on its own, so without this a BE-0418 loop round would
+    find the same button still there and tap it a second time.
+    """
+
+    def react(d: FakeDriver, kind: str, arg: object) -> None:
+        if kind == "tap" and isinstance(arg, dict) and arg.get("label") == label:
+            d.screen = [el for el in d.screen if el["label"] != label]
+
+    return react
 
 
 # --- match_alert_rule -------------------------------------------------------------------------------
@@ -236,7 +282,9 @@ def test_probe_native_treats_a_dismiss_race_as_absent() -> None:
 
 def test_call_returns_the_native_event_and_leaves_no_note() -> None:
     guard = AlertGuardConfig(rules=[guard_rule("Allow")])
-    assert guard(_fake_with_alert(["Allow"])) == AlertEvent(label="Allow")
+    driver = _fake_with_alert(["Allow"], react=_clearing_native([]))
+    cleared, alerts = _call(driver, guard)
+    assert cleared and alerts == [AlertEvent(label="Allow")]
     assert guard.blocked_note == ""  # the screen is unblocked; nothing to report
 
 
@@ -244,7 +292,8 @@ def test_call_reports_an_unnamed_alert_instead_of_guessing_at_it() -> None:
     # BE-0402: no rule or candidate label names this button, and nothing here will guess where to
     # tap. The step keeps failing — but with the alert named, which is the whole point.
     guard = AlertGuardConfig(rules=[guard_rule("Allow")])
-    assert guard(_fake_with_alert(["Weird Button"])) is None
+    cleared, alerts = _call(_fake_with_alert(["Weird Button"]), guard)
+    assert not cleared and alerts == []
     assert "unhandled system alert" in guard.blocked_note
     assert "Weird Button" in guard.blocked_note
 
@@ -253,7 +302,8 @@ def test_call_leaves_no_note_on_an_incapable_backend() -> None:
     # No native query ran, so nothing was observed. A note here would claim a block the guard never
     # saw, on every failed step of every non-iOS backend.
     guard = AlertGuardConfig()
-    assert guard(_Incapable()) is None  # type: ignore[arg-type]
+    cleared, alerts = _call(cast("base.Driver", _Incapable()), guard)
+    assert not cleared and alerts == []
     assert guard.blocked_note == ""
 
 
@@ -261,9 +311,11 @@ def test_call_clears_a_stale_note_once_the_alert_is_gone() -> None:
     # The note states the *latest* observation, never that a block was ever seen: a scenario runs its
     # steps against one config, so a sticky note would mislabel every later failure in it.
     guard = AlertGuardConfig(rules=[guard_rule("Allow")])
-    assert guard(_fake_with_alert(["Weird Button"])) is None
+    cleared, _alerts = _call(_fake_with_alert(["Weird Button"]), guard)
+    assert not cleared
     assert guard.blocked_note
-    assert guard(FakeDriver([])) is None
+    cleared, _alerts = _call(FakeDriver([]), guard)
+    assert not cleared
     assert guard.blocked_note == ""
 
 
@@ -1273,21 +1325,343 @@ def test_the_end_of_step_guard_clears_an_app_owned_prompt_from_the_tree() -> Non
     # without a credential — so without this the prompt covered the screen and `expect` read a
     # covered tree.
     prompt_button = _button("Not Now")
-    driver = FakeDriver([_button("Sign In"), prompt_button])
+    driver = FakeDriver([_button("Sign In"), prompt_button], react=_clearing_tree_tap("Not Now"))
     guard = AlertGuardConfig(rules=[guard_rule("Not Now")])
-    assert guard(driver) == AlertEvent(label="Not Now")
-    assert driver.actions and driver.actions[-1][0] == "tap"
+    cleared, alerts = _call(driver, guard)
+    assert cleared and alerts == [AlertEvent(label="Not Now")]
+    assert ("tap", {"label": "Not Now", "traits": [base.Trait.BUTTON]}) in driver.actions
+
+
+def test_the_end_of_step_guard_clears_a_native_alert_stacked_in_front_of_an_in_tree_one() -> None:
+    # BE-0418's own motivating case: iOS commonly queues more than one prompt after a single user
+    # action. A single one-shot dismiss used to end the moment the native SpringBoard alert cleared,
+    # leaving the app-owned sheet underneath for the step's own retry to fail against a second time,
+    # with no note explaining why. The guard now keeps going once the SpringBoard alert is gone.
+    def react(d: FakeDriver, kind: str, arg: object) -> None:
+        if kind == "handle_system_alert":
+            d.system_alert_buttons = []
+        if kind == "tap" and isinstance(arg, dict) and arg.get("label") == "Not Now":
+            d.screen = [el for el in d.screen if el["label"] != "Not Now"]
+
+    driver = _fake_with_alert(["Don't Allow", "Allow"], react=react)
+    driver.screen = [_button("Not Now")]
+    guard = AlertGuardConfig(rules=[guard_rule("Don't Allow"), guard_rule("Not Now")])
+    cleared, alerts = _call(driver, guard)
+    assert cleared
+    assert alerts == [AlertEvent(label="Don't Allow"), AlertEvent(label="Not Now")]
+    # The SpringBoard alert is answered natively before the tree is ever touched: the first action
+    # is the native handle, not a tap.
+    assert driver.actions[0][0] == "handle_system_alert"
+    assert guard.blocked_note == ""
 
 
 def test_the_end_of_step_guard_leaves_the_tree_alone_while_a_springboard_alert_is_up() -> None:
     # The same licence the mid-wait gate needs: XCUITest answers an interrupting out-of-process alert
     # before it synthesizes any element interaction, so an app tap issued while one is up is not this
-    # guard's to make. The native path answers that alert first; the tree is next time's business.
-    driver = _fake_with_alert(["Don't Allow", "Allow"])
+    # guard's to make. Round 1's native probe reports "unhandled" (no rule identifies the alert) and
+    # ends the call there — it never reaches "absent", the one answer that licenses the tree — so a
+    # same-labelled in-tree button underneath is never touched. Round 2 never runs at all: "unhandled"
+    # is one of the terminal outcomes `__call__` breaks on, not one it loops past.
+    driver = _fake_with_alert(["Weird Button"])  # up, and no rule identifies it
     driver.screen = [_button("Not Now")]
-    guard = AlertGuardConfig(rules=[guard_rule("Don't Allow"), guard_rule("Not Now")])
-    assert guard(driver) == AlertEvent(label="Don't Allow")  # the SpringBoard alert, natively
+    guard = AlertGuardConfig(rules=[guard_rule("Not Now")])
+    cleared, alerts = _call(driver, guard)
+    assert not cleared and alerts == []
     assert not any(action[0] == "tap" for action in driver.actions)
+    assert "Weird Button" in guard.blocked_note
+
+
+def test_the_end_of_step_guard_leaves_a_second_native_alert_unhandled_after_clearing_the_first() -> (
+    None
+):
+    # The stacked case's other half (BE-0418): the loop still cleared something (`cleared` is True),
+    # but the second alert is one no rule identifies, so it is left alone and named in `blocked_note`
+    # rather than silently dropped — the same fact the failure reason needs even though the call as a
+    # whole did clear an alert.
+    def react(d: FakeDriver, kind: str, _arg: object) -> None:
+        if kind == "handle_system_alert":
+            d.system_alert_buttons = [_button("Weird Button")]
+
+    driver = _fake_with_alert(["Allow"], react=react)
+    guard = AlertGuardConfig(rules=[guard_rule("Allow")])
+    cleared, alerts = _call(driver, guard)
+    assert cleared and alerts == [AlertEvent(label="Allow")]
+    assert "unhandled system alert" in guard.blocked_note
+    assert "Weird Button" in guard.blocked_note
+
+
+def test_a_note_from_a_cleared_stacked_call_still_reaches_the_step_s_own_failure() -> None:
+    # The same stacked case, driven through `run_scenario` (BE-0418): `cleared` and a non-empty
+    # `blocked_note` are no longer mutually exclusive the way a single-shot dismiss made them, so the
+    # step-runner's own note-append must survive the retry it now runs alongside. A version that
+    # appends the note before the retry loses it the moment the retry reassigns the failure reason.
+    from bajutsu.common.orchestrator import run_scenario
+    from bajutsu.common.scenario import load_scenarios
+
+    def react(d: FakeDriver, kind: str, _arg: object) -> None:
+        if kind == "handle_system_alert":
+            d.system_alert_buttons = [_button("Weird Button")]
+
+    driver = _fake_with_alert(["Allow"], react=react)  # no "go" element at any point
+    result = run_scenario(
+        driver,
+        load_scenarios("- name: t\n  steps:\n    - tap: { id: go }\n")[0],
+        alert_guard=AlertGuardConfig(rules=[guard_rule("Allow")]),
+    )
+    assert not result.ok
+    reason = result.steps[0].reason or ""
+    assert "an unhandled system alert is blocking the screen (buttons: Weird Button)" in reason
+    assert result.steps[0].alerts == [AlertEvent(label="Allow")]  # the first alert did clear
+
+
+def test_the_end_of_step_guard_retries_a_tap_that_lands_on_a_later_round() -> None:
+    # The landing-race gap (BE-0418): a scrim still covers the sheet's button on the first attempt,
+    # exactly the "not yet reachable" condition the mid-wait path already retries. The one-shot path
+    # now gets the same short, round-bounded retry instead of giving up on the first `ElementNotTappable`.
+    prompt_button = _button("Not Now")
+    attempts = 0
+
+    class _SlowToLand(FakeDriver):
+        def tap(self, sel: base.Selector) -> None:
+            nonlocal attempts
+            attempts += 1
+            if attempts == 1:
+                raise base.ElementNotTappable("a scrim still covers the button")
+            super().tap(sel)
+            self.screen = [el for el in self.screen if el["label"] != "Not Now"]
+
+    driver = _SlowToLand([prompt_button])
+    guard = AlertGuardConfig(rules=[guard_rule("Not Now")])
+    cleared, alerts = _call(driver, guard)
+    assert cleared and alerts == [AlertEvent(label="Not Now")]
+    assert attempts == 2
+    assert guard.blocked_note == ""  # the eventual dismiss clears the interim "not tappable" note
+
+
+def test_the_end_of_step_guard_names_a_permanently_obstructed_prompt() -> None:
+    # Out of scope (per the proposal): actually clearing a permanently obstructed prompt is not this
+    # change's job. What changes is the diagnosis — the failure names the alert instead of reading as
+    # a bare missing element, once the loop's round bound is spent retrying a tap that never lands.
+    class _NeverLands(FakeDriver):
+        def __init__(self) -> None:
+            super().__init__([_button("Not Now")])
+            self.tap_calls = 0
+
+        def tap(self, sel: base.Selector) -> None:
+            self.tap_calls += 1
+            raise base.ElementNotTappable("the scrim never lifts")
+
+    driver = _NeverLands()
+    guard = AlertGuardConfig(rules=[guard_rule("Not Now")])
+    cleared, alerts = _call(driver, guard)
+    assert not cleared and alerts == []
+    assert "a system prompt the guard could not clear is still up" in guard.blocked_note
+    assert "Not Now" in guard.blocked_note
+    # Pins the round bound itself: a widened `_GUARD_CALL_MAX_ROUNDS` would retap (and re-settle)
+    # more times here without any other assertion in the suite noticing.
+    assert driver.tap_calls == 3
+
+
+def test_the_end_of_step_guard_preserves_an_uncleared_tree_note_past_an_unrelated_native_dismissal() -> (
+    None
+):
+    # The other half of BE-0418's note bookkeeping: a round that clears an unrelated SpringBoard
+    # alert must not erase an earlier round's still-open tree diagnosis. Round 1 and 2 both find the
+    # same tree button stuck; round 2's own tap incidentally reveals a distinct native alert, which
+    # round 3 — the call's last — dismisses. Without gating the reset on whether the tree issue is
+    # still open, that unrelated success would silently discard the genuine, unresolved obstruction.
+    class _StuckTreePromptRevealsANativeOne(FakeDriver):
+        def __init__(self) -> None:
+            super().__init__([_button("Not Now")])
+            self.tap_calls = 0
+
+        def tap(self, sel: base.Selector) -> None:
+            self.tap_calls += 1
+            if self.tap_calls == 2:
+                self.system_alert_buttons = [_button("Allow")]
+            raise base.ElementNotTappable("the scrim never lifts")
+
+    driver = _StuckTreePromptRevealsANativeOne()
+    guard = AlertGuardConfig(
+        rules=[
+            guard_rule("Not Now", native=False, in_tree=True),
+            guard_rule("Allow", native=True, in_tree=False),
+        ]
+    )
+    cleared, alerts = _call(driver, guard)
+    assert cleared and alerts == [AlertEvent(label="Allow")]
+    assert driver.tap_calls == 2
+    assert "a system prompt the guard could not clear is still up" in guard.blocked_note
+    assert "Not Now" in guard.blocked_note
+
+
+def test_the_end_of_step_guard_does_not_double_report_an_alert_reappearing_after_a_different_one() -> (
+    None
+):
+    # The native dedup must remember every alert already dismissed this call, not only the round
+    # immediately before: round 1 clears alert A, round 2 clears a distinct alert B, and round 3
+    # reads A's exact button set again — the first dismissal still fading, not a genuine third alert.
+    # Comparing only against the *previous* round's key would miss this A-B-A ordering entirely.
+    notifications = ResolvedAlertRule(
+        identifying_labels=frozenset({"Allow", "Don't Allow"}), tap_label="Allow"
+    )
+    tracking = ResolvedAlertRule(
+        identifying_labels=frozenset({"Allow", "Ask App Not to Track"}), tap_label="Allow"
+    )
+    handled = 0
+
+    def react(d: FakeDriver, kind: str, _arg: object) -> None:
+        nonlocal handled
+        if kind != "handle_system_alert":
+            return
+        handled += 1
+        if handled == 1:
+            d.system_alert_buttons = [_button("Allow"), _button("Ask App Not to Track")]
+        else:
+            d.system_alert_buttons = [_button("Allow"), _button("Don't Allow")]
+
+    driver = _fake_with_alert(["Allow", "Don't Allow"], react=react)
+    guard = AlertGuardConfig(rules=[notifications, tracking])
+    cleared, alerts = _call(driver, guard)
+    assert cleared
+    assert alerts == [
+        AlertEvent(label="Allow"),
+        AlertEvent(label="Allow"),
+    ]  # A, then B — not A again
+
+
+def test_the_end_of_step_guard_preserves_an_uncleared_note_through_a_later_empty_round() -> None:
+    # A round that matches nothing does not prove the screen actually cleared (BE-0418's own design
+    # names this risk: "a round that reads a tree still mid-animation risks matching nothing at
+    # all"). Erasing round 1's real diagnosis on that ambiguous evidence would leave the eventual
+    # failure reading as a bare missing element again — exactly what this proposal exists to fix.
+    class _ObstructedThenAmbiguous(FakeDriver):
+        def __init__(self) -> None:
+            super().__init__([_button("Not Now")])
+            self.attempts = 0
+
+        def tap(self, sel: base.Selector) -> None:
+            self.attempts += 1
+            if self.attempts == 1:
+                raise base.ElementNotTappable("the scrim never lifts")
+            raise base.ElementNotFound("a mid-transition read caught it between frames")
+
+    driver = _ObstructedThenAmbiguous()
+    guard = AlertGuardConfig(rules=[guard_rule("Not Now")])
+    cleared, alerts = _call(driver, guard)
+    assert not cleared and alerts == []
+    assert driver.attempts == 2  # round 1's not-tappable retried once, then round 2 found nothing
+    assert "a system prompt the guard could not clear is still up" in guard.blocked_note
+    assert "Not Now" in guard.blocked_note
+
+
+def test_the_end_of_step_guard_does_not_double_report_a_dismiss_that_outlasts_settle() -> None:
+    # `settle` is best-effort and bounded: a dismissal whose own animation runs past it can still be
+    # up, unchanged, on the next round's read. Re-matching the very same button is the first
+    # dismissal still fading, not a second occurrence of it, so it must not double the report — the
+    # native twin of `_alert_guard_gate.py`'s own "only the first tap of a showing reports an event".
+    driver = _fake_with_alert(["Allow"])  # never cleared: models a fade that outlasts `settle`
+    guard = AlertGuardConfig(rules=[guard_rule("Allow")])
+    cleared, alerts = _call(driver, guard)
+    assert cleared and alerts == [AlertEvent(label="Allow")]  # one dismissal, not three
+    assert guard.blocked_note == ""
+    assert sum(1 for action in driver.actions if action[0] == "handle_system_alert") == 3
+
+
+def test_the_end_of_step_guard_never_retaps_a_label_it_already_cleared_from_the_tree() -> None:
+    # The in-tree twin of the native case above, but closed a different way (BE-0418): a button a
+    # round just tapped successfully stays in the tree (the fake models no removal), so a later
+    # round's match would land on it again — and unlike the native path, re-tapping it risks landing
+    # on an application button the closing sheet has by then revealed, not just the same fading
+    # sheet. `dismiss_from_tree_once`'s own `exclude` withholds a label already cleared this call
+    # from matching again at all, so the tap happens exactly once, not merely reported once.
+    driver = FakeDriver([_button("Not Now")])  # never removed: models a fade past `settle`
+    guard = AlertGuardConfig(rules=[guard_rule("Not Now")])
+    cleared, alerts = _call(driver, guard)
+    assert cleared and alerts == [AlertEvent(label="Not Now")]
+    assert guard.blocked_note == ""
+    assert sum(1 for action in driver.actions if action[0] == "tap") == 1
+
+
+def test_dismiss_from_tree_once_declines_an_excluded_label() -> None:
+    # Direct unit coverage of the `exclude` parameter itself: a button that would otherwise resolve
+    # and tap cleanly is withheld once its label is excluded, exactly as if no rule named it.
+    driver = FakeDriver([_button("Not Now")])
+    guard = AlertGuardConfig(rules=[guard_rule("Not Now")])
+    assert guard.dismiss_from_tree_once(driver, exclude=frozenset({"Not Now"})) is None
+    assert not any(action[0] == "tap" for action in driver.actions)
+
+
+def test_the_end_of_step_guard_reports_two_native_alerts_sharing_a_tap_label() -> None:
+    # BE-0418's own under-reporting risk (Unit 3), reachable through the built-in catalogue itself:
+    # `notifications` and `tracking` both resolve to a `choice: grant` tap of "Allow", so a scenario
+    # declaring both gets two rules whose tap label is identical. Deduplicating a repeat dismissal by
+    # label alone would silently drop the second, genuinely distinct alert — the dedup must key on
+    # the alert's full button set too, not the tapped label in isolation.
+    notifications = ResolvedAlertRule(
+        identifying_labels=frozenset({"Allow", "Don't Allow"}), tap_label="Allow"
+    )
+    tracking = ResolvedAlertRule(
+        identifying_labels=frozenset({"Allow", "Ask App Not to Track"}), tap_label="Allow"
+    )
+
+    def react(d: FakeDriver, kind: str, _arg: object) -> None:
+        if kind == "handle_system_alert":
+            d.system_alert_buttons = [_button("Allow"), _button("Ask App Not to Track")]
+
+    driver = _fake_with_alert(["Allow", "Don't Allow"], react=react)
+    guard = AlertGuardConfig(rules=[notifications, tracking])
+    cleared, alerts = _call(driver, guard)
+    assert cleared
+    assert alerts == [AlertEvent(label="Allow"), AlertEvent(label="Allow")]
+
+
+def test_the_end_of_step_guard_settles_after_the_round_that_exhausts_its_bound() -> None:
+    # Three stacked prompts, each dismissed on its own round, with the third landing right as the
+    # loop's round bound is spent. `settle` must still run after that last round: the caller reads
+    # the screen the instant this call returns, and a still-animating sheet would fail the retry for
+    # a reason that is not the retry's own.
+    labels = ["First", "Second", "Third"]
+
+    def react(d: FakeDriver, kind: str, _arg: object) -> None:
+        if kind == "handle_system_alert" and d.system_alert_buttons:
+            tapped = d.system_alert_buttons[0]["label"]
+            assert tapped is not None
+            remaining = labels[labels.index(tapped) + 1 :]
+            d.system_alert_buttons = [_button(label) for label in remaining]
+
+    driver = _fake_with_alert(labels, react=react)
+    guard = AlertGuardConfig(rules=[guard_rule(label, in_tree=False) for label in labels])
+    settle_calls = 0
+
+    def settle() -> None:
+        nonlocal settle_calls
+        settle_calls += 1
+
+    alerts: list[AlertEvent] = []
+    cleared = guard(driver, alerts, settle=settle)
+    assert cleared
+    assert alerts == [AlertEvent(label=label) for label in labels]
+    assert settle_calls == 3  # once per dismissing round, the bound-exhausting one included
+
+
+def test_the_end_of_step_guard_clears_a_single_alert_with_no_added_latency() -> None:
+    # The regression guard for pre-BE-0418 behavior: one in-tree alert still clears, and nothing
+    # here adds a fixed delay to the common single-alert case — every extra round this loop spends
+    # confirming the screen is clear costs one more in-memory probe, never a sleep.
+    prompt_button = _button("Not Now")
+    driver = FakeDriver([_button("Sign In"), prompt_button], react=_clearing_tree_tap("Not Now"))
+    guard = AlertGuardConfig(rules=[guard_rule("Not Now")])
+    settle_calls = 0
+
+    def settle() -> None:
+        nonlocal settle_calls
+        settle_calls += 1
+
+    alerts: list[AlertEvent] = []
+    cleared = guard(driver, alerts, settle=settle)
+    assert cleared and alerts == [AlertEvent(label="Not Now")]
+    assert settle_calls == 1  # one dismissing round; the next round finds nothing left to settle
 
 
 def test_the_end_of_step_guard_declines_an_ambiguous_in_tree_label() -> None:
@@ -1295,7 +1669,8 @@ def test_the_end_of_step_guard_declines_an_ambiguous_in_tree_label() -> None:
     # not a prompt this guard may guess at. It reports nothing rather than tapping one.
     driver = FakeDriver([_button("Not Now"), _button("Not Now")])
     guard = AlertGuardConfig(rules=[guard_rule("Not Now")])
-    assert guard(driver) is None
+    cleared, _alerts = _call(driver, guard)
+    assert not cleared
     assert not any(action[0] == "tap" for action in driver.actions)
 
 
@@ -1304,7 +1679,8 @@ def test_the_end_of_step_guard_stays_off_the_tree_without_scenario_rules() -> No
     # dismissive defaults — "Cancel" / "Close" are ordinary UI vocabulary a real screen can show.
     driver = FakeDriver([_button("Cancel")])
     guard = AlertGuardConfig()
-    assert guard(driver) is None
+    cleared, _alerts = _call(driver, guard)
+    assert not cleared
     assert not any(action[0] == "tap" for action in driver.actions)
 
 
@@ -1316,7 +1692,8 @@ def test_the_end_of_step_guard_declines_when_an_identified_button_shares_the_lab
     app_button["identifier"] = "screen.home.button.not-now"
     driver = FakeDriver([_button("Not Now"), app_button])
     guard = AlertGuardConfig(rules=[guard_rule("Not Now")])
-    assert guard(driver) is None
+    cleared, _alerts = _call(driver, guard)
+    assert not cleared
     assert not any(action[0] == "tap" for action in driver.actions)
 
 
@@ -1329,7 +1706,8 @@ def test_the_end_of_step_guard_reports_nothing_when_the_prompt_closes_itself() -
 
     driver = _VanishingPrompt([_button("Not Now")])
     guard = AlertGuardConfig(rules=[guard_rule("Not Now")])
-    assert guard(driver) is None
+    cleared, _alerts = _call(driver, guard)
+    assert not cleared
 
 
 def test_a_blocked_tap_names_the_alert_in_the_step_s_own_failure() -> None:
@@ -1391,6 +1769,43 @@ def test_a_blocked_expect_names_the_alert_in_the_scenario_s_own_failure() -> Non
     assert "an unhandled system alert is blocking the screen (buttons: Weird Button)" in (
         result.failure or ""
     )
+
+
+def test_a_note_from_a_cleared_stacked_expect_call_still_reaches_the_scenario_s_own_failure() -> (
+    None
+):
+    # The `expect` twin of `test_a_note_from_a_cleared_stacked_call_still_reaches_the_step_s_own_
+    # failure`: `expect_block_note` must reach the scenario's own failure even though the guard's
+    # call cleared something, since a multi-round call can clear a stacked alert while leaving a
+    # second one unhandled — a regression that re-gates the note on `cleared` would pass every other
+    # `expect` test here (all single-alert) yet silently drop this one's note.
+    from bajutsu.common.orchestrator import run_scenario
+    from bajutsu.common.scenario import load_scenarios
+
+    def react(d: FakeDriver, kind: str, _arg: object) -> None:
+        if kind == "handle_system_alert":
+            d.system_alert_buttons = [_button("Weird Button")]
+
+    # A trivially-passing step (its target is already on screen), so the alert reaches `expect`'s
+    # own guard call untouched — a `wait` step here would let its own mid-wait gate dismiss "Allow"
+    # first, attributing it to the step instead of to `expect`.
+    real_button = _button("Real")
+    real_button["identifier"] = "real"
+    driver = _fake_with_alert(["Allow"], react=react)
+    driver.screen = [real_button]
+    result = run_scenario(
+        driver,
+        load_scenarios(
+            "- name: t\n  steps:\n    - tap: { id: real }\n  expect:\n    - exists: { id: later }\n"
+        )[0],
+        alert_guard=AlertGuardConfig(rules=[guard_rule("Allow")]),
+    )
+    assert not result.ok
+    assert (result.failure or "").startswith("expect: ")
+    assert "an unhandled system alert is blocking the screen (buttons: Weird Button)" in (
+        result.failure or ""
+    )
+    assert result.expect_alerts == [AlertEvent(label="Allow")]  # the first alert did clear
 
 
 def test_a_step_failing_with_no_alert_up_keeps_its_own_bare_reason() -> None:

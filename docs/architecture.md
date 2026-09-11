@@ -724,56 +724,73 @@ Android; on iOS it rests on the fast suite's bookkeeping proof alone.
   inside the driver's own loop nothing else could act, so a declared prompt held the screen for the
   step's whole timeout. The guard is given the step's selector and declines an alert it names, so
   the two never answer the same prompt
-- DSL `systemAlertHandling` (BE-0315), the reactive counterpart: an alert guard that fires only when
-  a step or `wait` is blocked, polling `handleSystemAlert`'s SpringBoard query on its own interval
-  (default 1s, decoupled from the wait's poll cadence) and answering the prompts the scenario's own
-  `rules` name — no model call, reusing BE-0316's plumbing rather than a parallel API. Since
-  BE-0402 the guard is deterministic throughout: where nothing deterministic can act (a backend lacking
-  the capability, an alert no rule identifies, or a non-enumerable blocking
-  surface no rule identifies either — the ones a rule does identify, an
-  in-tree tap takes on) it does nothing, and what it saw rides the failure: a guarded `wait` always
-  carries the note (its gate watches the tree every poll), while a step outside a wait carries it only
-  where the native query enumerated the alert. The note names what the guard saw in its own
-  timeout —
-  `… — an unhandled system alert is blocking the screen (buttons: Allow, Don't Allow)`, or a hedged
-  form where no query enumerated the surface. Before BE-0402 that case fell back to an AI-vision guard
-  reading a screenshot, and `visionInstruction` steered that fallback alone, so `run` now
-  rejects it before any scenario starts rather than ignoring it — the silent inversion BE-0401 split
-  the old single `instruction` key to expose. BE-0406 then made `rules` the guard's whole
-  declaration and removed `labels`: a button label named a button, never the alert it sat on, so it
-  licensed a tap on a screen no scenario had described. `rules` composes across two layers
-  (scenario, then target) by concatenation, innermost-first, and the sole remaining scalar,
-  `pollInterval`, takes the innermost layer that supplies one; no flag carries a prompt paired with
-  a choice legibly, so the command line supplies `pollInterval` alone. A prompt's entry records
-  which of the three answer surfaces it reaches — the `handleSystemAlert` step, the native
-  SpringBoard probe, and the in-tree dismissal — so `savePassword`, which iOS raises inside the
-  application's own process, is declarable as a rule and answered by the in-tree dismissal alone,
-  and the step rejects it at parse time rather than polling an empty button list to its deadline.
-  Both one-shot dismiss sites — the end-of-step dismiss and the `expect` retry — then wait for the
-  screen to stop changing before the retry reads it, bounded at one second and best-effort: a prompt
-  that has been tapped is not yet a prompt that is gone, and without that settle the retry judged a
-  tree mid-animation and could fail for that reason alone. Like the `handleSystemAlert` wait the
-  bullet above moved to the orchestrator, the settle is a condition wait rather than a fixed sleep,
-  and reaching its bound simply proceeds — it never decides a verdict. XCUITest itself
-  intervenes on an alert that interrupts an in-flight interaction *before* this guard ever polls, and
-  left alone answers with the alert's own default button — silently overriding a scenario's policy
-  with nothing in the report. The runner therefore installs an interruption monitor that presses the
-  same rule-named button the reactive guard would, and records what it pressed as an ordinary
-  `AlertEvent`; the orchestrator resolves each rule's labels and pushes them, alongside whether the
-  guard governs the scenario at all, once per scenario over `POST /interruptionPolicy`, dropping a
-  rule this surface can never meet (an in-process prompt never interrupts another process's
-  interaction). A `handleSystemAlert` step's own prompt/choice form is not necessarily among those
-  rules — the step exists precisely for a prompt an author chooses not to declare in
-  `systemAlertHandling` — so while that one step waits the orchestrator pushes one
-  more rule for the step's own target alongside the scenario's, and restores the scenario's own
-  policy once the step returns, fails, or the wait raises. Without it, an earlier action's own
-  interruption could meet that same prompt first, find no matching rule, and fail a step for an
-  alert this one was about to answer. A prompt the policy names no button on is still left
-  to XCUITest's own default
-  handler, unchanged (BE-0399) — nothing here can stop that tap — but since BE-0406 a governing
-  policy records the buttons it declined before doing so, and the step or `expect` that met the
-  interruption fails, naming them, rather than the run continuing as if nothing had answered on the
-  scenario's behalf. On by default, `false` disables it per scenario
+- DSL `systemAlertHandling` (BE-0315), the reactive counterpart: an alert guard that fires only
+  when a step or `wait` is blocked, polling `handleSystemAlert`'s SpringBoard query on its own
+  interval (default 1s, decoupled from the wait's poll cadence) and answering the prompts the
+  scenario's own `rules` name — no model call, reusing BE-0316's plumbing rather than a parallel
+  API. Since BE-0402 the guard is deterministic throughout: where nothing deterministic can act (a
+  backend lacking the capability, an alert no rule identifies, or a non-enumerable blocking surface
+  no rule identifies either — the ones a rule does identify, an in-tree tap takes on) it does
+  nothing, and what it saw rides the failure: a guarded `wait` always carries the note (its gate
+  watches the tree every poll), while a step outside a wait carries it only where the native query
+  enumerated the alert. The note names what the guard saw in its own timeout — `… — an unhandled
+  system alert is blocking the screen (buttons: Allow, Don't Allow)`, or a hedged form where no
+  query enumerated the surface. Before BE-0402 that case fell back to an AI-vision guard reading a
+  screenshot, and `visionInstruction` steered that fallback alone, so `run` now rejects it before
+  any scenario starts rather than ignoring it — the silent inversion BE-0401 split the old single
+  `instruction` key to expose. BE-0406 then made `rules` the guard's whole declaration and removed
+  `labels`: a button label named a button, never the alert it sat on, so it licensed a tap on a
+  screen no scenario had described. `rules` composes across two layers (scenario, then target) by
+  concatenation, innermost-first, and the sole remaining scalar, `pollInterval`, takes the
+  innermost layer that supplies one; no flag carries a prompt paired with a choice legibly, so the
+  command line supplies `pollInterval` alone. A prompt's entry records which of the three answer
+  surfaces it reaches — the `handleSystemAlert` step, the native SpringBoard probe, and the in-tree
+  dismissal — so `savePassword`, which iOS raises inside the application's own process, is
+  declarable as a rule and answered by the in-tree dismissal alone, and the step rejects it at
+  parse time rather than polling an empty button list to its deadline. Both one-shot dismiss sites
+  — the end-of-step dismiss and the `expect` retry — then wait for the screen to stop changing
+  before the retry reads it, bounded at one second and best-effort: a prompt that has been tapped
+  is not yet a prompt that is gone, and without that settle the retry judged a tree mid-animation
+  and could fail for that reason alone. Like the `handleSystemAlert` wait the bullet above moved to
+  the orchestrator, the settle is a condition wait rather than a fixed sleep, and reaching its
+  bound simply proceeds — it never decides a verdict. Since BE-0418 each one-shot call itself
+  loops, up to three rounds, rather than stopping at its first dismissal: a SpringBoard-owned alert
+  queued in front of an app-owned sheet no longer ends the call before the sheet is even read, and
+  a tap that lands on a scrim still mid-animation gets the same bounded retry the mid-wait gate
+  already carries for that race. The settle above runs after every round that dismissed something
+  or found a button not yet tappable, the round that exhausts the bound included, so a caller
+  reading the screen the instant the call returns never reads one still animating. A round that
+  finds nothing left to act on, or an alert no rule identifies, ends the call. A native alert whose
+  fade outlasts that settle still reads back on a later round. Matched against the full button set
+  of every native alert already dismissed this call, it counts as that same dismissal still fading
+  rather than a distinct alert, so the report is not doubled even when a different alert clears in
+  between. A later alert sharing the tapped label alone, not the whole button set (the built-in
+  `notifications` and `tracking` prompts both grant `"Allow"`), still counts as its own. Once a
+  tree-dismissed button clears, the call excludes it from matching again for the rest of its own
+  rounds, so a lingering button there never reaches a second tap that could land on an application
+  button the closing sheet has by then revealed. A button that never becomes reachable within the
+  bound carries its own note, distinct from the one an alert no rule identifies carries, rather
+  than reading as a bare missing element. That note survives a later round that finds nothing to
+  match, or one that goes on to dismiss an unrelated alert on the other surface, rather than either
+  round erasing a real, still-open diagnosis. XCUITest itself intervenes on an alert that
+  interrupts an in-flight interaction *before* this guard ever polls, and left alone answers with
+  the alert's own default button — silently overriding a scenario's policy with nothing in the
+  report. The runner therefore installs an interruption monitor that presses the same rule-named
+  button the reactive guard would, and records what it pressed as an ordinary `AlertEvent`; the
+  orchestrator resolves each rule's labels and pushes them, alongside whether the guard governs the
+  scenario at all, once per scenario over `POST /interruptionPolicy`, dropping a rule this surface
+  can never meet (an in-process prompt never interrupts another process's interaction). A
+  `handleSystemAlert` step's own prompt/choice form is not necessarily among those rules — the step
+  exists precisely for a prompt an author chooses not to declare in `systemAlertHandling` — so
+  while that one step waits the orchestrator pushes one more rule for the step's own target
+  alongside the scenario's, and restores the scenario's own policy once the step returns, fails, or
+  the wait raises. Without it, an earlier action's own interruption could meet that same prompt
+  first, find no matching rule, and fail a step for an alert this one was about to answer. A prompt
+  the policy names no button on is still left to XCUITest's own default handler, unchanged
+  (BE-0399) — nothing here can stop that tap — but since BE-0406 a governing policy records the
+  buttons it declined before doing so, and the step or `expect` that met the interruption fails,
+  naming them, rather than the run continuing as if nothing had answered on the scenario's behalf.
+  On by default, `false` disables it per scenario
 - DSL `iosTipKitHandling` (BE-0389), an opt-in guard for a blocking Apple TipKit tip: TipKit's
   presentation marks the content it covers accessibility-hidden rather than merely occluding it, so a
   blocked tap can fail as `ElementNotFound`, not only `ElementNotTappable`. The XCUITest backend alone

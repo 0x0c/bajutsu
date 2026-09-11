@@ -7,7 +7,7 @@
 |---|---|
 | Proposal | [BE-0418](BE-0418-ios-alert-guard-one-shot-retry.md) |
 | Author | [@0x0c](https://github.com/0x0c) |
-| Status | **Proposal** |
+| Status | **Implemented** |
 | Tracking issue | [Search](https://github.com/bajutsu-e2e/bajutsu/issues?q=is%3Aissue+label%3Aroadmap-tracking+in%3Atitle+"BE-0418") |
 | Topic | Platform support |
 | Related | [BE-0269](../BE-0269-ios-alert-guard-early-wait-intervention/BE-0269-ios-alert-guard-early-wait-intervention.md), [BE-0315](../BE-0315-ios-native-system-alert-handling/BE-0315-ios-native-system-alert-handling.md), [BE-0399](../BE-0399-ios-system-alert-interruption-policy/BE-0399-ios-system-alert-interruption-policy.md), [BE-0402](../BE-0402-run-alert-guard-drop-vision-fallback/BE-0402-run-alert-guard-drop-vision-fallback.md), [BE-0406](../BE-0406-system-alert-declared-prompts/BE-0406-system-alert-declared-prompts.md) |
@@ -228,11 +228,27 @@ larger proposal. It would need to revisit BE-0402's own reasoning first.
 > *Detailed design* (one box per unit of work); the log records what changed and when
 > (oldest first), linking the PRs.
 
-- [ ] Not yet started.
+- [x] Unit 1 — loop `AlertGuardConfig.__call__` until the screen clears or a bound is reached
+- [x] Unit 2 — give the in-tree tap the same landing-race retry the mid-wait path already has
+- [x] Unit 3 — change `__call__`'s contract to report every alert it clears
+- [x] Unit 4 — tests
+- [x] Unit 5 — documentation
 
 Log:
 
-None yet.
+- Implemented all five units. `AlertGuardConfig.__call__` loops up to `_GUARD_CALL_MAX_ROUNDS`
+  (3), appending every dismissed `AlertEvent` into a caller-supplied list and returning whether
+  anything cleared; `dismiss_from_tree_once` gained a `NotTappable` outcome and an `exclude`
+  parameter for the round-bounded landing-race retry; both call sites
+  (`loop/_step_runner.py`, `loop/_functions.py`) moved to the new
+  `(driver, alerts, *, settle) -> bool` contract, gating their note-append on the note alone
+  rather than on whether the call cleared anything. `docs/architecture.md` and its Japanese
+  mirror describe the new multi-round behavior. The fast suite covers the stacked-alert,
+  landing-race, permanently-obstructed, and settle-on-exhaustion cases the design calls for,
+  plus two dedup edge cases surfaced during self-review: a native alert reappearing after a
+  distinct one clears in between (the dedup must remember every dismissal this call, not only
+  the round right before it), and a tree diagnosis that must survive an unrelated native
+  dismissal on the other surface rather than being silently erased.
 
 ## References
 
