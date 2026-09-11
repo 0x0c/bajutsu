@@ -817,6 +817,11 @@ Android; on iOS it rests on the fast suite's bookkeeping proof alone.
   (or hasn't yet transitioned) gets the unchanged tree-diff behavior on both. Fast-gate tested with a fake signal source; on-device confirmation
   across UIKit and SwiftUI is this item's own gate, tracked in
   [`demos/showcase/BE-0310-screen-transition-verification.md`](../demos/showcase/BE-0310-screen-transition-verification.md).
+- `bajutsu run --trace-driver` (BE-0415), off by default: per-scenario driver-call tracing —
+  every Python↔driver call (`driver`), each host-device round trip inside it (`transport`, plus
+  an Android `subprocess` fallback), with timing and step/attempt attribution — into
+  `driver_trace.json` next to that scenario's other evidence; diagnostic only, like
+  `--score`/`--zip`, and out of scope for the web (Playwright) backend
 - Reporting (`manifest.json` / `junit.xml` / `ctrf.json` / `report.html`)
 - Config resolution (defaults × targets, redact merge) and actuator selection
 - The `simctl` command layer · the XCUITest automation-snapshot parser · the `doctor` score + per-backend runnability
