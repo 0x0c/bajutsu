@@ -124,6 +124,16 @@ class _AlertGuardGate:
         if self._last_native is None or now - self._last_native >= self.guard.poll_interval:
             self._last_native = now
             state, event, buttons = self.guard.probe_native(self.driver, self.reserved)
+            # `dismissed` is never passed here, unlike `AlertGuardConfig.__call__`'s own loop
+            # (BE-0418) -- this poll never accumulates state across calls, so `_resolve_alert_rule`'s
+            # subset-based retry (the only path that can return `None`) never runs, and
+            # `probe_native` can never report "already_dismissed" from this call site. Asserted
+            # rather than left to fall through: every branch below still tests the five states that
+            # predate BE-0418's sixth by equality, not a `match` or `assert_never`, so a later change
+            # threading real `dismissed` state through this poll -- this gate faces the identical
+            # lingering-fade race `__call__` already handles -- would otherwise have the new state
+            # silently read as "nothing is blocking" here (review finding).
+            assert state != "already_dismissed"
             probed_absent = state == "absent"
             self._native_unhandled = state == "unhandled"
             self._native_reserved = state == "reserved"

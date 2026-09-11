@@ -871,6 +871,35 @@ def test_wait_guard_debounces_a_transient_collapse() -> None:
     assert ok and reason == ""
 
 
+def test_wait_guard_asserts_probe_native_never_reports_already_dismissed() -> None:
+    # BE-0418 added a sixth `NativeAlertState` member, but this poll never passes `dismissed` --
+    # unlike `AlertGuardConfig.__call__`'s own round loop -- so `_resolve_alert_rule`'s subset-based
+    # retry (the only path that can return `None`) never runs, and `probe_native` can never actually
+    # report "already_dismissed" here. The rest of `_observe_native` still tests the five states
+    # that predate it by equality, not a `match` or `assert_never`, so a state reaching here it does
+    # not recognize would otherwise read silently as "nothing is blocking" (review finding) --
+    # asserted instead, so a future change that starts threading real `dismissed` state through this
+    # poll fails loudly the moment it does, rather than corrupting `blocked_note` silently.
+    from bajutsu.common.orchestrator.types import AlertEvent, NativeAlertState
+    from bajutsu.common.orchestrator.waits import _AlertGuardGate
+
+    class _AlwaysAlreadyDismissed(AlertGuardConfig):
+        def probe_native(
+            self,
+            driver: base.Driver,
+            reserved: base.Selector | None = None,
+            *,
+            dismissed: frozenset[frozenset[str]] = frozenset(),
+        ) -> tuple[NativeAlertState, AlertEvent | None, list[str]]:
+            return "already_dismissed", None, []
+
+    gate = _AlertGuardGate(
+        driver=FakeDriver([]), clock=_LogicalClock(), guard=_AlwaysAlreadyDismissed(), alerts=[]
+    )
+    with pytest.raises(AssertionError):
+        gate.observe([])
+
+
 def test_wait_guard_reports_a_persistent_collapse_it_cannot_clear() -> None:
     """BE-0402: on a backend with no native path, a persistently collapsed screen is not something
     the guard will act on — it neither guesses nor calls a model. What it does instead is refuse to

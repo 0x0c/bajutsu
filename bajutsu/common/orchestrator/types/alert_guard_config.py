@@ -232,11 +232,19 @@ class AlertGuardConfig:
         would have `_resolve_alert_rule` return `None` right where a caller asserts it cannot,
         turning a merely failed step into an aborted scenario.
 
-        Sorted widest shape first, unlike `tree_rules` above: nothing outside this file reads
-        `native_rules`, so widening the order here to serve `_resolve_alert_rule`'s subset test
-        (see `_widest_first` below) carries none of that property's risk to an unrelated consumer.
+        In declaration order, like `tree_rules` above and for the identical reason (BE-0418 review
+        finding): `probe_native`'s own state depends on `matching_alert_rule(native_rules,
+        buttons)`, first-match-in-list-order, and `_AlertGuardGate._observe_native`
+        (`waits/_alert_guard_gate.py`) calls `probe_native` directly, with no `dismissed` of its
+        own to accumulate — so sorting this property would reach that unrelated consumer through
+        `probe_native`'s own resolution, not merely through a direct read of the property itself.
+        No currently declared native shape nests inside another (`notifications` grants "Allow" /
+        "Don't Allow", `tracking` "Allow" / "Ask App Not to Track", `paste` "Allow Paste" / "Don't
+        Allow Paste" — every one exactly two labels, none a subset of another), so
+        `_resolve_alert_rule`'s subset test has nothing to misorder yet; the tree side's
+        `_widest_first` exists only because `savePassword` already does nest today.
         """
-        return _widest_first(rule for rule in self.rules if rule.native)
+        return [rule for rule in self.rules if rule.native]
 
     def probe_native(
         self,
