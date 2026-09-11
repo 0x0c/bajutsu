@@ -381,6 +381,14 @@ class AlertGuardConfig:
         stuck_tree_label: str | None = None
         dismissed_native: frozenset[frozenset[str]] = frozenset()
         dismissed_tree_shapes: frozenset[frozenset[str]] = frozenset()
+        # The round a native shape was last freshly tapped, the shape itself, and how many rounds
+        # since have declined *that same shape* again — not `round_index` itself: a round of any
+        # other kind (an "unhandled" collision, an "absent" round the tree answers) sits between
+        # the dismissal and today's decline just as easily as another decline does, and counting
+        # position in the call rather than declines of the tapped shape would misread that gap as
+        # a broken streak (BE-0418 review finding).
+        native_dismiss_round: int | None = None
+        native_dismiss_shape: frozenset[str] | None = None
         native_declines = 0
         for round_index in range(_GUARD_CALL_MAX_ROUNDS):
             state, event, buttons = self.probe_native(driver, dismissed=dismissed_native)
@@ -395,6 +403,11 @@ class AlertGuardConfig:
                 rule = _resolve_alert_rule(self.native_rules, buttons, dismissed_native)
                 assert rule is not None  # the round that just dismissed this alert matched it
                 dismissed_native |= {rule.identifying_labels}
+                # A fresh tap, of any shape, restarts the consecutive-decline count: whatever
+                # streak an earlier shape had going says nothing about this one.
+                native_dismiss_round = round_index
+                native_dismiss_shape = rule.identifying_labels
+                native_declines = 0
                 cleared = True
                 if stuck_tree_label is None:
                     note = ""
@@ -407,7 +420,16 @@ class AlertGuardConfig:
                 # this returns, and letting the fade run down here is what lets a later round
                 # reach "absent" — and any app-owned sheet stacked underneath — instead of
                 # spending the whole bound re-reading the same alert.
-                native_declines += 1
+                #
+                # Re-resolves the plain match (ignoring `dismissed_native`) to learn which shape is
+                # lingering this round: only a round that re-observes the *most recently tapped*
+                # shape counts toward its streak. A round re-observing some *earlier* dismissal
+                # instead (BE-0418's own A-then-B-then-A case) leaves the count exactly where it
+                # was, so the gap this round should have closed stays open and the streak can never
+                # re-equal `round_index` again for the rest of this call — no explicit reset needed.
+                plain_rule = matching_alert_rule(self.native_rules, buttons)
+                if plain_rule is not None and plain_rule.identifying_labels == native_dismiss_shape:
+                    native_declines += 1
                 if stuck_tree_label is None:
                     # `buttons` is the whole enumerable SpringBoard surface, not this one rule's
                     # own set, so declining a re-tap here does not mean nothing else is up: a
@@ -422,20 +444,23 @@ class AlertGuardConfig:
                     if leftover:
                         note = alert_block_note(leftover)
                     elif (
-                        round_index == _GUARD_CALL_MAX_ROUNDS - 1 and native_declines == round_index
+                        round_index == _GUARD_CALL_MAX_ROUNDS - 1
+                        and native_dismiss_round is not None
+                        and round_index - native_dismiss_round == native_declines
                     ):
-                        # The bound is spent and every round since the dismissal has declined the
-                        # same shape, with no other alert tapped in between: three consecutive
-                        # reads of a live, policy-named alert is evidence the tap never actually
-                        # landed, not that its dismiss animation is merely still playing out. A
-                        # decline count short of `round_index` means a *different* alert was tapped
-                        # partway through instead (BE-0418's own stacked case), and the shape now
-                        # reappearing is one round's fade, not three — naming it here would send a
-                        # call that cleared everything anyway to report itself uncleared. Named the
-                        # same way the in-tree branch below already names an unlanded tap.
-                        rule = matching_alert_rule(self.native_rules, buttons)
-                        assert rule is not None  # "already_dismissed" only follows a plain match
-                        note = uncleared_prompt_note(rule.tap_label)
+                        # The bound is spent and every round since the most recent tap has declined
+                        # that same shape again: three consecutive reads of a live, policy-named
+                        # alert is evidence the tap never actually landed, not that its dismiss
+                        # animation is merely still playing out — nor that a round of some other
+                        # kind (an "unhandled" collision, an "absent" the tree answered) sat between
+                        # the tap and now, which would leave the gap short of `native_declines` and
+                        # this branch unreached. A call that cleared everything anyway never reaches
+                        # here, since a later round tapping a *different* shape restarts the count
+                        # above. Named the same way the in-tree branch below already names an
+                        # unlanded tap.
+                        assert plain_rule is not None  # the streak just closed on this round's own
+                        # plain match, per the note above — it cannot have closed on an earlier one
+                        note = uncleared_prompt_note(plain_rule.tap_label)
                     else:
                         note = ""
                 settle()

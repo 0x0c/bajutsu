@@ -1768,6 +1768,32 @@ def test_the_end_of_step_guard_never_retaps_a_native_alert_it_already_dismissed(
     assert settle_calls == 3
 
 
+def test_the_end_of_step_guard_reports_a_native_alert_uncleared_after_a_leading_unhandled_round() -> (
+    None
+):
+    # `native_declines == round_index` measured position in the call, not declines since the
+    # dismissal: a round of any other kind before the tap -- an "unhandled" label collision here,
+    # BE-0418's own flagship case -- permanently left the decline count behind `round_index`, so a
+    # genuinely stuck alert preceded by one such round was never reported (review finding).
+    rule = ResolvedAlertRule(
+        identifying_labels=frozenset({"Allow", "Don't Allow"}), tap_label="Allow"
+    )
+    driver = _fake_with_alert(["Allow", "Allow", "Don't Allow"])  # round 0: a bare label collision
+    settle_count = 0
+
+    def settle() -> None:
+        nonlocal settle_count
+        settle_count += 1
+        if settle_count == 1:
+            driver.system_alert_buttons = [_button("Allow"), _button("Don't Allow")]  # resolves
+
+    guard = AlertGuardConfig(rules=[rule])
+    alerts: list[AlertEvent] = []
+    cleared = guard(driver, alerts, settle=settle)
+    assert cleared and alerts == [AlertEvent(label="Allow")]  # tapped once, on round 1
+    assert guard.blocked_note == uncleared_prompt_note("Allow")
+
+
 def test_the_end_of_step_guard_clears_a_native_leftover_note_once_the_surface_reads_absent() -> (
     None
 ):

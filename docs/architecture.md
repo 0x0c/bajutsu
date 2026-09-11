@@ -799,13 +799,13 @@ Android; on iOS it rests on the fast suite's bookkeeping proof alone.
   thing on the surface as the bound is spent: three consecutive reads of a live, policy-named alert
   is evidence the tap never landed, not that its dismiss animation is merely still playing out. The
   tree note survives a later round that finds nothing to match, or one that goes on to dismiss an
-  unrelated alert on the other surface, rather than either round erasing a real, still-open
-  diagnosis. A native leftover note does not survive that same kind of later round, though: once
-  its own probe proves the surface absent, that is a deterministic fact the diagnosis cannot
-  outlive. XCUITest itself intervenes on an alert that interrupts an in-flight interaction *before*
-  this guard ever polls, and left alone answers with the alert's own default button — silently
-  overriding a scenario's policy with nothing in the report. The runner therefore installs an
-  interruption monitor that presses the same rule-named button the reactive guard would, and
+  unrelated alert on either surface — native or in-tree — rather than either round erasing a real,
+  still-open diagnosis. A native leftover note does not survive that same kind of later round,
+  though: once its own probe proves the surface absent, that is a deterministic fact the diagnosis
+  cannot outlive. XCUITest itself intervenes on an alert that interrupts an in-flight interaction
+  *before* this guard ever polls, and left alone answers with the alert's own default button —
+  silently overriding a scenario's policy with nothing in the report. The runner therefore installs
+  an interruption monitor that presses the same rule-named button the reactive guard would, and
   records what it pressed as an ordinary `AlertEvent`; the orchestrator resolves each rule's labels
   and pushes them, alongside whether the guard governs the scenario at all, once per scenario over
   `POST /interruptionPolicy`, dropping a rule this surface can never meet (an in-process prompt
