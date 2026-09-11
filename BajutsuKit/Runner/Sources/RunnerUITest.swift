@@ -154,9 +154,12 @@ final class RunnerUITest: XCTestCase {
     /// shade down instead of dismissing the banner.
     private static let bannerSwipeTopMargin: CGFloat = 8
 
-    /// A flick, not the slow drag `scroll` uses: a banner is dismissed by velocity, and the
-    /// non-inertial press duration the scroll path deliberately picks (BE-0326) would drag the
-    /// banner and let it spring back.
+    /// How long the gesture presses before it starts travelling — half the `swipe` path's own 0.1s,
+    /// so the drag reads as a dismissal rather than a long press. It is not what makes the gesture a
+    /// flick: `press(forDuration:thenDragTo:)` takes no velocity, so the traversal runs at XCUITest's
+    /// `.default` speed either way. The knob that would change that is `withVelocity:`, which `scroll`
+    /// passes precisely because it is "the whole of what makes the gesture non-inertial"
+    /// (`XcuitestElementProvider.scrollVelocity`, BE-0400).
     private static let bannerSwipePressDuration: TimeInterval = 0.05
 
     /// How long the swipe's clearance is re-checked before it counts as unconfirmed. A deadline, not

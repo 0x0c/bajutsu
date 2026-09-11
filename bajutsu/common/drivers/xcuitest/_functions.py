@@ -160,10 +160,13 @@ def _string_list(value: object) -> list[str]:
 def _parse_drain_fold(raw: bytes | None) -> base.DrainedInterruptions:
     """Read `labels`/`unmatched`/`banners` off a reply body, empty for any that is absent or unparseable.
 
-    For the standalone `/interruptionPolicy/drain` reply, whose schema requires all three, so
-    "absent" only ever means a body-less or malformed reply — never a meaningful distinction from
-    "present but empty". `_parse_tap_drain_fold` is the sibling reader for a `/tap` reply, where that
-    distinction *is* meaningful (BE-0407 Unit 6) and is not safe to collapse the same way.
+    For the standalone `/interruptionPolicy/drain` reply. Its schema has always required
+    `labels`/`unmatched`, so for those "absent" only ever means a body-less or malformed reply — never
+    a meaningful distinction from "present but empty". `banners` (BE-0416) collapses the same way for
+    a different reason, given at the fold below: a runner predating it legitimately omits the field,
+    so this reader must not be tightened into rejecting or warning on its absence.
+    `_parse_tap_drain_fold` is the sibling reader for a `/tap` reply, where that distinction *is*
+    meaningful (BE-0407 Unit 6) and is not safe to collapse the same way.
     """
     if not raw:
         return base.DrainedInterruptions.empty()

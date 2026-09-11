@@ -540,8 +540,8 @@ components:
           type: array
           description: >-
             The notification text of each foreground banner the monitor swiped away since the last
-            drain, oldest first (BE-0416). A banner is answered whether or not `governs` is set: it
-            carries no button for a rule to identify, and it interrupts every backend the same way.
+            drain, oldest first (BE-0416). A banner is answered whether or not `governs` is set,
+            since it carries no button for a rule to identify.
           items:
             type: string
     EmptyRequest:
