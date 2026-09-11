@@ -1362,10 +1362,10 @@ def test_the_end_of_step_guard_clears_a_native_alert_stacked_in_front_of_an_in_t
 def test_the_end_of_step_guard_leaves_the_tree_alone_while_a_springboard_alert_is_up() -> None:
     # The same licence the mid-wait gate needs: XCUITest answers an interrupting out-of-process alert
     # before it synthesizes any element interaction, so an app tap issued while one is up is not this
-    # guard's to make. Round 1's native probe reports "unhandled" (no rule identifies the alert) and
-    # ends the call there — it never reaches "absent", the one answer that licenses the tree — so a
-    # same-labelled in-tree button underneath is never touched. Round 2 never runs at all: "unhandled"
-    # is one of the terminal outcomes `__call__` breaks on, not one it loops past.
+    # guard's to make. Every round's native probe reports "unhandled" (no rule identifies the alert),
+    # and none of them reaches "absent" — the one answer that licenses the tree — so the same-labelled
+    # in-tree button underneath is never touched on any of them. "unhandled" settles and runs another
+    # round rather than ending the call (BE-0418), so the whole bound is spent declining alike.
     driver = _fake_with_alert(["Weird Button"])  # up, and no rule identifies it
     driver.screen = [_button("Not Now")]
     guard = AlertGuardConfig(rules=[guard_rule("Not Now")])
@@ -1434,6 +1434,38 @@ def test_the_end_of_step_guard_recovers_the_stacked_case_when_labels_collide_mid
     assert guard.blocked_note == ""
 
 
+def test_the_end_of_step_guard_filters_the_unhandled_note_when_the_collision_never_resolves() -> (
+    None
+):
+    # Direct coverage of the `"unhandled"` branch's own leftover filter surviving to the call's
+    # final note: unlike the recovery case above, this collision never drains, so the filtered note
+    # from the last round is what `blocked_note` ends up holding, and it must not re-name the
+    # already-answered `notifications` alert alongside the genuinely unhandled `tracking` one.
+    notifications = ResolvedAlertRule(
+        identifying_labels=frozenset({"Allow", "Don't Allow"}), tap_label="Allow"
+    )
+    tracking = ResolvedAlertRule(
+        identifying_labels=frozenset({"Allow", "Ask App Not to Track"}), tap_label="Allow"
+    )
+    driver = _fake_with_alert(["Allow", "Don't Allow"])
+
+    def settle() -> None:
+        # The collision persists for the rest of the call: notifications' fade never drains.
+        driver.system_alert_buttons = [
+            _button("Allow"),
+            _button("Don't Allow"),
+            _button("Allow"),
+            _button("Ask App Not to Track"),
+        ]
+
+    guard = AlertGuardConfig(rules=[notifications, tracking])
+    alerts: list[AlertEvent] = []
+    cleared = guard(driver, alerts, settle=settle)
+    assert cleared and alerts == [AlertEvent(label="Allow")]  # only notifications ever tapped
+    assert "Ask App Not to Track" in guard.blocked_note
+    assert "Allow" not in guard.blocked_note and "Don't Allow" not in guard.blocked_note
+
+
 def test_the_end_of_step_guard_keeps_a_pending_tree_note_through_a_later_unhandled_round() -> None:
     # The `"unhandled"` branch's own note computation must defer to a pending tree diagnosis the
     # same way `already_dismissed` and the tree-lingering branch already do: a native alert that
@@ -1457,6 +1489,42 @@ def test_the_end_of_step_guard_keeps_a_pending_tree_note_through_a_later_unhandl
     assert not cleared and alerts == []
     assert "Not Now" in guard.blocked_note  # the tree diagnosis, not the later native one
     assert "Weird Button" not in guard.blocked_note
+
+
+def test_the_end_of_step_guard_keeps_a_stuck_tree_note_after_a_different_tree_tap_lands() -> None:
+    # The bool `tree_note_pending` used to be, protects a pending `NotTappable` diagnosis from a
+    # later *native* dismissal, but a later round that dismisses a different, unrelated in-tree
+    # prompt is not evidence the stuck one became tappable — that requires the same label to land
+    # (BE-0418 review finding).
+    stuck = ResolvedAlertRule(
+        identifying_labels=frozenset({"StuckBtn"}), tap_label="StuckBtn", native=False, in_tree=True
+    )
+    other = ResolvedAlertRule(
+        identifying_labels=frozenset({"OtherBtn"}), tap_label="OtherBtn", native=False, in_tree=True
+    )
+
+    class _OneButtonNeverLands(FakeDriver):
+        def tap(self, sel: base.Selector) -> None:
+            if isinstance(sel, dict) and sel.get("label") == "StuckBtn":
+                raise base.ElementNotTappable("StuckBtn's scrim never lifts")
+            super().tap(sel)
+
+    driver = _OneButtonNeverLands([_button("StuckBtn")])
+    settle_count = 0
+
+    def settle() -> None:
+        nonlocal settle_count
+        settle_count += 1
+        if settle_count == 1:
+            # StuckBtn is still unlanded and lingering; a second, unrelated prompt has now raised.
+            driver.screen = [_button("StuckBtn"), _button("OtherBtn")]
+
+    guard = AlertGuardConfig(rules=[other, stuck])  # `other` first, so it matches first once up
+    alerts: list[AlertEvent] = []
+    cleared = guard(driver, alerts, settle=settle)
+    assert cleared and alerts == [AlertEvent(label="OtherBtn")]
+    # StuckBtn's own diagnosis must survive OtherBtn's unrelated success.
+    assert "StuckBtn" in guard.blocked_note
 
 
 def test_a_note_from_a_cleared_stacked_call_does_not_survive_a_retry_that_passes() -> None:
@@ -1759,6 +1827,10 @@ def test_the_end_of_step_guard_does_not_retap_a_fading_alert_when_another_one_jo
     # it (BE-0418): the eventual failure still needs to name it, the same as a fresh "unhandled".
     assert "an unhandled system alert is blocking the screen" in guard.blocked_note
     assert "OK" in guard.blocked_note and "Cancel" in guard.blocked_note
+    # ...and *only* those: the already-answered labels are filtered out of the note, so it never
+    # re-names the alert this call just cleared. Without this the unfiltered `alert_block_note(
+    # buttons)` passes every assertion above, on this branch and on the `"unhandled"` one alike.
+    assert "Allow" not in guard.blocked_note and "Don't Allow" not in guard.blocked_note
 
 
 def test_the_end_of_step_guard_keeps_a_pending_tree_note_through_a_repeated_native_alert() -> None:

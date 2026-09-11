@@ -375,7 +375,10 @@ class AlertGuardConfig:
         """
         cleared = False
         note = ""
-        tree_note_pending = False
+        # The tap label a tree round could not land, naming which stuck diagnosis is still open —
+        # not a bare bool: a later round tapping a *different* in-tree prompt must not clear a
+        # still-open diagnosis for one that never became tappable (BE-0418 review finding).
+        stuck_tree_label: str | None = None
         dismissed_native: frozenset[frozenset[str]] = frozenset()
         dismissed_tree_shapes: frozenset[frozenset[str]] = frozenset()
         native_declines = 0
@@ -393,7 +396,7 @@ class AlertGuardConfig:
                 assert rule is not None  # the round that just dismissed this alert matched it
                 dismissed_native |= {rule.identifying_labels}
                 cleared = True
-                if not tree_note_pending:
+                if stuck_tree_label is None:
                     note = ""
                 settle()
                 continue
@@ -405,7 +408,7 @@ class AlertGuardConfig:
                 # reach "absent" — and any app-owned sheet stacked underneath — instead of
                 # spending the whole bound re-reading the same alert.
                 native_declines += 1
-                if not tree_note_pending:
+                if stuck_tree_label is None:
                     # `buttons` is the whole enumerable SpringBoard surface, not this one rule's
                     # own set, so declining a re-tap here does not mean nothing else is up: a
                     # second, still-live alert no rule identifies can sit right alongside it. Only
@@ -452,13 +455,20 @@ class AlertGuardConfig:
                     assert rule is not None  # the round that just dismissed this alert matched it
                     dismissed_tree_shapes |= {rule.identifying_labels}
                     cleared = True
-                    note = ""
-                    tree_note_pending = False
+                    # No stuck diagnosis means whatever `note` holds is stale regardless — a native
+                    # leftover note this round's own "absent" probe already disproves, say — so it
+                    # clears unconditionally. One that names *this* label clears too: the prompt it
+                    # was stuck on finally landed. One naming a *different* label survives: this
+                    # round dismissed an unrelated in-tree prompt, which says nothing about whether
+                    # the stuck one is still stuck (BE-0418 review finding).
+                    if stuck_tree_label is None or tree_result.label == stuck_tree_label:
+                        note = ""
+                        stuck_tree_label = None
                     settle()
                     continue
                 if isinstance(tree_result, NotTappable):
                     note = uncleared_prompt_note(tree_result.label)
-                    tree_note_pending = True
+                    stuck_tree_label = tree_result.label
                     settle()
                     continue
                 # Nothing not-yet-excluded matched. A shape this call already cleared, still
@@ -476,7 +486,7 @@ class AlertGuardConfig:
                 # A native one is not: this round's probe answered "absent", a deterministic
                 # no-SpringBoard-alert fact, so an `already_dismissed` round's leftover note would
                 # otherwise name an alert this call has since watched go away.
-                if not tree_note_pending:
+                if stuck_tree_label is None:
                     note = ""
                 break
             if state == "unhandled":
@@ -491,7 +501,7 @@ class AlertGuardConfig:
                 # already cleared. Settling and giving the fade another round, rather than ending
                 # the call, is that same branch's other half: once the answered alert's fade
                 # drains, the live one reads uniquely and resolves on a later round of its own.
-                if not tree_note_pending:
+                if stuck_tree_label is None:
                     answered = {label for labels in dismissed_native for label in labels}
                     leftover = [b for b in buttons if b not in answered]
                     note = alert_block_note(leftover) if leftover else ""
