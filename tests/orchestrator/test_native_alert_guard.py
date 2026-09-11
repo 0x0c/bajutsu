@@ -1698,6 +1698,58 @@ def test_the_end_of_step_guard_never_retaps_a_label_it_already_cleared_from_the_
     assert sum(1 for action in driver.actions if action[0] == "tap") == 1
 
 
+def test_dismiss_from_tree_once_does_not_promote_a_shadowed_choice_for_the_same_alert() -> None:
+    # Two rules can share one alert's shape (`identifying_labels`) under different `tap_label`s —
+    # a scenario's `choice` overriding a target's for the same prompt (BE-0177). Filtering the
+    # candidate rules by `tap_label` before matching would drop only the already-tapped rule and
+    # promote its sibling, matching the very same alert and tapping the opposite button on it.
+    deny = ResolvedAlertRule(
+        identifying_labels=frozenset({"Save", "Not Now"}),
+        tap_label="Not Now",
+        native=False,
+        in_tree=True,
+    )
+    grant = ResolvedAlertRule(
+        identifying_labels=frozenset({"Save", "Not Now"}),
+        tap_label="Save",
+        native=False,
+        in_tree=True,
+    )
+    driver = FakeDriver([_button("Save"), _button("Not Now")])  # never removed: models a fade
+    guard = AlertGuardConfig(rules=[deny, grant])
+    cleared, alerts = _call(driver, guard)
+    assert cleared and alerts == [AlertEvent(label="Not Now")]  # the scenario's own choice, once
+    assert sum(1 for a in driver.actions if a[0] == "tap") == 1
+
+
+def test_the_end_of_step_guard_finds_a_stacked_alert_behind_a_fading_first_match() -> None:
+    # `already_dismissed` must not end the round the instant the plain first match is one this
+    # call already answered: a real, not-yet-answered alert can be enumerable right alongside that
+    # fade (BE-0418's own stacked case), and `matching_alert_rule` always returns the first
+    # candidate in list order, so the lingering alert being listed first must not hide a second,
+    # disjoint one behind it.
+    notifications = ResolvedAlertRule(
+        identifying_labels=frozenset({"Allow", "Don't Allow"}), tap_label="Allow"
+    )
+    second = ResolvedAlertRule(identifying_labels=frozenset({"OK", "Cancel"}), tap_label="OK")
+
+    def react(d: FakeDriver, kind: str, _arg: object) -> None:
+        if kind == "handle_system_alert":
+            d.system_alert_buttons = [
+                _button("Allow"),
+                _button("Don't Allow"),
+                _button("OK"),
+                _button("Cancel"),
+            ]
+
+    driver = _fake_with_alert(["Allow", "Don't Allow"], react=react)
+    guard = AlertGuardConfig(rules=[notifications, second])
+    cleared, alerts = _call(driver, guard)
+    assert cleared
+    assert alerts == [AlertEvent(label="Allow"), AlertEvent(label="OK")]
+    assert guard.blocked_note == ""  # both alerts accounted for; nothing left over
+
+
 def test_dismiss_from_tree_once_declines_an_excluded_label() -> None:
     # Direct unit coverage of the `exclude` parameter itself: a button that would otherwise resolve
     # and tap cleanly is withheld once its label is excluded, exactly as if no rule named it.
