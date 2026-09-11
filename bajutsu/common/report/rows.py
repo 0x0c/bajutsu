@@ -375,8 +375,8 @@ def _merged_rows(
     Steps and exchanges both record absolute wall-clock instants, so the recording-relative seconds
     the timeline sorts and displays on are derived here, once, against `r.video_anchor_s` (BE-0348).
 
-    `step_lines[i]`, when given, is step *i*'s original line number in the scenario file (BE-xxxx);
-    it is looked up positionally, same as `plan[i]`.
+    `step_lines[i]`, when given, is step *i*'s original line number in the scenario file; it is
+    looked up positionally, same as `plan[i]`.
 
     Not-run steps trail at the end in plan order.
     """

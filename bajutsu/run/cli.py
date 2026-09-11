@@ -171,7 +171,7 @@ def _expand_file(
     file's refs local. Component and data refs are confined to *root* (the suite dir, or the file's
     own dir for a single-file run), so a scenario cannot read outside its suite (BE-0174). Returns
     the expanded scenarios, the file-level description, and — keyed by each *expanded* scenario's
-    declared name (BE-xxxx) — its report plan source: the scenario's own verbatim YAML as authored
+    declared name — its report plan source: the scenario's own verbatim YAML as authored
     in *path*, and its steps' original line numbers there. A scenario whose setup/component
     expansion changed its step count keeps the verbatim text but drops its line numbers, since a
     wrong line would be worse than none. A data-driven scenario (`data`/`dataFile`) drops the
@@ -222,18 +222,20 @@ def _expand_file(
     except (OSError, ValueError) as e:
         typer.echo(f"data の展開に失敗: {e}")
         raise typer.Exit(2) from None
-    # Every scenario here derives from `scenario_file.scenarios` — the same objects, mutated in
-    # place, for the setup/component path; a fresh one keeping the base's name (`declared_name`) for
-    # a data row — so `base_name` is always a `plan_by_name` key; a miss would be this function's own
-    # bug, not a malformed scenario file, so it fails loudly rather than silently dropping the plan.
     plan_sources: dict[str, ScenarioPlanSource] = {}
     for s in scenarios:
         base_name = declared_name(s.name)
-        plan = plan_by_name[base_name]
+        plan = plan_by_name.get(base_name)
+        if plan is None:
+            # `declared_name` strips a `[row N]`-shaped suffix unconditionally, so a scenario
+            # authored with a literal name that happens to match it (not one `expand_data` added)
+            # strips to a name `plan_by_name` never had. That is a valid scenario file, not a bug
+            # here, so this scenario simply gets no recovered plan rather than crashing the run.
+            continue
         # `apply_setups`/`expand_components` mutate `Scenario.steps` in place, so a changed count
         # against the pre-expansion snapshot means this scenario's line numbers no longer line up
         # with its executed steps (data-row expansion never changes the count, so a row keeps them).
-        if pre_step_counts[base_name] != len(s.steps):
+        if pre_step_counts.get(base_name) != len(s.steps):
             plan = ScenarioPlanSource(file_name=plan.file_name, text=plan.text, step_lines=[])
         plan_sources[base_name] = plan
     return scenarios, scenario_file.description, plan_sources
@@ -304,7 +306,7 @@ def _load_scenarios(
     Each file's setup/component/data refs resolve relative to its own directory, then the expanded
     scenarios concatenate into one run. Returns the scenarios, the single-file description (None for
     a multi-file or directory run), the report's source label, the source files, and every
-    scenario's report plan source (BE-xxxx) — see `_expand_file`.
+    scenario's report plan source — see `_expand_file`.
     """
     files, single = _scenario_files(eff, scenario, target_name)
     # The containment root for refs (BE-0174): the single file's own directory for a lone `--scenario`
@@ -319,12 +321,20 @@ def _load_scenarios(
     scenarios: list[Scenario] = []
     description: str | None = None
     plan_sources: dict[str, ScenarioPlanSource] = {}
+    # Two files can declare the same scenario name — nothing upstream enforces uniqueness across
+    # files, only within one (`_expand_file`'s own dict). `plan_sources` is keyed by that name, so a
+    # collision here cannot tell the two scenarios' panels apart; the ambiguous name is dropped
+    # rather than let one file's source silently attach to the other file's scenario.
+    ambiguous: set[str] = set()
     for path in files:
         expanded, file_desc, file_plan_sources = _expand_file(path, eff, root)
         scenarios.extend(expanded)
+        ambiguous.update(file_plan_sources.keys() & plan_sources.keys())
         plan_sources.update(file_plan_sources)
         if single:
             description = file_desc
+    for name in ambiguous:
+        del plan_sources[name]
     # The report's source label: the single file's name, else the root dir's name.
     source_name = files[0].name if single else root.name
     return scenarios, description, source_name, files, plan_sources
@@ -949,7 +959,7 @@ class _RunPlan:
     scenarios: list[Scenario]
     description: str | None
     source_name: str
-    # Each scenario's report plan source (BE-xxxx): its own file name, verbatim YAML (comments
+    # Each scenario's report plan source: its own file name, verbatim YAML (comments
     # intact), and steps' original line numbers, keyed by its declared name — see `_expand_file`.
     plan_sources: dict[str, ScenarioPlanSource]
     engines: list[str]

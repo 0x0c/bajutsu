@@ -83,7 +83,7 @@ def test_html_report_shows_source_filename() -> None:
 
 
 def test_html_report_shows_scenario_source_file_and_step_lines() -> None:
-    # BE-xxxx: a scenario's own originating file and its steps' original line numbers, shown beside
+    # A scenario's own originating file and its steps' original line numbers, shown beside
     # the scenario and its executed step respectively — both omitted when unknown.
     definition = {"name": "s1", "steps": [{"tap": {"id": "a"}}]}
     out = html_report(

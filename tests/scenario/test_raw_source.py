@@ -1,4 +1,4 @@
-"""Tests for recovering each scenario's verbatim YAML from its source file (BE-xxxx).
+"""Tests for recovering each scenario's verbatim YAML from its source file.
 
 `scenario_sources` composes the raw node tree instead of re-serializing the parsed model, so a
 report can show a scenario exactly as authored — comments, formatting, and all — plus each of its

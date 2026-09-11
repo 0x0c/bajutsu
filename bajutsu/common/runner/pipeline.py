@@ -1313,7 +1313,7 @@ def _assemble_report(
     reached a run-level artifact (an assertion's expected/actual text in the manifest or the HTML) is
     masked on the way in rather than rewritten afterwards (BE-0331). The scenario definitions already
     hold tokens, not values, so this only ever catches result text. `plan_sources` feeds the report's
-    YAML tab from each scenario's own on-disk text instead of a re-dump (BE-xxxx) — the sink's own
+    YAML tab from each scenario's own on-disk text instead of a re-dump — the sink's own
     scrub (above) still runs over it like every other artifact, on top of the structural TOTP-secret
     masking `scenario_sources` already applied when it read the file.
     """
