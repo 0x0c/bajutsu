@@ -43,7 +43,8 @@ source-file stem keeps its Unicode letters, and the
 filesystem limit is itself a byte limit. A scenario whose file name or `name:` field runs past the
 budget still runs to completion. Its evidence directory merely keeps the recognizable lead of the
 name. `Scenario.name` stays untouched, so `manifest.json` and `report.html` carry the full name.
-Two scenarios whose slugs truncate alike stay apart by the run-order index every `sid` carries.
+Truncation can make two long names produce the same slug. In `runs/<runId>/<sid>/` the run-order
+index in front of the slug still tells them apart.
 
 ## manifest.json
 

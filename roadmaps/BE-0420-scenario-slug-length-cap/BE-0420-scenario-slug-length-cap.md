@@ -160,8 +160,8 @@ completion and writes its evidence directory.
   `.rstrip("-")` follows, dropping a separator the cut can leave dangling. The existing
   `"scenario"` fallback still covers an all-symbol name.
 - [x] Unit 3 — `sanitize_source_stem()` passes its `re.sub()` result through `_cap_bytes()` last.
-  The change needs no further fallback. The smallest encoded character is one byte. An empty stem
-  is then the sole input that could yield an empty result.
+  The change needs no further fallback. The longest UTF-8 character is four bytes, well under the
+  budget. A non-empty stem always keeps at least its first character.
 - [x] Unit 4 — No call site changed, as designed. Both `_evidence_sid()` branches call one of the
   two capped functions directly. The two bare fallbacks do the same, at `loop/_functions.py:645`
   and `report/manifest.py:127`. The cap reaches every one of them from its single definition.
@@ -169,14 +169,16 @@ completion and writes its evidence directory.
   beside the existing `runId` / `sid` / `stepId` line. The paragraph names the shared cap and why
   the cap counts bytes rather than characters. It also records that `Scenario.name` itself stays
   untruncated.
-- [x] Unit 6 — Six unit tests in `tests/runner/test_pipeline.py`, beside the existing BE-0417 slug
-  tests. The count is one more than the design's five. The dangling-separator case became its own
-  test, not a second assertion on the overlong-name one. A regression then names the broken
-  property. The six cases:
+- [x] Unit 6 — Seven unit tests in `tests/runner/test_pipeline.py`, beside the BE-0417 slug
+  tests. The count is two more than the design's five. The dangling-separator case became its
+  own test, not a second assertion on the overlong-name one. A regression then names the broken
+  property. A self-review pass found unit 3's one unpinned claim, and the seventh test covers it.
+  The seven cases:
   - an ASCII slug capped with no trailing hyphen;
   - a cut landing on a separator;
   - a capped ASCII stem;
   - a multi-byte stem whose budget lands inside a character;
+  - a stem keeping at least its first character, the invariant behind unit 3's missing fallback;
   - the `record`-with-no-`--out` path through `scenario_out_name()`;
   - colliding truncated slugs still drawing distinct `sid`s from the `{i:02d}-` prefix.
 

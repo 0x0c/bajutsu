@@ -223,8 +223,9 @@ def scenario_slug(name: str) -> str:
     """A filesystem-safe id derived from a scenario name (for its evidence dir).
 
     Capped at `_MAX_SLUG_BYTES` (BE-0420): the output is pure ASCII, so the byte slice is exactly a
-    character slice. `rstrip` drops a hyphen the cut can leave dangling; uniqueness does not rest on
-    the slug, since every `sid` carries its own run-order index prefix.
+    character slice. `rstrip` drops a hyphen the cut can leave dangling. Two long names can now
+    collide here; `_evidence_sid` still tells them apart by its own `NN-` prefix, and BE-0420's
+    *Not doing* accepts the collision for the two callers that build a bare slug without one.
     """
     slug = re.sub(r"[^0-9a-zA-Z]+", "-", name).strip("-").lower()
     return _cap_bytes(slug).rstrip("-") or "scenario"
@@ -238,10 +239,9 @@ def sanitize_source_stem(stem: str) -> str:
     `login_flow` or `決済フロー` passes through unchanged; only a character unsafe in an unescaped
     HTML attribute / URL path segment (`#`, `?`, `/`, whitespace, …) is replaced.
 
-    Capped at `_MAX_SLUG_BYTES` (BE-0420) — a `record` session with no `--out` names its file after
-    the recording's whole natural-language goal, and every later run of that file would otherwise
-    try to create an evidence directory exactly that long. No fallback is needed for an empty
-    result: the smallest encoded character is one byte, so only an already-empty stem can produce
-    one, and `Path.stem` never yields that for a real `*.yaml` file.
+    Capped at `_MAX_SLUG_BYTES` (BE-0420), which keeps a long file name from producing an evidence
+    directory the filesystem refuses. An empty result needs no fallback: the longest UTF-8 character
+    is four bytes, well under the budget, so a non-empty stem always keeps at least its first
+    character.
     """
     return _cap_bytes(re.sub(r"[^\w.-]", "_", stem))

@@ -1305,6 +1305,17 @@ def test_sanitize_source_stem_caps_a_multibyte_stem_without_splitting_a_characte
     assert capped == "ab" + "決済フロー" * 3 + "決済フロ"
 
 
+def test_sanitize_source_stem_always_keeps_at_least_one_character() -> None:
+    """The invariant that lets `sanitize_source_stem` skip an empty-result fallback (BE-0420).
+
+    The longest UTF-8 character is four bytes, well under the budget, so the cut can never land
+    before the first character. Dropping `_MAX_SLUG_BYTES` below four would break that, and this
+    test is what would say so.
+    """
+    assert sanitize_source_stem("決") == "決"
+    assert sanitize_source_stem("決済フロー" * 10)
+
+
 def test_recorded_scenario_with_no_out_flag_yields_a_sid_within_the_cap() -> None:
     """The `record`-with-no-`--out` path: a verbose goal becomes a file name, then an evidence dir.
 
