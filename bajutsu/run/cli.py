@@ -224,6 +224,7 @@ def _expand_file(
         raise typer.Exit(2) from None
     plan_sources: dict[str, ScenarioPlanSource] = {}
     for s in scenarios:
+        s.set_source_stem(path.stem)
         base_name = declared_name(s.name)
         plan = plan_by_name.get(base_name)
         if plan is None:

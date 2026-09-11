@@ -99,8 +99,9 @@ def range_reply(data: bytes, range_header: str | None) -> tuple[int, bytes, dict
 # request URL (`/runs/<id>/<rel>`) doesn't name the org — only the actor does
 # (`state.for_org(state.org_of(actor))`) — and no response here sends `Vary`, so a stored redirect
 # outlives its signature and can reach the wrong caller. `no-store` is what forbids retention;
-# `private` states the same intent for anything that keys on it.
-SIGNED_REDIRECT_CACHE_CONTROL = "private, no-store"
+# `private` states the same intent for anything that keys on it. `s-maxage=0` is for the CDN that
+# derives its edge TTL from a freshness lifetime alone: finding none, it applies its own default.
+SIGNED_REDIRECT_CACHE_CONTROL = "private, no-store, s-maxage=0"
 
 # The inline-bytes reply (a local store's artifact, or a `416`) is the same org-scoped-by-actor,
 # not-by-URL situation as the redirect above, but 200/206 — unlike 302 — *are* on RFC 9110 §15.1's

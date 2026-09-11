@@ -19,15 +19,17 @@ runs/<runId>/
 ├── junit.xml         # CI 連携（1 シナリオ = 1 testcase）
 ├── ctrf.json         # Common Test Report Format（PR コメントやダッシュボードなど、より豊かな CI の消費側向け）
 ├── report.html       # 自己完結 HTML（外部アセット無し）
-└── <stepId>/         # ステップごとの証跡（FileSink 使用時）
-    ├── before.png    # screenshot（ステップが動作する前）
-    ├── after.png     # screenshot（動作したあと）
-    ├── elements.json # query() ダンプ
-    ├── segment.mp4   # video（区間）
-    └── device.log    # deviceLog（区間）
+└── <sid>/            # シナリオ単位の証跡（FileSink 使用時）
+    └── <stepId>/     # ステップごとの証跡
+        ├── before.png    # screenshot（ステップが動作する前）
+        ├── after.png     # screenshot（動作したあと）
+        ├── elements.json # query() ダンプ
+        ├── segment.mp4   # video（区間）
+        └── device.log    # deviceLog（区間）
 ```
 
-`runId` は `YYYYMMDD-HHMMSS` の形式で、`bajutsu/common/run_meta/id.py`（[BE-0200](../../roadmaps/BE-0200-run-id-contract/BE-0200-run-id-contract-ja.md)）が一箇所で採番します。この形式は report、Web UI、その他すべての呼び出し元で共有する単一の契約です。`stepId` は `step.name` または `step<i>` です。
+`runId` は `YYYYMMDD-HHMMSS` の形式で、`bajutsu/common/run_meta/id.py`（[BE-0200](../../roadmaps/BE-0200-run-id-contract/BE-0200-run-id-contract-ja.md)）が一箇所で採番します。この形式は report、Web UI、その他すべての呼び出し元で共有する単一の契約です。`sid` は `{NN}-{slug}` の形式で、ゼロ埋めされた実行順の連番と、シナリオを読み込んだ元ファイルの語幹（`login_flow.yaml` なら `login_flow`）をつなげたものです。ファイルから読み込まれていないシナリオ（メモリ上で直接組み立てられたものなど、元ファイルが不明な場合）では、代わりにシナリオの `name:` フィールドをスラッグ化した値になります
+（[BE-0417](../../roadmaps/BE-0417-scenario-result-folder-naming/BE-0417-scenario-result-folder-naming-ja.md)）。`stepId` は `step.name` または `step<i>` です。
 
 ## manifest.json
 
