@@ -1598,17 +1598,61 @@ def test_the_end_of_step_guard_preserves_an_uncleared_note_through_a_later_empty
     assert "Not Now" in guard.blocked_note
 
 
-def test_the_end_of_step_guard_does_not_double_report_a_dismiss_that_outlasts_settle() -> None:
+def test_the_end_of_step_guard_never_retaps_a_native_alert_it_already_dismissed() -> None:
     # `settle` is best-effort and bounded: a dismissal whose own animation runs past it can still be
-    # up, unchanged, on the next round's read. Re-matching the very same button is the first
-    # dismissal still fading, not a second occurrence of it, so it must not double the report — the
-    # native twin of `_alert_guard_gate.py`'s own "only the first tap of a showing reports an event".
+    # up, unchanged, on a later round's read. `probe_native` declines to tap a match already in
+    # `dismissed` (BE-0418), so this is not merely deduplicated after the fact — a real device never
+    # sees a second tap that could land on nothing (the alert genuinely gone) or on whatever a
+    # closing alert has by then revealed underneath it, the same hazard the tree path's `exclude`
+    # closes on its own surface.
     driver = _fake_with_alert(["Allow"])  # never cleared: models a fade that outlasts `settle`
     guard = AlertGuardConfig(rules=[guard_rule("Allow")])
-    cleared, alerts = _call(driver, guard)
+    settle_calls = 0
+
+    def settle() -> None:
+        nonlocal settle_calls
+        settle_calls += 1
+
+    alerts: list[AlertEvent] = []
+    cleared = guard(driver, alerts, settle=settle)
     assert cleared and alerts == [AlertEvent(label="Allow")]  # one dismissal, not three
     assert guard.blocked_note == ""
-    assert sum(1 for action in driver.actions if action[0] == "handle_system_alert") == 3
+    assert sum(1 for action in driver.actions if action[0] == "handle_system_alert") == 1
+    # Every round still settles, the declined ones included: each one enumerated a live alert
+    # mid-fade, and a caller reading the screen the instant this call returns must not read one
+    # still animating — the guarantee `__call__`'s own docstring makes for every round.
+    assert settle_calls == 3
+
+
+def test_the_end_of_step_guard_keeps_a_pending_tree_note_through_a_repeated_native_alert() -> None:
+    # The counterpart to the "preserves an uncleared tree note past an unrelated native dismissal"
+    # test: once a native alert has already been dismissed and keeps reading back unchanged
+    # (`probe_native`'s own `already_dismissed` decline), that round must not clear a still-open
+    # tree diagnosis either.
+    class _StuckTreeThenRepeatingNative(FakeDriver):
+        def __init__(self) -> None:
+            super().__init__([_button("Not Now")])
+            self.tap_calls = 0
+
+        def tap(self, sel: base.Selector) -> None:
+            self.tap_calls += 1
+            if self.tap_calls == 1:
+                self.system_alert_buttons = [_button("Allow")]
+            raise base.ElementNotTappable("the scrim never lifts")
+
+    driver = _StuckTreeThenRepeatingNative()
+    guard = AlertGuardConfig(
+        rules=[
+            guard_rule("Not Now", native=False, in_tree=True),
+            guard_rule("Allow", native=True, in_tree=False),
+        ]
+    )
+    cleared, alerts = _call(driver, guard)
+    assert cleared and alerts == [AlertEvent(label="Allow")]
+    assert driver.tap_calls == 1
+    assert sum(1 for a in driver.actions if a[0] == "handle_system_alert") == 1
+    assert "a system prompt the guard could not clear is still up" in guard.blocked_note
+    assert "Not Now" in guard.blocked_note
 
 
 def test_the_end_of_step_guard_never_retaps_a_label_it_already_cleared_from_the_tree() -> None:

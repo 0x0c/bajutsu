@@ -38,8 +38,14 @@ _GUARD_CALL_MAX_ROUNDS = 3
 # deterministic fact), "dismissed" (a policy-named button was tapped), "unhandled" (an alert is up
 # but no rule identifies it, so nothing clears it and the caller reports it instead),
 # "reserved" (an alert is up and a waiting `handleSystemAlert` step named it, so this probe leaves
-# it for the step's own tap — BE-0406).
-NativeAlertState = Literal["incapable", "absent", "dismissed", "unhandled", "reserved"]
+# it for the step's own tap — BE-0406), "already_dismissed" (the alert this round would tap is one
+# `__call__` already dismissed earlier this call, still enumerable because its fade outlasted
+# `settle` — declined without tapping, since a repeat tap under this dedup's own premise can only
+# land on nothing (the alert genuinely gone) or on whatever the closing alert has by then revealed
+# underneath it — BE-0418).
+NativeAlertState = Literal[
+    "incapable", "absent", "dismissed", "unhandled", "reserved", "already_dismissed"
+]
 
 
 @dataclass(frozen=True)
@@ -95,7 +101,11 @@ class AlertGuardConfig:
         return [rule for rule in self.rules if rule.in_tree]
 
     def probe_native(
-        self, driver: base.Driver, reserved: base.Selector | None = None
+        self,
+        driver: base.Driver,
+        reserved: base.Selector | None = None,
+        *,
+        dismissed: frozenset[tuple[str, tuple[str, ...]]] = frozenset(),
     ) -> tuple[NativeAlertState, AlertEvent | None, list[str]]:
         """Query and, where possible, clear a system alert natively; report what happened.
 
@@ -118,6 +128,18 @@ class AlertGuardConfig:
         Args:
             reserved: A waiting `handleSystemAlert` step's own selector, when one is running
                 (BE-0406). An alert it names is left untouched — see `selector_names_button`.
+            dismissed: `(label, buttons)` pairs `__call__` (BE-0418) has already dismissed this
+                call, checked *before* tapping — not merely deduplicated after the fact — so a
+                lingering fade never reaches a second real tap on the device. An alert whose full
+                button set no longer matches any entry here (buttons changed) is a genuinely new
+                alert and taps as usual, even if it happens to share the tapped label. `buttons`
+                is `system_alert_labels()`'s own read, which enumerates every alert SpringBoard
+                currently holds, not one alert's own set — so this key is a property of the whole
+                enumerable surface at read time, and two genuinely distinct stacked alerts with
+                disjoint labels would share one key while both are up. `match_alert_rule`'s own
+                exact-count requirement already declines an ambiguous shared label as `"unhandled"`
+                rather than guessing, and the caller's `settle` narrows the window further by
+                letting a fading alert actually clear before the next round reads the surface again.
         """
         if base.Capability.HANDLE_SYSTEM_ALERT not in driver.capabilities():
             return "incapable", None, []
@@ -136,6 +158,14 @@ class AlertGuardConfig:
         label = match_alert_rule([rule for rule in self.rules if rule.native], buttons)
         if label is None:
             return "unhandled", None, list(buttons)
+        if (label, tuple(buttons)) in dismissed:
+            # The exact alert a previous round already tapped, still enumerable because its own
+            # dismiss animation outran `settle`. A repeat tap here would land on nothing (the
+            # alert genuinely gone) or on whatever the closing alert has by then revealed
+            # underneath it — the same hazard `dismiss_from_tree_once`'s `exclude` closes on the
+            # tree side, closed here by never tapping at all rather than tapping and discarding
+            # the report.
+            return "already_dismissed", None, list(buttons)
         try:
             driver.handle_system_alert({"label": label}, _NATIVE_TAP_TIMEOUT)
         except base.ElementNotFound:
@@ -239,13 +269,15 @@ class AlertGuardConfig:
         `cancelled` — including the round that exhausts the bound, so a caller reading the screen
         right after this call returns never reads one still mid-animation. `settle` is best-effort
         and bounded, though: a dismiss whose animation outlasts it can still be up, unchanged, on a
-        later round's read, and neither path re-reports it. The native one remembers every
-        `(label, buttons)` pair it has already dismissed this call, so that same alert still fading —
-        even a round or two after a *different* alert cleared in between — is not counted twice,
-        while a later alert sharing only the tapped label (`notifications` and `tracking` both grant
-        `"Allow"`) still differs on the buttons it offers and is not deduplicated away. The tree one
-        withholds a label it has already cleared from matching at all, so there the second tap never
-        happens (see `dismiss_from_tree_once`).
+        later round's read, and neither path re-taps it. The native one passes every `(label,
+        buttons)` pair it has already dismissed this call into `probe_native`, which declines to
+        tap a match already in that set — the same alert still fading, even a round or two after a
+        *different* alert cleared in between, rather than a second real tap on the device that
+        risks landing on whatever the closing alert has by then revealed underneath it. A later
+        alert sharing only the tapped label (`notifications` and `tracking` both grant `"Allow"`)
+        still differs on the buttons it offers and taps as usual. The tree one withholds a label it
+        has already cleared from matching at all, so there too the second tap never happens (see
+        `dismiss_from_tree_once`).
 
         `note` likewise survives a round that resolves a *different* surface: a tree button stuck
         behind a scrim (`NotTappable`) stays named in the eventual `blocked_note` even if a later
@@ -255,17 +287,26 @@ class AlertGuardConfig:
         cleared = False
         note = ""
         tree_note_pending = False
-        dismissed_native: set[tuple[str, tuple[str, ...]]] = set()
+        dismissed_native: frozenset[tuple[str, tuple[str, ...]]] = frozenset()
         dismissed_tree_labels: frozenset[str] = frozenset()
         for _ in range(_GUARD_CALL_MAX_ROUNDS):
-            state, event, buttons = self.probe_native(driver)
+            state, event, buttons = self.probe_native(driver, dismissed=dismissed_native)
             if state == "dismissed":
                 assert event is not None  # "dismissed" always carries its event (see probe_native)
-                native_key = (event.label, tuple(buttons))
-                if native_key not in dismissed_native:
-                    alerts.append(event)
-                    cleared = True
-                dismissed_native.add(native_key)
+                alerts.append(event)  # never a repeat: probe_native declined an already-seen key
+                dismissed_native |= {(event.label, tuple(buttons))}
+                cleared = True
+                if not tree_note_pending:
+                    note = ""
+                settle()
+                continue
+            if state == "already_dismissed":
+                # The same lingering alert `dismissed` already named — probe_native declined the
+                # tap outright, so nothing was actuated this round. Still settle: this round just
+                # enumerated a live alert mid-fade, both call sites read the screen the instant
+                # this returns, and letting the fade run down here is what lets a later round
+                # reach "absent" — and any app-owned sheet stacked underneath — instead of
+                # spending the whole bound re-reading the same alert.
                 if not tree_note_pending:
                     note = ""
                 settle()
