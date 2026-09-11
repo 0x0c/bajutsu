@@ -110,10 +110,10 @@ def test_html_step_row_omits_the_end_instant_when_rounding_matches_the_start() -
     assert 'class="stepjump stepjump-end"' not in out
 
 
-def test_html_step_row_shows_its_elapsed_time_beside_at_when_it_differs() -> None:
+def test_html_step_row_shows_its_elapsed_time_at_the_end_of_the_at_cell_when_it_differs() -> None:
     # A step long enough for its duration to round to something other than 0.0s shows that
-    # duration in parentheses right beside its `at` time, so a slow step is visible without opening
-    # the recording — gated the same way as the second jump target (`at_end`).
+    # duration in parentheses at the end of the `at` cell, after any second jump target
+    # (`at_end`), so a slow step is visible without opening the recording.
     r = RunResult(
         scenario="s1",
         ok=True,
@@ -123,6 +123,11 @@ def test_html_step_row_shows_its_elapsed_time_beside_at_when_it_differs() -> Non
     )
     out = html_report("run1", [r])
     assert 'class="stepdur">(1.1s)</span>' in out
+    # It trails the second jump target (`at_end`), not the row's own `at` time. Slice from the
+    # `at` cell itself: "stepjump-end" is also a substring of the inlined stylesheet's own rule,
+    # which precedes every row and would otherwise make this comparison meaningless.
+    atcell = out[out.index("class='atcell'") :]
+    assert atcell.index("stepjump-end") < atcell.index('class="stepdur"')
 
 
 def test_html_step_row_omits_elapsed_time_when_rounding_matches_the_start() -> None:

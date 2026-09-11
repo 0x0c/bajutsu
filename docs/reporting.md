@@ -251,9 +251,9 @@ an **in-report element-tree viewer**: the captured elements open in an in-page o
 `reason`. The `#` column also carries the step's own line number in the scenario file when
 available. For example, it can read `2:15`. A `setup`/component expansion that changed the step
 list's shape drops it instead. A wrong line would mislead more than none. The `at` cell also shows
-the step's own elapsed time in parentheses, such as `3.2s (1.1s)`. That parenthetical shows
-whenever the duration rounds to something other than 0.0s. A slow `wait` or a sluggish gesture is
-then visible without opening the recording. The screenshot shown is the post-action `after.png`
+the step's own elapsed time in parentheses, at the cell's end. For example, `3.2s (1.1s)`. That
+parenthetical shows whenever the duration rounds to something other than 0.0s. A slow `wait` or a
+sluggish gesture is then visible without opening the recording. The screenshot shown is the post-action `after.png`
 ([evidence](evidence.md#interval-evidence-video--devicelog--apptrace)). Every step that acts records
 one. A step that fails before acting records none, and shows its `before.png` instead. Hovering an
 element in the viewer highlights its frame on the screenshot. That frame comes from `elements.json`,
