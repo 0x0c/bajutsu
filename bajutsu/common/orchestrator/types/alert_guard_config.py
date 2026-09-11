@@ -504,6 +504,11 @@ class AlertGuardConfig:
                 # presented, rather than ending the call on a lingering fade this loop exists to
                 # see past.
                 if any(shape <= set(tree_buttons) for shape in dismissed_tree_shapes):
+                    # This round's probe answered "absent" too, the same deterministic fact the
+                    # branch below acts on, so a native leftover note is stale here as well; only
+                    # a tree diagnosis survives, since a tree read alone cannot contradict it.
+                    if stuck_tree_label is None:
+                        note = ""
                     settle()
                     continue
                 # Otherwise this round's tree read may simply have caught a still-animating screen

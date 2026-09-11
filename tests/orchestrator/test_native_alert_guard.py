@@ -1827,6 +1827,70 @@ def test_the_end_of_step_guard_clears_a_native_leftover_note_once_the_surface_re
     assert guard.blocked_note == ""
 
 
+def test_the_end_of_step_guard_clears_a_native_leftover_note_on_a_lingering_tree_round_too() -> (
+    None
+):
+    # The tree-lingering-exclusion branch (a shape this call already cleared, still enumerable in
+    # the tree) settled and continued without clearing a native-sourced note -- the same asymmetry
+    # the sibling "genuinely nothing matched" branch just below was already fixed for. A native
+    # note is just as stale here: this round's own probe answered "absent" too.
+    class _AbsentThenUnhandledThenAbsentAgain(FakeDriver):
+        def __init__(self) -> None:
+            super().__init__([_button("T")])
+            self.probes = 0
+
+        def system_alert_labels(self) -> list[str]:
+            self.probes += 1
+            if self.probes == 2:
+                return ["Weird Button"]  # an unhandled native alert, on round 1 only
+            return []  # absent on round 0 (tree dismiss proceeds) and round 2 (it's gone)
+
+    driver = _AbsentThenUnhandledThenAbsentAgain()
+    rule = ResolvedAlertRule(
+        identifying_labels=frozenset({"T"}), tap_label="T", native=False, in_tree=True
+    )
+    guard = AlertGuardConfig(rules=[rule])
+    alerts: list[AlertEvent] = []
+    cleared = guard(driver, alerts, settle=lambda: None)
+    assert cleared and alerts == [AlertEvent(label="T")]  # tapped once, on round 0
+    assert guard.blocked_note == ""
+
+
+def test_the_end_of_step_guard_keeps_a_stuck_tree_note_on_a_lingering_tree_round_too() -> None:
+    # The other half of the fix above: a pending tree diagnosis must still survive a *lingering*
+    # tree round (a shape this call already cleared, still enumerable) exactly as it survives the
+    # "genuinely nothing matched" branch just below -- this round settling and continuing must not
+    # be mistaken for evidence that the stuck prompt resolved.
+    class _StuckDriver(FakeDriver):
+        def tap(self, sel: base.Selector) -> None:
+            if isinstance(sel, dict) and sel.get("label") == "Stuck":
+                raise base.ElementNotTappable("Stuck's scrim never lifts")
+            super().tap(sel)
+
+    driver = _StuckDriver([_button("Stuck")])
+    stuck = ResolvedAlertRule(
+        identifying_labels=frozenset({"Stuck"}), tap_label="Stuck", native=False, in_tree=True
+    )
+    other = ResolvedAlertRule(
+        identifying_labels=frozenset({"T"}), tap_label="T", native=False, in_tree=True
+    )
+    settle_count = 0
+
+    def settle() -> None:
+        nonlocal settle_count
+        settle_count += 1
+        if settle_count == 1:
+            # Round 0's Stuck sheet moves off-screen (or behind another), and a distinct, unrelated
+            # prompt takes its place -- T's own button lingers once dismissed, same as any fade.
+            driver.screen = [_button("T")]
+
+    guard = AlertGuardConfig(rules=[other, stuck])
+    alerts: list[AlertEvent] = []
+    cleared = guard(driver, alerts, settle=settle)
+    assert cleared and alerts == [AlertEvent(label="T")]  # only the unrelated prompt ever tapped
+    assert "Stuck" in guard.blocked_note  # the stuck diagnosis, not silently cleared
+
+
 def test_the_end_of_step_guard_does_not_retap_a_fading_alert_when_another_one_joins_it() -> None:
     # The native dedup keys on the matched rule's own shape, not the raw buttons read: that read
     # (`system_alert_labels()`) enumerates every alert SpringBoard currently holds, so a still-
