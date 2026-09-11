@@ -177,6 +177,57 @@ def test_expand_file_setup_expansion_drops_step_lines(tmp_path: Path) -> None:
     assert "the scenario under test" in plan.text  # the comment survives
 
 
+def test_expand_file_data_driven_scenario_drops_verbatim_text(tmp_path: Path) -> None:
+    # A `data:`-driven scenario expands into one Scenario per row with `${row.*}` substituted, but
+    # `expand_data` never changes the step count — the guard above cannot catch this case. Every
+    # row shares one `plan_sources` entry (keyed by the declared, row-suffix-stripped name), so a
+    # verbatim pre-expansion slice would show the same unsubstituted `${row.email}` template for
+    # every row. The plan drops the text entirely instead, so the report falls back to a per-row
+    # structured re-dump that shows each row's own substituted value.
+    path = tmp_path / "s.yaml"
+    path.write_text(
+        "- name: checkout\n"
+        "  data:\n"
+        "    - email: a@example.com\n"
+        "    - email: b@example.com\n"
+        "  steps:\n"
+        '    - type: { into: { id: email }, text: "${row.email}" }\n',
+        encoding="utf-8",
+    )
+    scenarios, _description, plan_sources = _expand_file(path, _eff(), root=tmp_path)
+    assert len(scenarios) == 2  # one per data row
+    assert all("checkout" in s.name for s in scenarios)
+    plan = plan_sources["checkout"]
+    assert plan.text is None
+    assert plan.step_lines == []
+    assert plan.file_name == "s.yaml"  # the file name is still attributed
+
+
+def test_expand_file_sets_source_stem_from_the_file_name(tmp_path: Path) -> None:
+    # BE-0417: every expanded scenario carries the loaded file's own stem, independent of its name:.
+    path = tmp_path / "login_flow.yaml"
+    path.write_text(
+        "- name: Login succeeds with a valid password\n  steps:\n    - tap: { id: ok }\n",
+        encoding="utf-8",
+    )
+    scenarios, _description, _plan_sources = _expand_file(path, _eff(), root=tmp_path)
+    assert [s.source_stem for s in scenarios] == ["login_flow"]
+
+
+def test_expand_file_data_driven_rows_all_share_the_source_stem(tmp_path: Path) -> None:
+    # Every row a data-driven scenario expands into is set *after* expand_data, so it carries the
+    # same stem as the file it came from, not just the pre-expansion source scenario.
+    path = tmp_path / "login_flow.yaml"
+    path.write_text(
+        '- name: login\n  data: [{target: "a"}, {target: "b"}]\n'
+        '  steps:\n    - tap: { id: "${row.target}" }\n',
+        encoding="utf-8",
+    )
+    scenarios, _description, _plan_sources = _expand_file(path, _eff(), root=tmp_path)
+    assert len(scenarios) == 2
+    assert [s.source_stem for s in scenarios] == ["login_flow", "login_flow"]
+
+
 def test_expand_file_missing_setup_ref_exits_2(tmp_path: Path) -> None:
     # A setup prelude resolved relative to the file's dir; a missing file is a usage error (exit 2).
     path = tmp_path / "s.yaml"
@@ -255,6 +306,37 @@ def test_load_scenarios_multiple_files_share_one_run(tmp_path: Path) -> None:
     assert files == [tmp_path / "a.yaml", tmp_path / "b.yaml"]
     assert plan_sources["one"].file_name == "a.yaml"
     assert plan_sources["two"].file_name == "b.yaml"
+
+
+def test_load_scenarios_drops_plan_source_for_a_name_collision_across_files(
+    tmp_path: Path,
+) -> None:
+    # Two files can declare the same scenario name — nothing enforces uniqueness across files, only
+    # within one. A name-keyed plan_sources lookup cannot tell the two scenarios' panels apart, so
+    # the colliding name is dropped rather than let one file's source attach to the other's scenario.
+    for name in ("a.yaml", "b.yaml"):
+        (tmp_path / name).write_text(
+            "- name: login\n  steps:\n    - tap: { id: home.title }\n", encoding="utf-8"
+        )
+    scenarios, _description, _source_name, _files, plan_sources = _load_scenarios(
+        _eff(), [str(tmp_path / "a.yaml"), str(tmp_path / "b.yaml")], "x"
+    )
+    assert len(scenarios) == 2  # both scenarios still ran
+    assert "login" not in plan_sources  # neither gets the other's source
+
+
+def test_expand_file_skips_a_name_that_only_looks_like_a_data_row(tmp_path: Path) -> None:
+    # `declared_name` strips a `[row N]`-shaped suffix unconditionally to recover a data-driven
+    # scenario's base name. A scenario authored with that exact shape in its own name (not one
+    # `expand_data` added) strips to a name `plan_by_name` never had — a valid file, not a bug here,
+    # so it gets no recovered plan rather than crashing the run with a KeyError.
+    path = tmp_path / "s.yaml"
+    path.write_text(
+        "- name: demo [row 1]\n  steps:\n    - tap: { id: home.title }\n", encoding="utf-8"
+    )
+    scenarios, _description, plan_sources = _expand_file(path, _eff(), root=tmp_path)
+    assert [s.name for s in scenarios] == ["demo [row 1]"]
+    assert plan_sources == {}
 
 
 # --- _filter_scenarios: --tag/--exclude selection plus the --erase override

@@ -19,15 +19,17 @@ runs/<runId>/
 ├── junit.xml         # CI 連携（1 シナリオ = 1 testcase）
 ├── ctrf.json         # Common Test Report Format（PR コメントやダッシュボードなど、より豊かな CI の消費側向け）
 ├── report.html       # 自己完結 HTML（外部アセット無し）
-└── <stepId>/         # ステップごとの証跡（FileSink 使用時）
-    ├── before.png    # screenshot（ステップが動作する前）
-    ├── after.png     # screenshot（動作したあと）
-    ├── elements.json # query() ダンプ
-    ├── segment.mp4   # video（区間）
-    └── device.log    # deviceLog（区間）
+└── <sid>/            # シナリオ単位の証跡（FileSink 使用時）
+    └── <stepId>/     # ステップごとの証跡
+        ├── before.png    # screenshot（ステップが動作する前）
+        ├── after.png     # screenshot（動作したあと）
+        ├── elements.json # query() ダンプ
+        ├── segment.mp4   # video（区間）
+        └── device.log    # deviceLog（区間）
 ```
 
-`runId` は `YYYYMMDD-HHMMSS` の形式で、`bajutsu/common/run_meta/id.py`（[BE-0200](../../roadmaps/BE-0200-run-id-contract/BE-0200-run-id-contract-ja.md)）が一箇所で採番します。この形式は report、Web UI、その他すべての呼び出し元で共有する単一の契約です。`stepId` は `step.name` または `step<i>` です。
+`runId` は `YYYYMMDD-HHMMSS` の形式で、`bajutsu/common/run_meta/id.py`（[BE-0200](../../roadmaps/BE-0200-run-id-contract/BE-0200-run-id-contract-ja.md)）が一箇所で採番します。この形式は report、Web UI、その他すべての呼び出し元で共有する単一の契約です。`sid` は `{NN}-{slug}` の形式で、ゼロ埋めされた実行順の連番と、シナリオを読み込んだ元ファイルの語幹（`login_flow.yaml` なら `login_flow`）をつなげたものです。ファイルから読み込まれていないシナリオ（メモリ上で直接組み立てられたものなど、元ファイルが不明な場合）では、代わりにシナリオの `name:` フィールドをスラッグ化した値になります
+（[BE-0417](../../roadmaps/BE-0417-scenario-result-folder-naming/BE-0417-scenario-result-folder-naming-ja.md)）。`stepId` は `step.name` または `step<i>` です。
 
 ## manifest.json
 
@@ -159,7 +161,8 @@ step 1 tap: FAIL 一致なし: {...}</failure>
 ビューア: キャプチャした要素を別タブではなくページ内オーバーレイで開く）/ `reason`。
 `#` 列には、`step_lines` がシナリオファイル中の行番号を復元できたとき、`2:15` のようにその行番号も
 併記します。`setup` やコンポーネント展開でステップ構成が変わった場合、行番号は誤って示すより
-省略します。
+省略します。`at` セルには、所要時間が 0.0 秒以外に丸まるとき、括弧書きで経過時間も表示します
+（例: `3.2s (1.1s)`）。時間のかかった `wait` や動作の遅いジェスチャーが、録画を開かなくてもわかります。
 表示するスクリーンショットは、動作後の `after.png` です
 （[evidence](evidence.md#区間証跡video--devicelog--apptrace)）。動作したステップは、いずれも
 `after.png` を記録します。動作する前に失敗したステップは `after.png` を記録しないため、
@@ -190,9 +193,15 @@ expectations テーブルは並行カラム `result` / `kind`（バッジ）/ `t
 のレポートでは、その YAML はシナリオ自身の元ファイルから切り出した生テキストです。コメントや整形は
 パースしたモデルから作り直さないため、そのまま残ります。リテラルな `totp.secret` はその場で
 マスクします。`setup` やコンポーネント展開でステップ構成が変わったシナリオでも、この元テキストは
-著者が書いたとおり正確なので保持します。ただしその場合、`#` 列の行番号は失われます。オフライン
-再描画（`bajutsu report`、後述）は、元ファイルの生テキストを run に保存していないため、従来どおり
-構造化データから作り直した YAML を使います。
+著者が書いたとおり正確なので保持します。ただしその場合、`#` 列の行番号は失われます。
+
+`data`/`dataFile` によるデータ駆動シナリオは、常に構造化データから作り直した YAML を表示します。
+生テキストは表示しません。各行は同じ元テンプレートを共有します。`expand_data` は行ごとに
+`${row.*}` を置換しますが、ステップ数は変えません。そのため生テキストをそのまま出すと、どの行も
+同じ未置換のテンプレートになり、実際に実行した内容を示せません。
+
+オフライン再描画（`bajutsu report`、後述）は、元ファイルの生テキストを run に保存していないため、
+従来どおり構造化データから作り直した YAML を使います。
 
 `visual` の expectation は行の下に **baseline と actual のインタラクティブ比較ビュー**を描画します。
 4 モード: **Swipe**（仕切りをドラッグして左右にワイプ）/ **Onion**（スライダーで actual を

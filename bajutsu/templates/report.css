@@ -362,6 +362,7 @@ table.sttbl>tbody>tr:not(.nxdetail):not(.alertrow):not(.actrow):not(.genrow)>td:
 .stepjump:hover{color:#0a6cff;border-bottom-style:solid;border-bottom-color:#0a6cff}
 .stepjump-end{color:var(--mut);font-size:.78rem}
 .stepjump-end:hover{color:#0a6cff}
+.stepdur{color:var(--mut);font-size:.78rem;font-weight:400}
 /* No recording means no player, so report.js's per-scenario loop returns before wiring these
    (it needs the `<video>`) — show the times as plain text rather than as controls that look
    clickable and do nothing. */

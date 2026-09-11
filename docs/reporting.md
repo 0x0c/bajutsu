@@ -19,17 +19,22 @@ runs/<runId>/
 ├── junit.xml         # CI integration (1 scenario = 1 testcase)
 ├── ctrf.json         # Common Test Report Format (richer CI consumers: PR comments, dashboards)
 ├── report.html       # self-contained HTML (no external assets)
-└── <stepId>/         # per-step evidence (when using FileSink)
-    ├── before.png    # screenshot, before the step acts
-    ├── after.png     # screenshot, after it acts
-    ├── elements.json # query() dump
-    ├── segment.mp4   # video (interval)
-    └── device.log    # deviceLog (interval)
+└── <sid>/            # one scenario's evidence (when using FileSink)
+    └── <stepId>/     # per-step evidence
+        ├── before.png    # screenshot, before the step acts
+        ├── after.png     # screenshot, after it acts
+        ├── elements.json # query() dump
+        ├── segment.mp4   # video (interval)
+        └── device.log    # deviceLog (interval)
 ```
 
 The CLI assigns `runId` as `YYYYMMDD-HHMMSS`. `bajutsu/common/run_meta/id.py`
 ([BE-0200](../roadmaps/BE-0200-run-id-contract/BE-0200-run-id-contract.md)) mints it once, so every
-call site shares one format. `stepId` is `step.name` or `step<i>`.
+call site shares one format. `sid` is `{NN}-{slug}`: a zero-padded run-order index plus the stem of
+the scenario's own source file (`login_flow.yaml` → `login_flow`), or a slug of the scenario's
+`name:` field when no source file is known — a scenario built directly rather than loaded from disk
+([BE-0417](../roadmaps/BE-0417-scenario-result-folder-naming/BE-0417-scenario-result-folder-naming.md)).
+`stepId` is `step.name` or `step<i>`.
 
 ## manifest.json
 
@@ -229,10 +234,11 @@ example, the `ctrf-io/github-test-reporter` action turns it into a PR comment / 
 
 A self-contained HTML for humans (inline CSS, no external assets). The header shows the run id and
 overall PASS/FAIL. Below that sits the **scenario file name** (`source_name`), the whole suite's
-label. `source_name` names the whole suite. A lone `--scenario` file gives its own name. A
-overall PASS/FAIL. Below that sits the **scenario file name** (`source_name`), the whole suite's
-label: a lone `--scenario` file gives its own name, and a multi-file or whole-dir run gives the
-containing directory's name instead. The **file-level `description`** follows when present.
+label. `source_name` names the whole suite. A lone `--scenario` file gives its own name, and a
+multi-file or whole-dir run gives the containing directory's name instead. The **file-level
+`description`** follows when present.
+
+Each scenario row's summary shows the **scenario name**. It also shows the scenario's **own
 originating file name** (`source_files`). This name is distinct from the header's whole-suite
 label. A `bajutsu run` that read the scenario off disk sets `source_files`; an offline re-render
 does not. When set, the **scenario-level `description`** sits beside the name. A run thus surfaces
@@ -244,7 +250,10 @@ column) / `action` (a colored badge) / `detail` (the target description) / `at` 
 an **in-report element-tree viewer**: the captured elements open in an in-page overlay, no new tab) /
 `reason`. The `#` column also carries the step's own line number in the scenario file when
 available. For example, it can read `2:15`. A `setup`/component expansion that changed the step
-list's shape drops it instead. A wrong line would mislead more than none. The screenshot shown is the post-action `after.png`
+list's shape drops it instead. A wrong line would mislead more than none. The `at` cell also shows
+the step's own elapsed time in parentheses, such as `3.2s (1.1s)`. That parenthetical shows
+whenever the duration rounds to something other than 0.0s. A slow `wait` or a sluggish gesture is
+then visible without opening the recording. The screenshot shown is the post-action `after.png`
 ([evidence](evidence.md#interval-evidence-video--devicelog--apptrace)). Every step that acts records
 one. A step that fails before acting records none, and shows its `before.png` instead. Hovering an
 element in the viewer highlights its frame on the screenshot. That frame comes from `elements.json`,
@@ -275,9 +284,12 @@ authored. Comments and formatting stay intact: the report slices this text strai
 source file. It never re-serializes the parsed model. A literal `totp.secret` still gets masked in
 place. A scenario whose `setup`/component expansion changed its step count keeps this verbatim
 text — still accurate as authored — but loses the `#` column's line numbers, which the expansion
-would leave pointing at the wrong steps. An offline re-render (`bajutsu report`, below) falls back
-to the structured re-dump it always used: the original file's raw text was never persisted into
-the run.
+would leave pointing at the wrong steps. A `data`/`dataFile`-driven scenario always shows the
+structured re-dump instead. It never shows the verbatim text. Every row shares one authored
+template. Substituting `${row.*}` per row leaves the step count unchanged. A verbatim slice would
+show the same unsubstituted template for every row. It would never show what that row actually
+ran. An offline re-render (`bajutsu report`, below) falls back to the structured re-dump it always
+used: the original file's raw text was never persisted into the run.
 
 A `visual` expectation renders an **interactive baseline-vs-actual comparator** beneath its row,
 with four modes: **Swipe** (drag a divider to wipe between the two), **Onion** (a slider cross-fades

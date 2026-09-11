@@ -173,6 +173,10 @@ def _step_run_row(
     # must agree, and a second copy of this arithmetic could drift from this one silently.
     end_s = at + max(0.0, out.duration_s)
     end_text = f"{end_s:.1f}s"
+    # The step's own elapsed time — how long the action itself took, shown beside `at` so a slow
+    # step (a long `wait`, a sluggish gesture) is visible without opening the recording. Gated the
+    # same way as `at_end`: a near-instant step would otherwise show a noisy "(0.0s)" on every row.
+    elapsed = f"{end_s - at:.1f}s" if end_text != at_text else None
     return {
         "rowcls": f"srow {'ok' if out.ok else 'ng'}",
         "data_t": f"{at:.3f}",
@@ -185,6 +189,7 @@ def _step_run_row(
         "action": _action_data(step_def, out.action),
         "detail": _step_detail(step_def, from_),
         "at": at_text,
+        "elapsed": elapsed,
         "at_end": end_text if end_text != at_text else None,
         "view": _view_data(out, run_dir),
         "reason": out.reason if (not out.ok and out.reason) else None,
@@ -254,6 +259,7 @@ def _step_skip_row(
         "action": _action_data(step_def, None),
         "detail": _step_detail(step_def, from_),
         "at": "",
+        "elapsed": None,
         "at_end": None,
         "view": None,
         "reason": None,
@@ -375,8 +381,8 @@ def _merged_rows(
     Steps and exchanges both record absolute wall-clock instants, so the recording-relative seconds
     the timeline sorts and displays on are derived here, once, against `r.video_anchor_s` (BE-0348).
 
-    `step_lines[i]`, when given, is step *i*'s original line number in the scenario file (BE-xxxx);
-    it is looked up positionally, same as `plan[i]`.
+    `step_lines[i]`, when given, is step *i*'s original line number in the scenario file; it is
+    looked up positionally, same as `plan[i]`.
 
     Not-run steps trail at the end in plan order.
     """

@@ -1,4 +1,4 @@
-"""Tests for recovering each scenario's verbatim YAML from its source file (BE-xxxx).
+"""Tests for recovering each scenario's verbatim YAML from its source file.
 
 `scenario_sources` composes the raw node tree instead of re-serializing the parsed model, so a
 report can show a scenario exactly as authored — comments, formatting, and all — plus each of its
@@ -6,6 +6,8 @@ steps' original line number.
 """
 
 from __future__ import annotations
+
+import yaml
 
 from bajutsu.common.scenario import load_scenario_file
 from bajutsu.common.scenario.raw_source import scenario_sources
@@ -76,6 +78,30 @@ def test_scenario_sources_keeps_a_totp_secret_reference() -> None:
     )
     [src] = scenario_sources(text)
     assert "${secrets.TOTP_SEED}" in src.text
+
+
+def test_scenario_sources_masks_a_block_scalar_totp_secret() -> None:
+    # A `|`/`>` block-scalar secret spans multiple lines; the splice must keep the `secret:` key
+    # (not just blank the whole line) and must not eat the sibling `into:` key that follows.
+    text = (
+        "- name: 2fa\n"
+        "  steps:\n"
+        "    - tap: { id: a }\n"
+        "    - totp:\n"
+        "        secret: |\n"
+        "          JBSWY3DPEHPK3PXP\n"
+        "        into: { var: code }\n"
+        "    - tap: { id: submit }\n"
+    )
+    [src] = scenario_sources(text)
+    assert "JBSWY3DPEHPK3PXP" not in src.text
+    assert "secret: <redacted>" in src.text
+    assert "into: { var: code }" in src.text  # the following sibling key survives
+    assert "tap: { id: submit }" in src.text  # and the step after the totp step survives
+    parsed = yaml.safe_load(src.text)
+    totp_step = parsed[0]["steps"][1]
+    assert totp_step["totp"]["secret"] == "<redacted>"
+    assert totp_step["totp"]["into"] == {"var": "code"}
 
 
 def test_scenario_sources_finds_a_nested_totp_secret() -> None:

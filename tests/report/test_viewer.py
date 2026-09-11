@@ -110,6 +110,35 @@ def test_html_step_row_omits_the_end_instant_when_rounding_matches_the_start() -
     assert 'class="stepjump stepjump-end"' not in out
 
 
+def test_html_step_row_shows_its_elapsed_time_beside_at_when_it_differs() -> None:
+    # A step long enough for its duration to round to something other than 0.0s shows that
+    # duration in parentheses right beside its `at` time, so a slow step is visible without opening
+    # the recording — gated the same way as the second jump target (`at_end`).
+    r = RunResult(
+        scenario="s1",
+        ok=True,
+        steps=[StepOutcome(index=0, action="wait", ok=True, duration_s=1.1, started_at=1.5)],
+        expect_results=[],
+        artifacts=[Artifact("00-s1/scenario.mp4", "video", "simctl")],
+    )
+    out = html_report("run1", [r])
+    assert 'class="stepdur">(1.1s)</span>' in out
+
+
+def test_html_step_row_omits_elapsed_time_when_rounding_matches_the_start() -> None:
+    # A near-instant action shows no elapsed time — the same rounding rule that omits the second
+    # jump target, so a fast tap doesn't show a noisy "(0.0s)" on every row.
+    r = RunResult(
+        scenario="s1",
+        ok=True,
+        steps=[StepOutcome(index=0, action="tap", ok=True, duration_s=0.02, started_at=1.5)],
+        expect_results=[],
+        artifacts=[Artifact("00-s1/scenario.mp4", "video", "simctl")],
+    )
+    out = html_report("run1", [r])
+    assert 'class="stepdur"' not in out
+
+
 def test_html_derives_the_video_offset_from_absolute_timestamps() -> None:
     # A step records the absolute instant it began; the seek offset is derived here, at render time,
     # by subtracting the scenario's video anchor (BE-0348) — so an improved anchor makes an already
