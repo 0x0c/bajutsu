@@ -1624,6 +1624,29 @@ def test_the_end_of_step_guard_never_retaps_a_native_alert_it_already_dismissed(
     assert settle_calls == 3
 
 
+def test_the_end_of_step_guard_does_not_retap_a_fading_alert_when_another_one_joins_it() -> None:
+    # The native dedup keys on the matched rule's own shape, not the raw buttons read: that read
+    # (`system_alert_labels()`) enumerates every alert SpringBoard currently holds, so a still-
+    # fading alert's own button set would otherwise change the instant a second, distinct alert
+    # queues up alongside it — read naively that looks like a genuinely new alert and re-taps the
+    # first one a second time, landing on nothing or on whatever it has by then revealed.
+    def react(d: FakeDriver, kind: str, _arg: object) -> None:
+        if kind == "handle_system_alert":
+            # The first alert is still fading (never removed) and a second, disjoint one joins it.
+            d.system_alert_buttons = [
+                _button("Allow"),
+                _button("Don't Allow"),
+                _button("OK"),
+                _button("Cancel"),
+            ]
+
+    driver = _fake_with_alert(["Allow", "Don't Allow"], react=react)
+    guard = AlertGuardConfig(rules=[guard_rule("Allow", identifying=("Allow", "Don't Allow"))])
+    cleared, alerts = _call(driver, guard)
+    assert cleared and alerts == [AlertEvent(label="Allow")]
+    assert sum(1 for a in driver.actions if a[0] == "handle_system_alert") == 1
+
+
 def test_the_end_of_step_guard_keeps_a_pending_tree_note_through_a_repeated_native_alert() -> None:
     # The counterpart to the "preserves an uncleared tree note past an unrelated native dismissal"
     # test: once a native alert has already been dismissed and keeps reading back unchanged

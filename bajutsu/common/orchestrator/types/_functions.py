@@ -111,6 +111,26 @@ def selector_names_button(sel: base.Selector, buttons: Sequence[str]) -> bool:
     return any(base.matches(_alert_button(label), sel) for label in buttons)
 
 
+def matching_alert_rule(
+    rules: Sequence[ResolvedAlertRule], buttons: Sequence[str]
+) -> ResolvedAlertRule | None:
+    """The first rule whose shape is uniquely identified on `buttons` (see `match_alert_rule`).
+
+    Returns the rule itself, not just its tap label, for a caller that needs the shape a match
+    resolved to — `AlertGuardConfig.__call__`'s native dedup (BE-0418) keys on a matched rule's
+    `identifying_labels` rather than the raw `buttons` read, since `buttons` enumerates every
+    alert SpringBoard currently holds and changes whenever a *different* alert joins or leaves the
+    surface, while the rule that answers one already-dismissed alert does not.
+    """
+    present = list(buttons)
+    for rule in rules:
+        if any(label in present for label in rule.excluded_labels):
+            continue
+        if all(present.count(label) == 1 for label in rule.identifying_labels):
+            return rule
+    return None
+
+
 def match_alert_rule(rules: Sequence[ResolvedAlertRule], buttons: Sequence[str]) -> str | None:
     """The tap label of the first rule whose shape is uniquely identified on `buttons`.
 
@@ -119,13 +139,8 @@ def match_alert_rule(rules: Sequence[ResolvedAlertRule], buttons: Sequence[str])
     prompt from another — and no excluded label is present at all. None means no rule's prompt is
     identified, so the caller leaves the alert alone and reports it (BE-0406).
     """
-    present = list(buttons)
-    for rule in rules:
-        if any(label in present for label in rule.excluded_labels):
-            continue
-        if all(present.count(label) == 1 for label in rule.identifying_labels):
-            return rule.tap_label
-    return None
+    rule = matching_alert_rule(rules, buttons)
+    return rule.tap_label if rule is not None else None
 
 
 def push_interruption_policy(driver: base.Driver, guard: AlertGuardConfig | None) -> None:

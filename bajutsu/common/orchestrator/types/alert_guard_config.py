@@ -11,6 +11,7 @@ from bajutsu.common.drivers import base
 from ._functions import (
     alert_block_note,
     match_alert_rule,
+    matching_alert_rule,
     selector_names_button,
     uncleared_prompt_note,
 )
@@ -105,7 +106,7 @@ class AlertGuardConfig:
         driver: base.Driver,
         reserved: base.Selector | None = None,
         *,
-        dismissed: frozenset[tuple[str, tuple[str, ...]]] = frozenset(),
+        dismissed: frozenset[tuple[str, frozenset[str]]] = frozenset(),
     ) -> tuple[NativeAlertState, AlertEvent | None, list[str]]:
         """Query and, where possible, clear a system alert natively; report what happened.
 
@@ -128,18 +129,19 @@ class AlertGuardConfig:
         Args:
             reserved: A waiting `handleSystemAlert` step's own selector, when one is running
                 (BE-0406). An alert it names is left untouched — see `selector_names_button`.
-            dismissed: `(label, buttons)` pairs `__call__` (BE-0418) has already dismissed this
-                call, checked *before* tapping — not merely deduplicated after the fact — so a
-                lingering fade never reaches a second real tap on the device. An alert whose full
-                button set no longer matches any entry here (buttons changed) is a genuinely new
-                alert and taps as usual, even if it happens to share the tapped label. `buttons`
-                is `system_alert_labels()`'s own read, which enumerates every alert SpringBoard
-                currently holds, not one alert's own set — so this key is a property of the whole
-                enumerable surface at read time, and two genuinely distinct stacked alerts with
-                disjoint labels would share one key while both are up. `match_alert_rule`'s own
-                exact-count requirement already declines an ambiguous shared label as `"unhandled"`
-                rather than guessing, and the caller's `settle` narrows the window further by
-                letting a fading alert actually clear before the next round reads the surface again.
+            dismissed: `(tap_label, identifying_labels)` pairs naming a rule `__call__` (BE-0418)
+                has already dismissed this call, checked *before* tapping — not merely
+                deduplicated after the fact — so a lingering fade never reaches a second real tap
+                on the device. Keyed on the *rule* a match resolves to, not on the raw `buttons`
+                read: `system_alert_labels()` enumerates every alert SpringBoard currently holds,
+                so a still-fading alert's own button set changes the moment any other alert joins
+                or leaves the surface — a `buttons`-keyed dedup would then read it as a genuinely
+                new alert and tap it again, precisely the repeat tap this parameter exists to rule
+                out. A rule's own `identifying_labels` name the shape it matched regardless of
+                what else the surface is currently enumerating, so the key stays stable through
+                exactly that case. A later alert resolving to a *different* rule — including one
+                sharing only the tapped label, like `notifications` and `tracking` both tapping
+                `"Allow"` — still taps as usual.
         """
         if base.Capability.HANDLE_SYSTEM_ALERT not in driver.capabilities():
             return "incapable", None, []
@@ -155,16 +157,18 @@ class AlertGuardConfig:
         # 26.5 save sheet's shape is just "Save" / "Not Now"), and matching it here would answer
         # through `handle_system_alert` a prompt that surface can never actually reach — the same
         # undeclared-screen tap this proposal removes everywhere else (BE-0406).
-        label = match_alert_rule([rule for rule in self.rules if rule.native], buttons)
-        if label is None:
+        rule = matching_alert_rule([r for r in self.rules if r.native], buttons)
+        if rule is None:
             return "unhandled", None, list(buttons)
-        if (label, tuple(buttons)) in dismissed:
-            # The exact alert a previous round already tapped, still enumerable because its own
-            # dismiss animation outran `settle`. A repeat tap here would land on nothing (the
-            # alert genuinely gone) or on whatever the closing alert has by then revealed
-            # underneath it — the same hazard `dismiss_from_tree_once`'s `exclude` closes on the
-            # tree side, closed here by never tapping at all rather than tapping and discarding
-            # the report.
+        label = rule.tap_label
+        if (label, rule.identifying_labels) in dismissed:
+            # The same rule a previous round already answered, still matching because that
+            # alert's own dismiss animation outran `settle` — regardless of what else the
+            # SpringBoard surface now enumerates alongside it. A repeat tap here would land on
+            # nothing (the alert genuinely gone) or on whatever the closing alert has by then
+            # revealed underneath it — the same hazard `dismiss_from_tree_once`'s `exclude` closes
+            # on the tree side, closed here by never tapping at all rather than tapping and
+            # discarding the report.
             return "already_dismissed", None, list(buttons)
         try:
             driver.handle_system_alert({"label": label}, _NATIVE_TAP_TIMEOUT)
@@ -264,18 +268,23 @@ class AlertGuardConfig:
         clear a stacked alert while a later one leaves a second unhandled, and the caller reports both
         facts rather than treating them as mutually exclusive.
 
-        `settle` runs after every round that dismissed something or found a button not yet tappable
-        — the caller's own `settle_after_alert_dismiss` bound to its `clock`/`transitions`/
-        `cancelled` — including the round that exhausts the bound, so a caller reading the screen
-        right after this call returns never reads one still mid-animation. `settle` is best-effort
-        and bounded, though: a dismiss whose animation outlasts it can still be up, unchanged, on a
-        later round's read, and neither path re-taps it. The native one passes every `(label,
-        buttons)` pair it has already dismissed this call into `probe_native`, which declines to
-        tap a match already in that set — the same alert still fading, even a round or two after a
-        *different* alert cleared in between, rather than a second real tap on the device that
-        risks landing on whatever the closing alert has by then revealed underneath it. A later
-        alert sharing only the tapped label (`notifications` and `tracking` both grant `"Allow"`)
-        still differs on the buttons it offers and taps as usual. The tree one withholds a label it
+        `settle` runs after every round that acted on a live alert — one that dismissed something,
+        one that found a button not yet tappable, and one that declined a still-fading alert it
+        had already dismissed — the caller's own `settle_after_alert_dismiss` bound to its
+        `clock`/`transitions`/`cancelled`, including the round that exhausts the bound, so a
+        caller reading the screen right after this call returns never reads one still
+        mid-animation. `settle` is best-effort and bounded, though: a dismiss whose animation
+        outlasts it can still be up, unchanged, on a later round's read, and neither path re-taps
+        it. The native one passes every `(tap_label, identifying_labels)` pair naming a rule it
+        has already dismissed this call into `probe_native`, which declines to tap a match already
+        in that set — the same alert still fading, even a round or two after a *different* alert
+        cleared in between, rather than a second real tap on the device that risks landing on
+        whatever the closing alert has by then revealed underneath it. Keyed on the matched rule's
+        own shape rather than the raw buttons read, since that read enumerates every alert
+        SpringBoard currently holds and so changes the moment a different alert joins or leaves
+        the surface, which the alert already dismissed did not do. A later alert resolving to a
+        different rule — including one sharing only the tapped label (`notifications` and
+        `tracking` both grant `"Allow"`) — still taps as usual. The tree one withholds a label it
         has already cleared from matching at all, so there too the second tap never happens (see
         `dismiss_from_tree_once`).
 
@@ -287,14 +296,19 @@ class AlertGuardConfig:
         cleared = False
         note = ""
         tree_note_pending = False
-        dismissed_native: frozenset[tuple[str, tuple[str, ...]]] = frozenset()
+        dismissed_native: frozenset[tuple[str, frozenset[str]]] = frozenset()
         dismissed_tree_labels: frozenset[str] = frozenset()
         for _ in range(_GUARD_CALL_MAX_ROUNDS):
             state, event, buttons = self.probe_native(driver, dismissed=dismissed_native)
             if state == "dismissed":
                 assert event is not None  # "dismissed" always carries its event (see probe_native)
                 alerts.append(event)  # never a repeat: probe_native declined an already-seen key
-                dismissed_native |= {(event.label, tuple(buttons))}
+                # Re-derives the same rule `probe_native` just matched, over the same `buttons` it
+                # already read this round, to key on the rule's own shape (BE-0418) rather than
+                # add a fourth return member for one dict lookup's worth of work.
+                rule = matching_alert_rule([r for r in self.rules if r.native], buttons)
+                assert rule is not None  # the round that just dismissed this alert matched it
+                dismissed_native |= {(rule.tap_label, rule.identifying_labels)}
                 cleared = True
                 if not tree_note_pending:
                     note = ""
