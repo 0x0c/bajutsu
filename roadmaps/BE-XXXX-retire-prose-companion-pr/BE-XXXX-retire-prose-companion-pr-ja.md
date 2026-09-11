@@ -6,7 +6,7 @@
 | 項目 | 値 |
 |---|---|
 | 提案 | [BE-XXXX](BE-XXXX-retire-prose-companion-pr-ja.md) |
-| 提案者 | [@handle](https://github.com/handle) |
+| 提案者 | [@0x0c](https://github.com/0x0c) |
 | 状態 | **実装済み** |
 | トラッキング Issue | [検索](https://github.com/bajutsu-e2e/bajutsu/issues?q=is%3Aissue+label%3Aroadmap-tracking+in%3Atitle+"BE-XXXX") |
 | 実装 PR | [#1983](https://github.com/bajutsu-e2e/bajutsu/pull/1983) |
@@ -60,8 +60,8 @@ no-op経路を持つジョブです。言い回しの指摘が現れたときだ
   にまつわる規範」の節は、2つのレンズの基準（明確で名指しできる違反と、具体的な書き換え）はその
   まま残します。ただし、その根拠から「修正が無償である」という理由は外れます。基準が残る理由は、
   `suggestion`ブロックがすでに書き換えを一行の適用に変えていることと、この2つのレンズが
-  [`CLAUDE.md`](../../CLAUDE.md)がすでに求めているバイリンガルドキュメントと`document-writing`の
-  house conventionに対する、レビューの唯一の自動チェックであることです。
+  [`CLAUDE.md`](../../CLAUDE.md)がすでに求めている`document-writing`の文章表現の規範に対する、
+  レビューの唯一の自動チェックであることです。
 - [`.github/workflows/claude-review.yml`](../../.github/workflows/claude-review.yml)から
   `prose-companion`ジョブをまるごと削除します。`review`ジョブ（BE-0203。
   [BE-0347](../BE-0347-bounded-ci-review-cycle/BE-0347-bounded-ci-review-cycle-ja.md)により
@@ -111,8 +111,8 @@ no-op経路を持つジョブです。言い回しの指摘が現れたときだ
 - **companion PRによる届け方だけでなく、2つのレンズ自体を丸ごと削除する案。** 2つのレンズが下す
   判定そのものの価値が下がったわけではありません。修正を2つ目のpull requestで届ける方法が、割
   に合わなくなっただけです。レンズまで削除すると、[`CLAUDE.md`](../../CLAUDE.md)がいまも求めて
-  いるhouse convention（バイリンガルドキュメントと`document-writing`）に対するレビューのカバレ
-  ッジが、気づかないうちに下がってしまいます。
+  いる`document-writing`のhouse conventionに対するレビューのカバレッジが、気づかないうちに
+  下がってしまいます。
 
 ## 進捗
 

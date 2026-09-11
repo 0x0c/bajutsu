@@ -6,7 +6,7 @@
 | Field | Value |
 |---|---|
 | Proposal | [BE-XXXX](BE-XXXX-retire-prose-companion-pr.md) |
-| Author | [@handle](https://github.com/handle) |
+| Author | [@0x0c](https://github.com/0x0c) |
 | Status | **Implemented** |
 | Tracking issue | [Search](https://github.com/bajutsu-e2e/bajutsu/issues?q=is%3Aissue+label%3Aroadmap-tracking+in%3Atitle+"BE-XXXX") |
 | Implementing PR | [#1983](https://github.com/bajutsu-e2e/bajutsu/pull/1983) |
@@ -60,8 +60,8 @@ finding, and the fix instead arrives as the contributor's own push to their own 
   The "Prose-quality conventions" section keeps both lenses at their existing bar (a clear, nameable
   violation with a concrete rewrite), but its rationale no longer cites a free fix: the bar stays
   because a `suggestion` block already makes the rewrite a one-line apply, and because these two
-  lenses are the review's only automated check on the bilingual-docs and `document-writing` house
-  conventions [`CLAUDE.md`](../../CLAUDE.md) already requires.
+  lenses are the review's only automated check on the `document-writing` prose norms
+  [`CLAUDE.md`](../../CLAUDE.md) already requires.
 - [`.github/workflows/claude-review.yml`](../../.github/workflows/claude-review.yml) drops the
   `prose-companion` job entirely. The `review` job (BE-0203, narrowed to open/reopen and
   `@claude review` by [BE-0347](../BE-0347-bounded-ci-review-cycle/BE-0347-bounded-ci-review-cycle.md))
@@ -110,8 +110,8 @@ source pull request no longer needs it. No new companion pull request opens once
 - **Drop the two prose lenses entirely, instead of only the companion-PR delivery.** Nothing here
   suggests the two lenses' underlying judgment has become less valuable; only shipping the fix
   through a second pull request has stopped paying for itself. Removing the lenses too would quietly
-  lower the review's coverage of a house convention — bilingual docs, `document-writing` — that the
-  rest of [`CLAUDE.md`](../../CLAUDE.md) still requires.
+  lower the review's coverage of the `document-writing` house convention that
+  [`CLAUDE.md`](../../CLAUDE.md) still requires.
 
 ## Progress
 
