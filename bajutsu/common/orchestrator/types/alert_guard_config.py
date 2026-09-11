@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
 from typing import Literal
 
@@ -46,6 +46,21 @@ _GUARD_CALL_MAX_ROUNDS = 3
 NativeAlertState = Literal[
     "incapable", "absent", "dismissed", "unhandled", "reserved", "already_dismissed"
 ]
+
+
+def _widest_first(rules: Iterable[ResolvedAlertRule]) -> list[ResolvedAlertRule]:
+    """*rules*, widest shape first — a stable sort, so BE-0177's scenario-before-target precedence
+    among same-shape rules survives.
+
+    `_resolve_alert_rule`'s subset test only excludes a candidate whose shape is contained *in* an
+    already-dismissed one, not the reverse, so whether a nested-shape prompt's narrower sibling can
+    survive that exclusion and re-tap depends on which shape `matching_alert_rule` — itself
+    first-match-in-list-order — happens to try first. Ordering by size before every dedup-path
+    lookup removes that dependency on the catalogue's own declaration order, without reordering
+    `tree_rules` itself: that property also serves `_AlertGuardGate`'s own `match_alert_rule` call,
+    which needs the declared order preserved unconditionally, not just for same-shape rules.
+    """
+    return sorted(rules, key=lambda rule: len(rule.identifying_labels), reverse=True)
 
 
 def _resolve_alert_rule(
@@ -154,19 +169,14 @@ class AlertGuardConfig:
         SpringBoard, and an application screen happening to show identifier-less "Allow" and
         "Don't Allow" buttons would be tapped (BE-0406).
 
-        Sorted widest shape first (a stable sort, so BE-0177's scenario-before-target precedence
-        among same-shape rules is unaffected): `_resolve_alert_rule`'s subset test only excludes a
-        candidate whose shape is contained *in* an already-dismissed one, not the reverse, so
-        whether a nested-shape prompt's narrower sibling can survive that exclusion and re-tap
-        depends on which shape `matching_alert_rule` — itself first-match-in-list-order — happens
-        to try first. Ordering by size here removes that dependency on the catalogue's own
-        declaration order instead of relying on it.
+        In declaration order — deliberately, unlike `native_rules` below: `_AlertGuardGate`
+        (`waits/_alert_guard_gate.py`) reads this same property for its own `match_alert_rule` call,
+        first-match-in-list-order, so BE-0177's scenario-before-target precedence has to survive
+        here unconditionally, not merely for same-shape rules. `_widest_first` below reorders a
+        *copy* for the one-shot dedup path that needs it, rather than reordering this property
+        itself and silently changing which button the mid-wait gate answers with.
         """
-        return sorted(
-            (rule for rule in self.rules if rule.in_tree),
-            key=lambda rule: len(rule.identifying_labels),
-            reverse=True,
-        )
+        return [rule for rule in self.rules if rule.in_tree]
 
     @property
     def native_rules(self) -> list[ResolvedAlertRule]:
@@ -178,14 +188,13 @@ class AlertGuardConfig:
         `[r for r in self.rules if r.native]` spelled out at each call site, keeps the two from
         drifting: a rule this filter admits that `probe_native` itself excludes (or the reverse)
         would have `_resolve_alert_rule` return `None` right where a caller asserts it cannot,
-        turning a merely failed step into an aborted scenario. Sorted widest shape first, for the
-        same reason `tree_rules` above is.
+        turning a merely failed step into an aborted scenario.
+
+        Sorted widest shape first, unlike `tree_rules` above: nothing outside this file reads
+        `native_rules`, so widening the order here to serve `_resolve_alert_rule`'s subset test
+        (see `_widest_first` below) carries none of that property's risk to an unrelated consumer.
         """
-        return sorted(
-            (rule for rule in self.rules if rule.native),
-            key=lambda rule: len(rule.identifying_labels),
-            reverse=True,
-        )
+        return _widest_first(rule for rule in self.rules if rule.native)
 
     def probe_native(
         self,
@@ -328,7 +337,7 @@ class AlertGuardConfig:
         this round's own tree read found, so a caller can resolve the same match again to learn
         which shape a returned `AlertEvent` belongs to.
         """
-        rules = self.tree_rules
+        rules = _widest_first(self.tree_rules)
         if not rules:
             return None, []
         elements = driver.query()
@@ -515,8 +524,12 @@ class AlertGuardConfig:
                 if isinstance(tree_result, AlertEvent):
                     alerts.append(tree_result)  # excluded once cleared, so never a repeat report
                     # Re-resolves which shape was just tapped, over the same `buttons` this round's
-                    # own tree read already found, the same way the native branch above does.
-                    rule = _resolve_alert_rule(self.tree_rules, tree_buttons, dismissed_tree_shapes)
+                    # own tree read already found, the same way the native branch above does — and
+                    # over the same widest-first ordering `dismiss_from_tree_once` itself just used,
+                    # so this always agrees with what it actually matched.
+                    rule = _resolve_alert_rule(
+                        _widest_first(self.tree_rules), tree_buttons, dismissed_tree_shapes
+                    )
                     assert rule is not None  # the round that just dismissed this alert matched it
                     dismissed_tree_shapes |= {rule.identifying_labels}
                     cleared = True
@@ -572,15 +585,20 @@ class AlertGuardConfig:
                 if stuck_tree_label is None:
                     leftover = _leftover_after_answered(buttons, dismissed_native)
                     note = alert_block_note(leftover) if leftover else ""
-                if not dismissed_native:
+                if not dismissed_native and not any(
+                    rule.identifying_labels <= set(buttons) for rule in self.native_rules
+                ):
                     # Settling and giving the fade another round, rather than ending the call, only
-                    # makes sense when this call has dismissed something of its own: the recovery
-                    # this branch exists for is that answered alert's own fade draining to reveal
-                    # the live one uniquely. With nothing yet dismissed there is no such fade, so a
-                    # later round can only re-read the same surface or find it gone on its own —
-                    # and ending on "absent" would erase the very diagnosis this round just made,
+                    # pays off in the two cases this branch exists for: a fade this call itself
+                    # created (`dismissed_native` non-empty), or a live shared-label collision (some
+                    # rule's own shape is present on `buttons`, just not uniquely — the flagship
+                    # pair above). Neither holds here, so a later round can only re-read exactly
+                    # what this one did — settling for it would spend a full
+                    # `settle_after_alert_dismiss` sweep for nothing, since a system alert still up
+                    # never lets that sweep's own tree-diff read settle anyway — or find the alert
+                    # gone on its own, which would erase the very diagnosis this round just made,
                     # the bare `element not found` BE-0402 exists to prevent. Breaking here instead
-                    # keeps that diagnosis and costs nothing: nothing this call could still change.
+                    # keeps that diagnosis and costs nothing this call could still change.
                     break
                 settle()
                 continue

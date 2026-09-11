@@ -1401,6 +1401,39 @@ def test_the_end_of_step_guard_ends_on_the_first_unhandled_round_when_it_dismiss
     assert driver.probes == 1  # never re-probed to see the alert clear itself
 
 
+def test_the_end_of_step_guard_still_recovers_a_collision_on_its_very_first_round() -> None:
+    # The early-break above is gated on more than `dismissed_native` alone: a rule's own shape
+    # being present on the surface (just not uniquely) is itself evidence a later round can read
+    # differently, even when nothing has been dismissed yet -- BE-0418's flagship stacked pair can
+    # collide on round 0 itself, not only after an earlier dismissal, and must still recover.
+    notifications = ResolvedAlertRule(
+        identifying_labels=frozenset({"Allow", "Don't Allow"}), tap_label="Allow"
+    )
+    tracking = ResolvedAlertRule(
+        identifying_labels=frozenset({"Allow", "Ask App Not to Track"}), tap_label="Allow"
+    )
+    # Both alerts are already up on round 0 -- nothing dismissed yet, but notifications' own shape
+    # is present on the surface (just not uniquely), so the round must not end here.
+    driver = _fake_with_alert(["Allow", "Don't Allow", "Allow", "Ask App Not to Track"])
+    settle_count = 0
+
+    def settle() -> None:
+        nonlocal settle_count
+        settle_count += 1
+        if settle_count == 1:
+            # notifications' own buttons drop out, leaving tracking uniquely matchable.
+            driver.system_alert_buttons = [_button("Allow"), _button("Ask App Not to Track")]
+        elif settle_count == 2:
+            # tracking's own tap actually lands and the sheet clears.
+            driver.system_alert_buttons = []
+
+    guard = AlertGuardConfig(rules=[notifications, tracking])
+    alerts: list[AlertEvent] = []
+    cleared = guard(driver, alerts, settle=settle)
+    assert cleared and alerts == [AlertEvent(label="Allow")]  # tracking, tapped on round 1
+    assert guard.blocked_note == ""
+
+
 def test_the_end_of_step_guard_leaves_a_second_native_alert_unhandled_after_clearing_the_first() -> (
     None
 ):
