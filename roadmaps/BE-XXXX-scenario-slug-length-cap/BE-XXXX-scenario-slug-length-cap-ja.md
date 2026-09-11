@@ -53,7 +53,7 @@ stem から、安全でない文字を置き換えたものです
   - `scenario_slug(r.scenario)`:レポートのマトリクスで `sid` を持たない結果に使う場合
     ([`bajutsu/common/report/manifest.py:127`](../../bajutsu/common/report/manifest.py))
 
-  どちらも、`run` コマンド自身が実際にたどる経路には乗りません。`pipeline.py:790` は常に
+  どちらも、`run` コマンド自身が実際にたどる経路には乗りません。`pipeline.py:796` は常に
   `scenario_id=sid` を渡し、`pipeline.py:1253` は `_evidence_sid()` 自身を通じて `sid` を組み立てる
   からです。本項目はこの2箇所を変更しません。`scenario_slug()` に上限を設けるだけで、この2箇所が
   作る値も短くなります。

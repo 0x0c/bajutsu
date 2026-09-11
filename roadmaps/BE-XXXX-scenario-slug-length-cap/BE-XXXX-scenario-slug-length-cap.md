@@ -50,7 +50,7 @@ regardless of what produced it.
   - `scenario_slug(r.scenario)`, for a `sid`-less result in the report matrix
     ([`bajutsu/common/report/manifest.py:127`](../../bajutsu/common/report/manifest.py))
 
-  Neither sits on the `run` CLI's own path: `pipeline.py:790` always passes `scenario_id=sid`, and
+  Neither sits on the `run` CLI's own path: `pipeline.py:796` always passes `scenario_id=sid`, and
   `pipeline.py:1253` builds `sid` through `_evidence_sid()` itself. This item leaves both call
   sites unchanged — capping `scenario_slug()` still shortens what they produce.
 - **`record`'s own file-naming is unchanged.** An authored scenario with no explicit save name
