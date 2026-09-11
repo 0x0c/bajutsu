@@ -19,7 +19,7 @@ runs/<runId>/
 ├── junit.xml         # CI integration (1 scenario = 1 testcase)
 ├── ctrf.json         # Common Test Report Format (richer CI consumers: PR comments, dashboards)
 ├── report.html       # self-contained HTML (no external assets)
-└── <sid>/            # one scenario's evidence (per-scenario, when using FileSink)
+└── <sid>/            # one scenario's evidence (when using FileSink)
     └── <stepId>/     # per-step evidence
         ├── before.png    # screenshot, before the step acts
         ├── after.png     # screenshot, after it acts

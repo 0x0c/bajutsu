@@ -1245,17 +1245,29 @@ def test_scenario_runner_runs_one_in_isolation() -> None:
     assert not bad.ok and bad.sid == "01-b"
 
 
-def test_sanitize_source_stem_leaves_a_plain_stem_unchanged() -> None:
+def test_sanitize_source_stem_leaves_dots_dashes_and_underscores_unchanged() -> None:
     assert sanitize_source_stem("login_flow") == "login_flow"
+    assert sanitize_source_stem("v1.2-final") == "v1.2-final"
+
+
+def test_sanitize_source_stem_leaves_japanese_characters_unchanged() -> None:
+    # Fullwidth/Japanese characters are ordinary in this codebase's own scenario names (CLAUDE.md);
+    # a stem built from one must stay identifiable, not collapse to a run of underscores.
+    assert sanitize_source_stem("決済フロー") == "決済フロー"
 
 
 def test_sanitize_source_stem_replaces_only_the_unsafe_characters() -> None:
     assert sanitize_source_stem("login#1") == "login_1"
     assert sanitize_source_stem("a?b") == "a_b"
+    assert sanitize_source_stem("a??b") == "a__b"  # one replacement per unsafe character
 
 
-def test_scenario_runner_sid_prefers_source_stem_over_name() -> None:
-    """A file-loaded scenario's `sid` is derived from its source file's stem, not its `name:` (BE-0417)."""
+def test_scenario_runner_sid_prefers_source_stem_over_name_and_sanitizes_it() -> None:
+    """`run_one`'s `sid` uses the source file's stem, not `name:`, sanitized through the real call (BE-0417).
+
+    The stem carries a `#` so this actually exercises `sanitize_source_stem` at the call site —
+    a stem with no unsafe characters would pass identically whether or not that call is wired in.
+    """
     from bajutsu.common.evidence.redaction import Redactor
     from bajutsu.common.runner.pipeline import _ScenarioRunner
 
@@ -1265,9 +1277,9 @@ def test_scenario_runner_sid_prefers_source_stem_over_name() -> None:
     scenario = Scenario.model_validate(
         {"name": "Login succeeds with a valid password", "steps": [{"tap": {"id": "ok"}}]}
     )
-    scenario.set_source_stem("login_flow")
+    scenario.set_source_stem("login#1")
     result = runner.run_one(0, scenario)
-    assert result.sid == "00-login_flow"
+    assert result.sid == "00-login_1"
 
 
 def test_preflight_fails_unsupported_scenario_before_leasing() -> None:

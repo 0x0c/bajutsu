@@ -323,8 +323,6 @@ def test_source_stem_set_by_loader_is_readable() -> None:
 
 
 def test_source_stem_never_appears_in_model_dump() -> None:
-    # A `PrivateAttr` (BE-0417): load-time provenance, never part of a scenario's authored schema,
-    # so re-serializing a scenario (record, audit, a future scenario editor) must not leak it.
     s = Scenario.model_validate({"name": "x", "steps": [{"tap": {"id": "a"}}]})
     s.set_source_stem("login_flow")
     assert "source_stem" not in s.model_dump()

@@ -42,10 +42,12 @@ index prefix is unchanged.
   for instance) — unaffected by this item.
 - **The `--browsers` cross-browser matrix's `<engine>/<sid>/` layer is unchanged.** Only what `sid`
   itself is built from changes.
-- **The pre-existing name-keyed collision in `_matrix()`** (`bajutsu/common/report/manifest.py:78-91`
-  builds the `--browsers` matrix summary keyed by scenario name, so two same-named scenarios in one
-  engine overwrite each other's matrix cell) is a separate, already-existing issue this item does not
-  touch.
+- **The pre-existing name-keyed collision in `_matrix()`** (`bajutsu/common/report/manifest.py`
+  built the `--browsers` matrix summary keyed by scenario name, so two same-named scenarios in one
+  engine overwrote each other's matrix cell) was a separate, already-existing issue this item did
+  not touch. It has since been fixed independently by [#1970](https://github.com/bajutsu-e2e/bajutsu/pull/1970)
+  (`_matrix()` now disambiguates same-named scenarios with a `(N)` suffix), before this item's
+  implementation began, and no longer applies.
 
 ## Motivation
 
@@ -141,7 +143,14 @@ that holds its evidence, with no detour through `manifest.json`.
   their final expanded list, right before returning.
 - [x] Unit 3 — `sanitize_source_stem()` added beside `scenario_slug()`; `run_one` and
   `_cancelled_pass` in `bajutsu/common/runner/pipeline.py` build `sid` from `s.source_stem` through
-  it, falling back to `scenario_slug(s.name)` when no source file is known.
+  it (via one shared `_evidence_sid()` helper, so the two sites can't drift), falling back to
+  `scenario_slug(s.name)` when no source file is known. Deviation from the literal design: the
+  replaced-character class is `[^\w.-]` (Unicode word characters), not the letter-of-the-spec
+  `[^A-Za-z0-9_.-]` — the ASCII-only class silently collapsed a Japanese-named scenario file's stem
+  to a run of underscores, which this codebase's own bilingual convention (CLAUDE.md) makes a
+  realistic case, and defeats this item's own motivation for exactly that file. `\w` still replaces
+  every character the design's own rationale (unescaped HTML attribute / URL path segment safety)
+  cites — `#`, `?`, `/`, whitespace — while keeping a non-ASCII stem identifiable.
 - [x] Unit 4 — `docs/reporting.md` / `docs/ja/reporting.md`'s Output layout gained the `<sid>/`
   level (it previously hung `<stepId>/` directly off `runs/<runId>/`, though the runtime already
   nests evidence that way) and a line naming `sid`'s derivation.
