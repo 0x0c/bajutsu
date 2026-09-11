@@ -1,14 +1,14 @@
-[English](BE-XXXX-ios-alert-guard-one-shot-retry.md) · **日本語**
+[English](BE-0418-ios-alert-guard-one-shot-retry.md) · **日本語**
 
-# BE-XXXX — ステップ終了時のアラートガードで複数件のアラートを解消できるようにし、外れたタップを取りこぼさないようにする
+# BE-0418 — ステップ終了時のアラートガードで複数件のアラートを解消できるようにし、外れたタップを取りこぼさないようにする
 
 <!-- BE-METADATA -->
 | 項目 | 値 |
 |---|---|
-| 提案 | [BE-XXXX](BE-XXXX-ios-alert-guard-one-shot-retry-ja.md) |
+| 提案 | [BE-0418](BE-0418-ios-alert-guard-one-shot-retry-ja.md) |
 | 提案者 | [@0x0c](https://github.com/0x0c) |
 | 状態 | **提案** |
-| トラッキング Issue | [検索](https://github.com/bajutsu-e2e/bajutsu/issues?q=is%3Aissue+label%3Aroadmap-tracking+in%3Atitle+"BE-XXXX") |
+| トラッキング Issue | [検索](https://github.com/bajutsu-e2e/bajutsu/issues?q=is%3Aissue+label%3Aroadmap-tracking+in%3Atitle+"BE-0418") |
 | トピック | Platform support |
 | 関連 | [BE-0269](../BE-0269-ios-alert-guard-early-wait-intervention/BE-0269-ios-alert-guard-early-wait-intervention-ja.md), [BE-0315](../BE-0315-ios-native-system-alert-handling/BE-0315-ios-native-system-alert-handling-ja.md), [BE-0399](../BE-0399-ios-system-alert-interruption-policy/BE-0399-ios-system-alert-interruption-policy-ja.md), [BE-0402](../BE-0402-run-alert-guard-drop-vision-fallback/BE-0402-run-alert-guard-drop-vision-fallback-ja.md), [BE-0406](../BE-0406-system-alert-declared-prompts/BE-0406-system-alert-declared-prompts-ja.md) |
 <!-- /BE-METADATA -->
