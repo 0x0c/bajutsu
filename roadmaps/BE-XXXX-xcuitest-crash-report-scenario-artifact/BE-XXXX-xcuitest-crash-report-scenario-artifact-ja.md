@@ -118,12 +118,16 @@ lease をプールへ返却します（`free.put(udid)`）。もし `crash_artif
 （プロセス自体は実際にはフォルトしておらず、単にチャンネルが応答しなくなっただけの場合）、
 この3つのいずれであっても例外を投げません。該当するエントリを省略するだけにとどめます。
 
-- **ランナー自身が記録した出力全文**。`_open_runner_output` が開く `self._runner_log` から
-  全文を読み取ります。この出力は今日すでにデフォルトで（BE-0319）キャプチャされていますが、
-  どこにもコピーされていません。
+- **ランナー自身が記録した出力の、上限つきの末尾**。`_open_runner_output` が開く
+  `self._runner_log` から読み取ります。`_runner_log_hint` がすでに使っている、同じ
+  ストリーミング方式の `deque(fh, maxlen=...)` 読み取りです
+  （`xcuitest_environment.py:1134-1137`）。高ボリュームなキャプチャ全体をメモリ化しない
+  ための仕組みで、上限だけを末尾20行というそのヒントより大きく取ります。この証跡は、
+  そのヒントを超えるために存在するからです。この出力は今日すでにデフォルトで（BE-0319）
+  キャプチャされていますが、どこにもコピーされていません。
 - **`xcodebuild test-without-building` プロセス自身の macOS クラッシュレポート**。
   `_spawn_runner` はすでに、`Popen` が返った直後にプロセスハンドルを `self._runner_proc` として
-  記録しています（`xcuitest_environment.py:766`）。本項目は、その隣に起動タイムスタンプ
+  記録しています（`xcuitest_environment.py:769`）。本項目は、その隣に起動タイムスタンプ
   `self._runner_spawned_at = time.time()` を追加します。`Popen` 自体は起動時刻を公開しないため
   です。このキャプチャは `~/Library/Logs/DiagnosticReports` を列挙し、`xcodebuild-*` という
   名前で、更新時刻が `self._runner_spawned_at` 以降である `.ips` ファイルを探します。ファイル名と
@@ -226,8 +230,8 @@ Android とウェブバックエンドの environment は、それぞれ自前�
 - [ ] Unit 2 — `XcuitestEnvironment` によるオーバーライド。`self._runner_proc` の隣に記録する
       起動タイムスタンプ（`self._runner_spawned_at`）。`_discard_runner` 内部で、クラッシュした
       プロセスハンドルがクリアされる前に `self._last_crash_artifacts` としてキャッシュする
-      前もってのスナップショット。ランナーログの読み取りと `xcodebuild-*.ips` に対する名前・
-      時刻一致の `DiagnosticReports` 掃引。どちらもベストエフォートかつ上限つきです。
+      前もってのスナップショット。ランナーログの上限つき末尾の読み取りと `xcodebuild-*.ips` に
+      対する名前・時刻一致の `DiagnosticReports` 掃引。どちらもベストエフォートかつ上限つきです。
 - [ ] Unit 3 — `Lease.crash_artifacts`。モジュールレベルの `_no_crash_artifacts` をデフォルトと
       し、`pool.py` の `lease()` クロージャ内で `request_device_replacement` と並んで配線します。
 - [ ] Unit 4 — `pipeline.py` の呼び出し箇所。クラッシュで力尽きた `RunResult` の直前で1回だけ

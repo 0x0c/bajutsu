@@ -115,11 +115,15 @@ or a sandboxed CI runner with no read permission), or no crash report at all (th
 actually faulted — the channel just stopped answering) each resolve to that entry being skipped,
 never to a raise:
 
-- **The runner's own captured output**, read in full from `self._runner_log`, the file
-  `_open_runner_output` opens. Captured by default today (BE-0319), but never copied anywhere.
+- **The runner's own captured output**, read as a bounded tail from `self._runner_log`, the file
+  `_open_runner_output` opens — the same streaming `deque(fh, maxlen=...)` read
+  `_runner_log_hint` already uses to avoid materializing the whole (high-volume) capture
+  (`xcuitest_environment.py:1134-1137`), just against a larger cap than that twenty-line hint,
+  since this artifact exists to exceed it. Captured by default today (BE-0319), but never copied
+  anywhere.
 - **The `xcodebuild test-without-building` process's own macOS crash report.** `_spawn_runner`
   already records the process handle as `self._runner_proc` right after `Popen` returns
-  (`xcuitest_environment.py:766`); this item adds a spawn タイムスタンプ next to it,
+  (`xcuitest_environment.py:769`); this item adds a spawn timestamp next to it,
   `self._runner_spawned_at = time.time()`, since `Popen` exposes no start time of its own. The
   capture lists `~/Library/Logs/DiagnosticReports` for a `.ips` file named `xcodebuild-*`, whose
   modification time falls at or after `self._runner_spawned_at`; the name-and-time match keeps the
@@ -208,10 +212,11 @@ Nothing in this item changes what a non-macOS run captures.
 
 - [ ] Unit 1 — `crash_artifacts()` on the `RunEnvironment` protocol shape and, returning `[]`, on
       `_DeviceEnvironment` (ios.py), `WebEnvironment`, and `AndroidEnvironment`.
-- [ ] Unit 2 — `XcuitestEnvironment`'s override: a spawn タイムスタンプ (`self._runner_spawned_at`)
+- [ ] Unit 2 — `XcuitestEnvironment`'s override: a spawn timestamp (`self._runner_spawned_at`)
       recorded alongside `self._runner_proc`; the eager snapshot inside `_discard_runner`, cached as
-      `self._last_crash_artifacts` before the crashed process handle is cleared; the runner-log read
-      and the name-and-time `DiagnosticReports` sweep for `xcodebuild-*.ips`, both best-effort and
+      `self._last_crash_artifacts` before the crashed process handle is cleared; the bounded-tail
+      runner-log read and the name-and-time `DiagnosticReports` sweep for `xcodebuild-*.ips`, both
+      best-effort and
       bounded.
 - [ ] Unit 3 — `Lease.crash_artifacts`, defaulted through a module-level `_no_crash_artifacts`, wired
       in `pool.py`'s `lease()` closure alongside `request_device_replacement`.
