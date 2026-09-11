@@ -139,7 +139,8 @@ class AlertGuardConfig:
     # and `expect` retry to append to the step's own failure reason (BE-0402). Rewritten on every
     # call, never accumulated across calls: it states what this call's rounds (BE-0418) saw, not that
     # a block was ever seen on some earlier step. Within a call each round overwrites what the one
-    # before it found, except a round that matches nothing at all — see `__call__`. Safe to hold here
+    # before it found, except while an earlier tree round's `NotTappable` diagnosis is still open —
+    # see `__call__`. Safe to hold here
     # because `_guard_for` builds one config per scenario and a scenario's steps run in sequence, so
     # no note crosses a scenario or a worker boundary.
     blocked_note: str = field(default="", init=False)
@@ -152,8 +153,20 @@ class AlertGuardConfig:
         declaring `notifications` alone would arm one for a prompt that only ever appears in
         SpringBoard, and an application screen happening to show identifier-less "Allow" and
         "Don't Allow" buttons would be tapped (BE-0406).
+
+        Sorted widest shape first (a stable sort, so BE-0177's scenario-before-target precedence
+        among same-shape rules is unaffected): `_resolve_alert_rule`'s subset test only excludes a
+        candidate whose shape is contained *in* an already-dismissed one, not the reverse, so
+        whether a nested-shape prompt's narrower sibling can survive that exclusion and re-tap
+        depends on which shape `matching_alert_rule` — itself first-match-in-list-order — happens
+        to try first. Ordering by size here removes that dependency on the catalogue's own
+        declaration order instead of relying on it.
         """
-        return [rule for rule in self.rules if rule.in_tree]
+        return sorted(
+            (rule for rule in self.rules if rule.in_tree),
+            key=lambda rule: len(rule.identifying_labels),
+            reverse=True,
+        )
 
     @property
     def native_rules(self) -> list[ResolvedAlertRule]:
@@ -165,9 +178,14 @@ class AlertGuardConfig:
         `[r for r in self.rules if r.native]` spelled out at each call site, keeps the two from
         drifting: a rule this filter admits that `probe_native` itself excludes (or the reverse)
         would have `_resolve_alert_rule` return `None` right where a caller asserts it cannot,
-        turning a merely failed step into an aborted scenario. Mirrors `tree_rules` above.
+        turning a merely failed step into an aborted scenario. Sorted widest shape first, for the
+        same reason `tree_rules` above is.
         """
-        return [rule for rule in self.rules if rule.native]
+        return sorted(
+            (rule for rule in self.rules if rule.native),
+            key=lambda rule: len(rule.identifying_labels),
+            reverse=True,
+        )
 
     def probe_native(
         self,

@@ -2039,6 +2039,37 @@ def test_dismiss_from_tree_once_treats_a_narrower_rendering_of_an_excluded_shape
     assert sum(1 for a in driver.actions if a[0] == "tap") == 1
 
 
+def test_tree_rules_tries_the_widest_nested_shape_first_regardless_of_declaration_order() -> None:
+    # The subset test in `_resolve_alert_rule` excludes a candidate whose shape is *contained in*
+    # an already-dismissed one, not the reverse -- so whichever nested shape `matching_alert_rule`
+    # (itself first-match-in-list-order) happens to try first is the one that must be dismissed
+    # first, or a narrower sibling dismissed on round 0 leaves the wider one free to match the same
+    # still-fading sheet and tap it again on round 1. Declaring the narrower rule *first* here would
+    # reproduce exactly that repeat tap if `tree_rules` returned rules in declaration order; sorting
+    # widest-first removes the dependency on that order entirely (BE-0418 review finding).
+    widest = ResolvedAlertRule(
+        identifying_labels=frozenset({"Save Password", "Never for This Website", "Not Now"}),
+        tap_label="Not Now",
+        native=False,
+        in_tree=True,
+    )
+    narrower = ResolvedAlertRule(
+        identifying_labels=frozenset({"Save Password", "Not Now"}),
+        tap_label="Not Now",
+        native=False,
+        in_tree=True,
+    )
+    # Never removed: models the sheet's own dismiss animation outlasting `settle`.
+    driver = FakeDriver(
+        [_button("Save Password"), _button("Never for This Website"), _button("Not Now")]
+    )
+    guard = AlertGuardConfig(rules=[narrower, widest])  # narrower declared first, deliberately
+    cleared, alerts = _call(driver, guard)
+    assert cleared
+    assert alerts == [AlertEvent(label="Not Now")]  # tapped once, not once per nested shape
+    assert sum(1 for a in driver.actions if a[0] == "tap") == 1
+
+
 def test_the_end_of_step_guard_finds_a_stacked_alert_behind_a_fading_first_match() -> None:
     # `already_dismissed` must not end the round the instant the plain first match is one this
     # call already answered: a real, not-yet-answered alert can be enumerable right alongside that
