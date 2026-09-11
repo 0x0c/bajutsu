@@ -1725,13 +1725,14 @@ def test_dismiss_from_tree_once_does_not_promote_a_shadowed_choice_for_the_same_
 def test_dismiss_from_tree_once_treats_a_narrower_rendering_of_an_excluded_shape_as_excluded() -> (
     None
 ):
-    # A `savePassword`-style policy resolves to several rules whose shapes nest inside one another
-    # rather than share one exact shape: the widest names three labels, a narrower one names two of
-    # those same three, and both tap the same button. Excluding only the exact shape a round tapped
-    # would leave the narrower sibling free to match the very same still-fading sheet and tap it a
-    # second time. Excluding by subset closes that: a shape wholly contained in one already excluded
-    # counts as excluded too, so the narrower sibling declines along with the exact match, and a
-    # rule naming a label neither shares ("Save", not "Save Password") still can't match at all.
+    # A `savePassword`-style policy resolves to three rules, two of whose shapes nest rather than
+    # share one exact shape: the widest names three labels, the narrower one names two of those
+    # same three, and both tap the same button. Excluding only the exact shape a round tapped would
+    # leave the narrower sibling free to match the very same still-fading sheet and tap it a second
+    # time. Excluding by subset closes that: a shape wholly contained in one already excluded counts
+    # as excluded too, so the narrower sibling declines along with the exact match. The third rule
+    # neither nests with nor matches either of the other two ("Save", not "Save Password"), and is
+    # here to confirm the subset test never excludes a genuinely unrelated shape by mistake.
     widest = ResolvedAlertRule(
         identifying_labels=frozenset({"Save Password", "Never for This Website", "Not Now"}),
         tap_label="Not Now",
@@ -1787,6 +1788,37 @@ def test_the_end_of_step_guard_finds_a_stacked_alert_behind_a_fading_first_match
     assert cleared
     assert alerts == [AlertEvent(label="Allow"), AlertEvent(label="OK")]
     assert guard.blocked_note == ""  # both alerts accounted for; nothing left over
+
+
+def test_the_end_of_step_guard_gives_a_lingering_tree_exclusion_another_round_instead_of_ending_the_call() -> (
+    None
+):
+    # `dismiss_from_tree_once` returns a bare `None` for two different facts: nothing matched at
+    # all, and every match landed on a shape `exclude` already holds. The native path's twin of the
+    # second fact (`already_dismissed`) settles and continues, precisely so a sheet stacked
+    # underneath a still-fading one gets another round to be presented -- the tree path must do the
+    # same, rather than ending the whole call the instant a round finds only the shape it already
+    # excluded and nothing new yet.
+    first = ResolvedAlertRule(
+        identifying_labels=frozenset({"Not Now"}), tap_label="Not Now", native=False, in_tree=True
+    )
+    second = ResolvedAlertRule(
+        identifying_labels=frozenset({"Later"}), tap_label="Later", native=False, in_tree=True
+    )
+    driver = FakeDriver([_button("Not Now")])  # the fade outlasts every settle in this test
+    settle_count = 0
+
+    def settle() -> None:
+        nonlocal settle_count
+        settle_count += 1
+        if settle_count == 2:  # not revealed until the round *after* the one that tapped "Not Now"
+            driver.screen = [*driver.screen, _button("Later")]
+
+    guard = AlertGuardConfig(rules=[first, second])
+    cleared, alerts = _call(driver, guard, settle=settle)
+    assert cleared
+    assert alerts == [AlertEvent(label="Not Now"), AlertEvent(label="Later")]
+    assert guard.blocked_note == ""
 
 
 def test_dismiss_from_tree_once_declines_an_excluded_shape() -> None:

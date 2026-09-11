@@ -763,50 +763,50 @@ Android; on iOS it rests on the fast suite's bookkeeping proof alone.
   so a caller reading the screen the instant the call returns never reads one still animating. A
   round that finds nothing left to act on, or an alert no rule identifies, ends the call. A native
   alert whose fade outlasts that settle still reads back, unchanged, on a later round. Matched
-  against a shape a previous round already dismissed, or a narrower rendering of one — a
-  `savePassword` policy's three rules nest inside one another this way, all tapping the same button
-  — that round declines to tap it at all: the same alert still fading, not a distinct one, so a
-  repeat tap never reaches the device and never risks landing on nothing or on whatever the closing
-  alert has by then revealed underneath it, on either path. Both are keyed on a rule's own shape
-  rather than the buttons a probe reads, since that read enumerates every alert the surface
-  currently holds and so changes the moment a different alert joins or leaves it, which the alert
-  already dismissed did not do. Both key on shape rather than a rule's own tap label, too: two
-  rules can share one alert's shape under different choices, a scenario's `choice` overriding a
-  target's for the same prompt, and keying on the label alone would let one such rule's exclusion
-  promote its sibling to tap the opposite button on the alert this call already answered. A later
-  alert resolving to a shape that is neither a match nor a narrower rendering of one already
-  dismissed — including one sharing the tapped label alone (the built-in `notifications` and
-  `tracking` prompts both grant `"Allow"`) — still taps as usual once it is no longer read
-  alongside the one already dismissed; two such alerts read together instead share that label's
-  count, so neither uniquely matches and the round reports the surface as unhandled. A match
-  landing back on an already-answered shape does not by itself end the round on either path: a
-  real, not-yet-answered alert can be enumerable right alongside that fade, so the search retries
-  among the shapes not yet dismissed before declining. A round that declines a repeat native tap
-  still checks the buttons the probe read against every shape answered so far: a queued second
-  alert no rule identifies can sit right alongside the one this call already dismissed, and the
-  decline alone does not mean the rest of the surface is clear. A button that never becomes
-  reachable within the bound carries its own note, distinct from the one an alert no rule
-  identifies carries, rather than reading as a bare missing element. That note survives a later
-  round that finds nothing to match, or one that goes on to dismiss an unrelated alert on the other
-  surface, rather than either round erasing a real, still-open diagnosis. XCUITest itself
-  intervenes on an alert that interrupts an in-flight interaction *before* this guard ever polls,
-  and left alone answers with the alert's own default button — silently overriding a scenario's
-  policy with nothing in the report. The runner therefore installs an interruption monitor that
-  presses the same rule-named button the reactive guard would, and records what it pressed as an
-  ordinary `AlertEvent`; the orchestrator resolves each rule's labels and pushes them, alongside
-  whether the guard governs the scenario at all, once per scenario over `POST /interruptionPolicy`,
-  dropping a rule this surface can never meet (an in-process prompt never interrupts another
-  process's interaction). A `handleSystemAlert` step's own prompt/choice form is not necessarily
-  among those rules — the step exists precisely for a prompt an author chooses not to declare in
-  `systemAlertHandling` — so while that one step waits the orchestrator pushes one more rule for
-  the step's own target alongside the scenario's, and restores the scenario's own policy once the
-  step returns, fails, or the wait raises. Without it, an earlier action's own interruption could
-  meet that same prompt first, find no matching rule, and fail a step for an alert this one was
-  about to answer. A prompt the policy names no button on is still left to XCUITest's own default
-  handler, unchanged (BE-0399) — nothing here can stop that tap — but since BE-0406 a governing
-  policy records the buttons it declined before doing so, and the step or `expect` that met the
-  interruption fails, naming them, rather than the run continuing as if nothing had answered on the
-  scenario's behalf. On by default, `false` disables it per scenario
+  against a shape a previous round already dismissed, or a narrower rendering of one — two of a
+  `savePassword` policy's three rules nest that way, both tapping the same button — that round
+  declines to tap it at all: the same alert still fading, not a distinct one, so a repeat tap never
+  reaches the device and never risks landing on nothing or on whatever the closing alert has by
+  then revealed underneath it, on either path. Both are keyed on a rule's own shape rather than the
+  buttons a probe reads, since that read enumerates every alert the surface currently holds and so
+  changes the moment a different alert joins or leaves it, which the alert already dismissed did
+  not do. Both key on shape rather than a rule's own tap label, too: two rules can share one
+  alert's shape under different choices, a scenario's `choice` overriding a target's for the same
+  prompt, and keying on the label alone would let one such rule's exclusion promote its sibling to
+  tap the opposite button on the alert this call already answered. A later alert resolving to a
+  shape that is neither a match nor a narrower rendering of one already dismissed — including one
+  sharing the tapped label alone (the built-in `notifications` and `tracking` prompts both grant
+  `"Allow"`) — still taps as usual once it is no longer read alongside the one already dismissed;
+  two such alerts read together instead share that label's count, so neither uniquely matches and
+  the round reports the surface as unhandled. A match landing back on an already-answered shape
+  does not by itself end the round on either path: a real, not-yet-answered alert can be enumerable
+  right alongside that fade, so the search retries among the shapes not yet dismissed before
+  declining. A round that declines a repeat native tap still checks the buttons the probe read
+  against every shape answered so far: a queued second alert no rule identifies can sit right
+  alongside the one this call already dismissed, and the decline alone does not mean the rest of
+  the surface is clear. A button that never becomes reachable within the bound carries its own
+  note, distinct from the one an alert no rule identifies carries, rather than reading as a bare
+  missing element. That note survives a later round that finds nothing to match, or one that goes
+  on to dismiss an unrelated alert on the other surface, rather than either round erasing a real,
+  still-open diagnosis. XCUITest itself intervenes on an alert that interrupts an in-flight
+  interaction *before* this guard ever polls, and left alone answers with the alert's own default
+  button — silently overriding a scenario's policy with nothing in the report. The runner therefore
+  installs an interruption monitor that presses the same rule-named button the reactive guard
+  would, and records what it pressed as an ordinary `AlertEvent`; the orchestrator resolves each
+  rule's labels and pushes them, alongside whether the guard governs the scenario at all, once per
+  scenario over `POST /interruptionPolicy`, dropping a rule this surface can never meet (an
+  in-process prompt never interrupts another process's interaction). A `handleSystemAlert` step's
+  own prompt/choice form is not necessarily among those rules — the step exists precisely for a
+  prompt an author chooses not to declare in `systemAlertHandling` — so while that one step waits
+  the orchestrator pushes one more rule for the step's own target alongside the scenario's, and
+  restores the scenario's own policy once the step returns, fails, or the wait raises. Without it,
+  an earlier action's own interruption could meet that same prompt first, find no matching rule,
+  and fail a step for an alert this one was about to answer. A prompt the policy names no button on
+  is still left to XCUITest's own default handler, unchanged (BE-0399) — nothing here can stop that
+  tap — but since BE-0406 a governing policy records the buttons it declined before doing so, and
+  the step or `expect` that met the interruption fails, naming them, rather than the run continuing
+  as if nothing had answered on the scenario's behalf. On by default, `false` disables it per
+  scenario
 - DSL `iosTipKitHandling` (BE-0389), an opt-in guard for a blocking Apple TipKit tip: TipKit's
   presentation marks the content it covers accessibility-hidden rather than merely occluding it, so a
   blocked tap can fail as `ElementNotFound`, not only `ElementNotTappable`. The XCUITest backend alone

@@ -63,10 +63,12 @@ def _resolve_alert_rule(
     a subset of any dismissed shape, so a real, not-yet-answered alert enumerable alongside that
     fade (the stacked case this loop exists to clear) is still found rather than declined along
     with the fade. The subset test, not equality, is what keeps a `savePassword`-style policy safe:
-    `choice: deny` there resolves to three rules whose shapes nest inside one another (the widest
-    naming "Save Password", "Never for This Website", and "Not Now"; the narrowest naming only
-    "Save" and "Not Now"), all tapping the same button, and a fade that still enumerates the wider
-    shape's buttons would otherwise match a narrower sibling and tap it a second time. `__call__`
+    `choice: deny` there resolves to three rules, two of whose shapes nest (the web-form shape
+    naming "Save Password", "Never for This Website", and "Not Now"; the iOS 18.6 in-app shape
+    naming only "Save Password" and "Not Now" — the 26.5 shape, "Save" and "Not Now", shares
+    neither label with the widest and nests with neither), both tapping the same button, and a
+    fade that still enumerates the wider shape's buttons would otherwise match the narrower
+    sibling and tap it a second time. `__call__`
     calls this again, over the same `buttons` a dismissing round just read, to learn which shape it
     tapped without either probe growing a return member only one caller needs.
     """
@@ -172,14 +174,13 @@ class AlertGuardConfig:
                 alert's shape under different `tap_label`s — still counts as one already-answered
                 alert rather than promoting the sibling to tap the opposite button on it. A shape
                 that is a *subset* of one already named here counts as the same answered alert
-                too, not only an exact match: `savePassword`'s three rules nest inside one another
-                (the widest naming "Save Password", "Never for This Website", and "Not Now"; the
-                narrowest naming only "Save" and "Not Now"), all tapping the same button, and a
-                fade that still enumerates the widest shape's buttons would otherwise match a
-                narrower sibling and tap it a second time. A later alert resolving to a shape
-                that is neither a match nor a subset of one already named — including one sharing
-                only the tapped label, like `notifications` and `tracking` both tapping `"Allow"`
-                — still taps as usual, once it is no longer read alongside the one already named.
+                too, not only an exact match — two rules for the same prompt can nest this way
+                (see `dismiss_from_tree_once`'s `exclude` for the concrete, tree-side example;
+                `savePassword` never reaches this native-only parameter, since that prompt is
+                tree-only). A later alert resolving to a shape that is neither a match nor a
+                subset of one already named — including one sharing only the tapped label, like
+                `notifications` and `tracking` both tapping `"Allow"` — still taps as usual, once
+                it is no longer read alongside the one already named.
         """
         if base.Capability.HANDLE_SYSTEM_ALERT not in driver.capabilities():
             return "incapable", None, []
@@ -258,8 +259,13 @@ class AlertGuardConfig:
         under different choices (a scenario's `choice` overriding a target's for the same prompt,
         BE-0177) are excluded together rather than one promoting the other to tap the opposite
         button on the alert this call already answered. A shape that is a *subset* of one already
-        excluded here counts as excluded too — see `probe_native`'s `dismissed` for the
-        `savePassword` case this closes, the same on both paths.
+        excluded here counts as excluded too, the same as on the native side (`probe_native`'s
+        `dismissed`): `savePassword`'s `choice: deny` resolves to three rules, two of whose shapes
+        nest (the web-form shape naming "Save Password", "Never for This Website", and "Not Now";
+        the iOS 18.6 in-app shape naming only "Save Password" and "Not Now" — the 26.5 shape,
+        "Save" and "Not Now", shares neither label with the widest and nests with neither), both
+        tapping the same button, and a fade that still enumerates the wider shape's buttons would
+        otherwise match the narrower sibling and tap it a second time.
 
         Returns the `AlertEvent` for the button it tapped, `NotTappable` when the button resolved but
         the tap could not land — a scrim still covering it mid-animation, which the caller's own
@@ -423,9 +429,18 @@ class AlertGuardConfig:
                     tree_note_pending = True
                     settle()
                     continue
-                # Nothing matched. This round's tree read may simply have caught a still-animating
-                # screen mid-transition rather than a genuinely clear one, so `note` is left as an
-                # earlier round's diagnosis left it rather than erased on this round's own account.
+                # Nothing not-yet-excluded matched. A shape this call already cleared, still
+                # enumerable among this round's own tree read, is the in-tree twin of
+                # `probe_native`'s "already_dismissed": the sheet's own fade outlasted `settle`, so
+                # settle again and give a sheet stacked underneath it another round to be
+                # presented, rather than ending the call on a lingering fade this loop exists to
+                # see past.
+                if any(shape <= set(tree_buttons) for shape in dismissed_tree_shapes):
+                    settle()
+                    continue
+                # Otherwise this round's tree read may simply have caught a still-animating screen
+                # mid-transition rather than a genuinely clear one, so `note` is left as an earlier
+                # round's diagnosis left it rather than erased on this round's own account.
                 break
             # "unhandled": an alert is up that no rule identifies. BE-0402 leaves it alone rather
             # than asking a model where to tap, so the step keeps failing — but on its own timeout
