@@ -86,7 +86,9 @@ public let notificationBannerIdentifier = "NotificationShortLookView"
 /// otherwise-passing step, naming the notification's body text as a button it had expected to find
 /// (BE-0416 Unit 1, measured). And a banner is the one interruption XCUITest's own default handler
 /// cannot press a button on: it waits the banner out instead, which is why an interrupted
-/// interaction cost ~9s against ~0.6s undisturbed.
+/// interaction with an auto-dismissing banner cost ~9s against ~0.6s undisturbed. A persistent-style
+/// banner never auto-dismisses; Unit 1 measured XCUITest clearing that one by some other means, in
+/// ~3.5s — so the wait-it-out account, and the ~9s it explains, hold for the auto-dismissing case.
 public func isNotificationBanner(identifier: String) -> Bool {
     identifier == notificationBannerIdentifier
 }
