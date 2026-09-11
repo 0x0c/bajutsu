@@ -81,6 +81,28 @@ def _resolve_alert_rule(
     return rule
 
 
+def _leftover_after_answered(
+    buttons: Sequence[str], dismissed: frozenset[frozenset[str]]
+) -> list[str]:
+    """The buttons an `already_dismissed` or `"unhandled"` round has not already accounted for.
+
+    Subtracted with multiplicity, not as a set: `answered = {label for labels in dismissed for
+    label in labels}` followed by `[b for b in buttons if b not in answered]` would treat one
+    already-answered shape as consuming *every* occurrence of its labels at once, so a second,
+    genuinely live alert rendering the identical label pair — two permission prompts both offering
+    "Allow" / "Don't Allow", say — would vanish from `leftover` along with the one already
+    answered. Removing one occurrence per already-answered label instead leaves that second
+    alert's own copy behind to name, while two already-answered shapes sharing a label (BE-0418's
+    own `notifications` / `tracking` pair, both granting "Allow") still cancel out to nothing.
+    """
+    leftover = list(buttons)
+    for shape in dismissed:
+        for label in shape:
+            if label in leftover:
+                leftover.remove(label)
+    return leftover
+
+
 @dataclass(frozen=True)
 class NotTappable:
     """`dismiss_from_tree_once`'s landing race: the button resolved but the tap could not land.
@@ -440,8 +462,7 @@ class AlertGuardConfig:
                     # probe would give it — the "dismissed" branch's own clear above self-corrects
                     # on a later round that re-probes fresh buttons, but a round that keeps
                     # declining the same rule never does, so it must check this itself.
-                    answered = {label for labels in dismissed_native for label in labels}
-                    leftover = [b for b in buttons if b not in answered]
+                    leftover = _leftover_after_answered(buttons, dismissed_native)
                     if leftover:
                         note = alert_block_note(leftover)
                     elif (
@@ -533,8 +554,7 @@ class AlertGuardConfig:
                 # the call, is that same branch's other half: once the answered alert's fade
                 # drains, the live one reads uniquely and resolves on a later round of its own.
                 if stuck_tree_label is None:
-                    answered = {label for labels in dismissed_native for label in labels}
-                    leftover = [b for b in buttons if b not in answered]
+                    leftover = _leftover_after_answered(buttons, dismissed_native)
                     note = alert_block_note(leftover) if leftover else ""
                 settle()
                 continue

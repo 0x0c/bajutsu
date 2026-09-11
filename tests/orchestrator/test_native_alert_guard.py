@@ -1439,8 +1439,11 @@ def test_the_end_of_step_guard_filters_the_unhandled_note_when_the_collision_nev
 ):
     # Direct coverage of the `"unhandled"` branch's own leftover filter surviving to the call's
     # final note: unlike the recovery case above, this collision never drains, so the filtered note
-    # from the last round is what `blocked_note` ends up holding, and it must not re-name the
-    # already-answered `notifications` alert alongside the genuinely unhandled `tracking` one.
+    # from the last round is what `blocked_note` ends up holding. The filter subtracts with
+    # multiplicity, not as a set: `notifications`' answered shape accounts for exactly one "Allow"
+    # and one "Don't Allow", so the *second* "Allow" -- `tracking`'s own, still genuinely unhandled
+    # -- is left behind to name, while "Don't Allow" (fully accounted for, one occurrence only) is
+    # not (BE-0418 review finding).
     notifications = ResolvedAlertRule(
         identifying_labels=frozenset({"Allow", "Don't Allow"}), tap_label="Allow"
     )
@@ -1463,7 +1466,10 @@ def test_the_end_of_step_guard_filters_the_unhandled_note_when_the_collision_nev
     cleared = guard(driver, alerts, settle=settle)
     assert cleared and alerts == [AlertEvent(label="Allow")]  # only notifications ever tapped
     assert "Ask App Not to Track" in guard.blocked_note
-    assert "Allow" not in guard.blocked_note and "Don't Allow" not in guard.blocked_note
+    assert (
+        guard.blocked_note.count("Allow") == 1
+    )  # tracking's own copy, not notifications' answered one
+    assert "Don't Allow" not in guard.blocked_note
 
 
 def test_the_end_of_step_guard_keeps_a_pending_tree_note_through_a_later_unhandled_round() -> None:
