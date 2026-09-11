@@ -57,17 +57,24 @@ def _resolve_alert_rule(
     `dismiss_from_tree_once`, and `AlertGuardConfig.__call__` (BE-0418) must all agree on bit for
     bit — shared by the native and tree paths alike, since both face the same lingering-fade race.
 
-    The plain match, unless its shape is one `dismissed` already names — a lingering fade of an
-    already-answered alert — in which case the search retries among the shapes not yet dismissed,
-    so a real, not-yet-answered alert enumerable alongside that fade (the stacked case this loop
-    exists to clear) is still found rather than declined along with the fade. `__call__` calls
-    this again, over the same `buttons` a dismissing round just read, to learn which shape it
+    The plain match, unless its shape is one `dismissed` already names *or a subset of one* — a
+    lingering fade of an already-answered alert, read with a subset of the buttons the dismissing
+    round itself matched on — in which case the search retries among the rules whose shape is not
+    a subset of any dismissed shape, so a real, not-yet-answered alert enumerable alongside that
+    fade (the stacked case this loop exists to clear) is still found rather than declined along
+    with the fade. The subset test, not equality, is what keeps a `savePassword`-style policy safe:
+    `choice: deny` there resolves to three rules whose shapes nest inside one another (the widest
+    naming "Save Password", "Never for This Website", and "Not Now"; the narrowest naming only
+    "Save" and "Not Now"), all tapping the same button, and a fade that still enumerates the wider
+    shape's buttons would otherwise match a narrower sibling and tap it a second time. `__call__`
+    calls this again, over the same `buttons` a dismissing round just read, to learn which shape it
     tapped without either probe growing a return member only one caller needs.
     """
     rule = matching_alert_rule(rules, buttons)
-    if rule is not None and rule.identifying_labels in dismissed:
+    if rule is not None and any(rule.identifying_labels <= shape for shape in dismissed):
         rule = matching_alert_rule(
-            [r for r in rules if r.identifying_labels not in dismissed], buttons
+            [r for r in rules if not any(r.identifying_labels <= shape for shape in dismissed)],
+            buttons,
         )
     return rule
 
@@ -163,10 +170,16 @@ class AlertGuardConfig:
                 out. `identifying_labels` rather than `tap_label`, so a scenario's `choice`
                 overriding a target's for the same prompt (BE-0177) — two rules sharing one
                 alert's shape under different `tap_label`s — still counts as one already-answered
-                alert rather than promoting the sibling to tap the opposite button on it. A later
-                alert resolving to a *different* shape — including one sharing only the tapped
-                label, like `notifications` and `tracking` both tapping `"Allow"` — still taps as
-                usual.
+                alert rather than promoting the sibling to tap the opposite button on it. A shape
+                that is a *subset* of one already named here counts as the same answered alert
+                too, not only an exact match: `savePassword`'s three rules nest inside one another
+                (the widest naming "Save Password", "Never for This Website", and "Not Now"; the
+                narrowest naming only "Save" and "Not Now"), all tapping the same button, and a
+                fade that still enumerates the widest shape's buttons would otherwise match a
+                narrower sibling and tap it a second time. A later alert resolving to a shape
+                that is neither a match nor a subset of one already named — including one sharing
+                only the tapped label, like `notifications` and `tracking` both tapping `"Allow"`
+                — still taps as usual, once it is no longer read alongside the one already named.
         """
         if base.Capability.HANDLE_SYSTEM_ALERT not in driver.capabilities():
             return "incapable", None, []
@@ -244,7 +257,9 @@ class AlertGuardConfig:
         `identifying_labels` rather than `tap_label` means two rules sharing one alert's shape
         under different choices (a scenario's `choice` overriding a target's for the same prompt,
         BE-0177) are excluded together rather than one promoting the other to tap the opposite
-        button on the alert this call already answered.
+        button on the alert this call already answered. A shape that is a *subset* of one already
+        excluded here counts as excluded too — see `probe_native`'s `dismissed` for the
+        `savePassword` case this closes, the same on both paths.
 
         Returns the `AlertEvent` for the button it tapped, `NotTappable` when the button resolved but
         the tap could not land — a scrim still covering it mid-animation, which the caller's own
@@ -325,9 +340,13 @@ class AlertGuardConfig:
         `tap_label`, since two rules can share one alert's shape under different choices (a
         scenario's `choice` overriding a target's for the same prompt, BE-0177), and keying on the
         label alone would let one such rule's exclusion promote its sibling to tap the opposite
-        button on the same alert. A later alert resolving to a genuinely different shape —
+        button on the same alert. A later alert resolving to a genuinely different shape, once the
+        earlier one is no longer part of what a probe reads, still taps as usual on either path —
         including one sharing only the tapped label (`notifications` and `tracking` both grant
-        `"Allow"`) — still taps as usual on either path.
+        `"Allow"`). Two such shapes enumerable *together* instead share that label's count, so
+        `matching_alert_rule`'s own per-label uniqueness check (`_functions.py`) matches neither
+        until the read no longer holds both, and the round reports the surface as unhandled rather
+        than guessing which one a shared label answers for.
 
         `note` likewise survives a round that resolves a *different* surface: a tree button stuck
         behind a scrim (`NotTappable`) stays named in the eventual `blocked_note` even if a later

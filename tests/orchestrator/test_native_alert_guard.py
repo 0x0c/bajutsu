@@ -1722,6 +1722,45 @@ def test_dismiss_from_tree_once_does_not_promote_a_shadowed_choice_for_the_same_
     assert sum(1 for a in driver.actions if a[0] == "tap") == 1
 
 
+def test_dismiss_from_tree_once_treats_a_narrower_rendering_of_an_excluded_shape_as_excluded() -> (
+    None
+):
+    # A `savePassword`-style policy resolves to several rules whose shapes nest inside one another
+    # rather than share one exact shape: the widest names three labels, a narrower one names two of
+    # those same three, and both tap the same button. Excluding only the exact shape a round tapped
+    # would leave the narrower sibling free to match the very same still-fading sheet and tap it a
+    # second time. Excluding by subset closes that: a shape wholly contained in one already excluded
+    # counts as excluded too, so the narrower sibling declines along with the exact match, and a
+    # rule naming a label neither shares ("Save", not "Save Password") still can't match at all.
+    widest = ResolvedAlertRule(
+        identifying_labels=frozenset({"Save Password", "Never for This Website", "Not Now"}),
+        tap_label="Not Now",
+        native=False,
+        in_tree=True,
+    )
+    narrower = ResolvedAlertRule(
+        identifying_labels=frozenset({"Save Password", "Not Now"}),
+        tap_label="Not Now",
+        native=False,
+        in_tree=True,
+    )
+    unrelated = ResolvedAlertRule(
+        identifying_labels=frozenset({"Save", "Not Now"}),
+        tap_label="Not Now",
+        native=False,
+        in_tree=True,
+    )
+    # Never removed: models the sheet's own dismiss animation outlasting `settle`.
+    driver = FakeDriver(
+        [_button("Save Password"), _button("Never for This Website"), _button("Not Now")]
+    )
+    guard = AlertGuardConfig(rules=[widest, narrower, unrelated])
+    cleared, alerts = _call(driver, guard)
+    assert cleared
+    assert alerts == [AlertEvent(label="Not Now")]  # tapped once, not once per nested rule
+    assert sum(1 for a in driver.actions if a[0] == "tap") == 1
+
+
 def test_the_end_of_step_guard_finds_a_stacked_alert_behind_a_fading_first_match() -> None:
     # `already_dismissed` must not end the round the instant the plain first match is one this
     # call already answered: a real, not-yet-answered alert can be enumerable right alongside that
