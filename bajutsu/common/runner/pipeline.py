@@ -728,6 +728,20 @@ class _ScenarioRunner:
                 f"backend crashed mid-run and did not recover across "
                 f"{budget.total_attempts} attempts: {last_crash}"
             )
+        # Reaching here (none of the branches above) means the for-loop ran out of attempts without
+        # ever leasing successfully, which only happens after at least one `except BackendCrashError`
+        # below set `last_crash` — the type-checker cannot see that across the elif chain above.
+        assert last_crash is not None
+        # The last attempt's own interval finalize (in `run_scenario`'s `finally`) still ran before
+        # its crash propagated, so a recording that was in flight when the backend died may already
+        # be on disk — `partial_artifacts` is how it reaches here. Only the video matters to the
+        # report's always-visible media area; a recovered `deviceLog`/`appTrace` still rides the
+        # normal artifact list rather than needing its own disclosure, since those panels simply
+        # don't appear when absent (unlike the video player, which would otherwise show nothing).
+        recovered = next(
+            (a for a in (last_crash.partial_artifacts or []) if a.kind == "video"),
+            None,
+        )
         return RunResult(
             scenario=s.name,
             ok=False,
@@ -735,10 +749,13 @@ class _ScenarioRunner:
             backend=actuator or "",
             sid=sid,
             failure=failure,
-            # Every attempt's own recording died with the lease that crashed under it, so no
-            # `Artifact` ever reaches this result — disclose the gap instead of leaving the report's
-            # video player looking like recording was simply never attempted (BE-0020's channel).
-            skipped_captures=[SkippedCapture(kind="video", reason=failure)],
+            artifacts=[recovered] if recovered is not None else [],
+            # Disclose the gap only when no recording survives the crash — otherwise the video
+            # attached above already answers "where is the recording" and a skip entry would just
+            # contradict the player sitting right above it (BE-0020's channel).
+            skipped_captures=[]
+            if recovered is not None
+            else [SkippedCapture(kind="video", reason=failure)],
         )
 
     def _run_on_lease(
