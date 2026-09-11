@@ -105,35 +105,57 @@ reads back the old crash's evidence — clearing `self._runner_log` and `self._r
 crash-related behind at all.
 
 So `XcuitestEnvironment` captures eagerly instead, at the point `_discard_runner` itself first
-observes the crash — where it already sets `crashed = True` and logs "a mid-run crash"
-(`xcuitest_environment.py:1170-1176`), before `self._runner_proc = None` clears the handle a few
-lines later. Right there, it reads the two entries below and caches them as
-`self._last_crash_artifacts`; `crash_artifacts()` just returns that cached list. Both entries are
-best-effort, matching the posture `_result_bundle_path` and `_capture_stall` already take for their
-own captures — a missing log, an unreadable `DiagnosticReports` directory (any platform but macOS,
-or a sandboxed CI runner with no read permission), or no crash report at all (the process never
-actually faulted — the channel just stopped answering) each resolve to that entry being skipped,
-never to a raise:
+observes the crash. That point is narrower than "the process had already exited": `_discard_runner`
+sets `crashed = warn_on_crash` (`xcuitest_environment.py:1178`), and `warn_on_crash=False` is a real,
+used call shape — a cold-spawn-failure discard (`_spawn_cold_with_retry`, and the
+`discard=lambda: self._discard_runner(warn_on_crash=False, keep_log=True)` wired into the driver at
+`xcuitest_environment.py:791`) takes the same `exited is not None` branch for a failure that is
+explicitly *not* a mid-run crash. The snapshot below fires only when `crashed` ends up `True` —
+mirroring that exact guard — so a cold-spawn-failure discard mid-retry-loop never overwrites a mid-run
+crash's evidence with its own.
 
-- **The runner's own captured output**, read as a bounded tail from `self._runner_log`, the file
-  `_open_runner_output` opens — the same streaming `deque(fh, maxlen=...)` read
-  `_runner_log_hint` already uses to avoid materializing the whole (high-volume) capture
-  (`xcuitest_environment.py:1134-1137`), just against a larger cap than that twenty-line hint,
-  since this artifact exists to exceed it. Captured by default today (BE-0319), but never copied
-  anywhere.
-- **The `xcodebuild test-without-building` process's own macOS crash report.** `_spawn_runner`
+Right there, before `self._runner_proc = None` clears the handle a few lines later, two different
+things get captured at two different times, because the runner log and the `.ips` crash report have
+different failure windows to race:
+
+- **The runner's own captured output**, read *eagerly, right there* as a bounded tail from
+  `self._runner_log` — the same streaming `deque(fh, maxlen=...)` read `_runner_log_hint` already
+  uses to avoid materializing the whole (high-volume) capture (`xcuitest_environment.py:1134-1137`),
+  just against a larger cap than that twenty-line hint, since this artifact exists to exceed it. This
+  one races `free.put(udid)`, so it cannot wait.
+- **The match criteria for the `xcodebuild test-without-building` process's own macOS crash
+  report**, frozen *eagerly, right there* too, but the report itself is read only later. `_spawn_runner`
   already records the process handle as `self._runner_proc` right after `Popen` returns
   (`xcuitest_environment.py:769`); this item adds a spawn timestamp next to it,
-  `self._runner_spawned_at = time.time()`, since `Popen` exposes no start time of its own. The
-  capture lists `~/Library/Logs/DiagnosticReports` for a `.ips` file named `xcodebuild-*`, whose
-  modification time falls at or after `self._runner_spawned_at`; the name-and-time match keeps the
-  sweep from picking up an unrelated `xcodebuild` invocation's report left on the same host. When
-  the file's own JavaScript Object Notation (JSON) header names a `pid`, matching it against
-  `self._runner_proc.pid` narrows a
-  multi-worker host's several concurrent `xcodebuild` processes further, but a report whose header
-  cannot be parsed is still taken on the name-and-time match alone — this capture stays best-effort
-  throughout. The listing is capped at the first few matches, mirroring BE-0361's own per-capture
-  caps, so a runner that keeps crash-looping cannot make one scenario's evidence write unbounded.
+  `self._runner_spawned_at = time.time()`, since `Popen` exposes no start time of its own. Both are
+  copied into a dedicated pair, `self._last_crash_report_match`, frozen at this exact moment —
+  distinct from the live `self._runner_spawned_at` / `self._runner_proc`, which a respawn on this
+  same environment instance would otherwise overwrite before anyone reads them back.
+
+Both entries are cached as `self._last_crash_artifacts` (a mix of the already-read log tail and the
+frozen match criteria); `crash_artifacts()` reads that cache when the pipeline calls it — the runner
+log unchanged, but the `.ips` lookup happens **only then**, against
+`self._last_crash_report_match`. That deferral is deliberate: macOS's `ReportCrash` writes a `.ips`
+report *asynchronously*, after the faulting process is already gone, and symbolication can take
+anywhere from hundreds of milliseconds to several seconds — so listing `DiagnosticReports`
+synchronously inside `_discard_runner` would usually find nothing yet. The pipeline's own call site
+runs only once the retry loop has already given up, seconds later and off the respawn path, which
+gives `ReportCrash` the time it needs. The frozen match criteria are what make that deferral safe:
+by the time `crash_artifacts()` runs, `self._runner_spawned_at` / `self._runner_proc` may already
+belong to a different, later spawn, but `self._last_crash_report_match` still names the crashed one.
+
+The lookup itself lists `~/Library/Logs/DiagnosticReports` for a `.ips` file named `xcodebuild-*`
+whose modification time falls at or after the frozen spawn timestamp; the name-and-time match keeps
+the sweep from picking up an unrelated `xcodebuild` invocation's report left on the same host. When
+the file's own JavaScript Object Notation (JSON) header names a `pid`, matching it against the frozen
+pid narrows a multi-worker host's several concurrent `xcodebuild` processes further, but a report
+whose header cannot be parsed is still taken on the name-and-time match alone. The listing is capped
+at the first few matches, mirroring BE-0361's own per-capture caps, so a runner that keeps
+crash-looping cannot make one scenario's evidence write unbounded. Both entries stay best-effort
+throughout, matching the posture `_result_bundle_path` and `_capture_stall` already take for their
+own captures: a missing log, an unreadable `DiagnosticReports` directory (any platform but macOS, or
+a sandboxed CI runner with no read permission), or a report that never showed up in time all resolve
+to that entry being skipped, never to a raise.
 
 This ordering is what a released, then re-leased, environment cannot undo: the snapshot is already
 taken and cached before `free.put(udid)` runs, so a later respawn's own state changes never touch
@@ -213,11 +235,13 @@ Nothing in this item changes what a non-macOS run captures.
 - [ ] Unit 1 — `crash_artifacts()` on the `RunEnvironment` protocol shape and, returning `[]`, on
       `_DeviceEnvironment` (ios.py), `WebEnvironment`, and `AndroidEnvironment`.
 - [ ] Unit 2 — `XcuitestEnvironment`'s override: a spawn timestamp (`self._runner_spawned_at`)
-      recorded alongside `self._runner_proc`; the eager snapshot inside `_discard_runner`, cached as
-      `self._last_crash_artifacts` before the crashed process handle is cleared; the bounded-tail
-      runner-log read and the name-and-time `DiagnosticReports` sweep for `xcodebuild-*.ips`, both
-      best-effort and
-      bounded.
+      recorded alongside `self._runner_proc`; the snapshot inside `_discard_runner`, gated on
+      `crashed` (the real `crashed = warn_on_crash`, not every `exited is not None`) — an eager
+      bounded-tail runner-log read cached as `self._last_crash_artifacts`, plus the `.ips` match
+      criteria (spawn timestamp, pid) frozen into `self._last_crash_report_match` before either can
+      be overwritten by a later spawn; the name-and-time `DiagnosticReports` sweep for
+      `xcodebuild-*.ips`, deferred to `crash_artifacts()`'s own call so `ReportCrash` has time to
+      write and symbolicate, both best-effort and bounded.
 - [ ] Unit 3 — `Lease.crash_artifacts`, defaulted through a module-level `_no_crash_artifacts`, wired
       in `pool.py`'s `lease()` closure alongside `request_device_replacement`.
 - [ ] Unit 4 — The `pipeline.py` call site: invoked once, at the crash-exhausted `RunResult`, writing
