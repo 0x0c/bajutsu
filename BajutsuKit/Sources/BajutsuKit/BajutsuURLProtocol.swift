@@ -57,6 +57,13 @@ final class BajutsuURLProtocol: URLProtocol, URLSessionDataDelegate {
             serveStub(rule)
             return
         }
+        // `.default`, not the app's own configuration: `URLProtocol` exposes no public way to
+        // recover the `URLSessionConfiguration` (or delegate) a request was issued through, so an
+        // app that relies on session-scoped state — an ephemeral/custom cookie storage, a
+        // non-default `httpAdditionalHeaders`, or a delegate-driven auth-challenge/TLS-pinning
+        // decision — can see different behavior once intercepted. Request-scoped settings
+        // (headers, method, body, cachePolicy, timeoutInterval) are unaffected: they live on the
+        // `URLRequest` copied above, not on the configuration.
         inner = URLSession(configuration: .default, delegate: self, delegateQueue: nil)
         innerTask = inner?.dataTask(with: mutable as URLRequest)
         innerTask?.resume()
@@ -129,6 +136,21 @@ final class BajutsuURLProtocol: URLProtocol, URLSessionDataDelegate {
             body: responseData, startedAt: startedAt, error: error
         )
         inner?.finishTasksAndInvalidate()
+    }
+
+    // A redirect followed by the forwarding session above (`.default`, line ~60) would carry
+    // that session's cookies/config rather than the app's own, so it is not auto-followed here.
+    // `wasRedirectedTo` hands it back to the URL Loading System, which stops this instance
+    // (`stopLoading()` below cancels `innerTask`) and starts a fresh `canInit`-routed load for
+    // the new request under the app's real session — the same path an unintercepted redirect
+    // would take.
+    func urlSession(
+        _ session: URLSession, task: URLSessionTask,
+        willPerformHTTPRedirection response: HTTPURLResponse, newRequest request: URLRequest,
+        completionHandler: @escaping (URLRequest?) -> Void
+    ) {
+        client?.urlProtocol(self, wasRedirectedTo: request, redirectResponse: response)
+        completionHandler(nil)
     }
 
     // MARK: cover app-created sessions

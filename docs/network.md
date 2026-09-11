@@ -133,6 +133,9 @@ time the UI has updated, the exchange is in the collector.
 **iOS** — link [BajutsuKit](../BajutsuKit/README.md) and call `BajutsuNet.startIfEnabled()` early.
 It is inert unless `BAJUTSU_COLLECTOR` is set, captures `URLSession` HTTP(S) only, and is
 **test/debug-only** (it records headers/bodies — keep it out of release and use `redact`).
+BajutsuKit forwards the intercepted request as-is: same method, headers, body, and timeout.
+`URLProtocol` cannot recover the app's own `URLSessionConfiguration`, though. An app with TLS
+pinning or client-cert auth in its delegate can see the check fail once intercepted.
 
 **Android** — link [BajutsuAndroid](../BajutsuAndroid/README.md), call `BajutsuNet.configure(env)` at
 launch (with the launch-env map), and add `BajutsuNet.interceptor()` to the app's `OkHttpClient`. It
