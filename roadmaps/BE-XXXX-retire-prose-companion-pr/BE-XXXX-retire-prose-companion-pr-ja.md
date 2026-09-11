@@ -9,6 +9,7 @@
 | 提案者 | [@handle](https://github.com/handle) |
 | 状態 | **実装済み** |
 | トラッキング Issue | [検索](https://github.com/bajutsu-e2e/bajutsu/issues?q=is%3Aissue+label%3Aroadmap-tracking+in%3Atitle+"BE-XXXX") |
+| 実装 PR | [#1983](https://github.com/bajutsu-e2e/bajutsu/pull/1983) |
 | トピック | コントリビューターワークフロー |
 | 関連 | [BE-0343](../BE-0343-prose-companion-pr/BE-0343-prose-companion-pr-ja.md)、[BE-0203](../BE-0203-claude-code-pr-review/BE-0203-claude-code-pr-review-ja.md) |
 <!-- /BE-METADATA -->
