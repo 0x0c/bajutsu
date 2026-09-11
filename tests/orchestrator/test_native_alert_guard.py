@@ -1894,6 +1894,48 @@ def test_the_end_of_step_guard_reports_a_second_native_alert_stuck_behind_an_ear
     assert guard.blocked_note == uncleared_prompt_note("B1")
 
 
+def test_the_end_of_step_guard_reports_a_native_alert_uncleared_past_an_intervening_collision() -> (
+    None
+):
+    # `_bound_exhaustion_note` must check the final round's own read directly, not a streak counted
+    # since the tap: an "unhandled" collision round -- BE-0418's own notifications/tracking pair,
+    # sharing the tapped label "Allow" -- sits between the tap and the bound here, and an earlier
+    # version of the check never advanced its own count for a round of that kind, permanently losing
+    # the diagnosis for the rest of the call once it did (review finding).
+    notifications = ResolvedAlertRule(
+        identifying_labels=frozenset({"Allow", "Don't Allow"}), tap_label="Allow"
+    )
+    tracking = ResolvedAlertRule(
+        identifying_labels=frozenset({"Allow", "Ask App Not to Track"}), tap_label="Allow"
+    )
+    driver = _fake_with_alert(["Allow", "Don't Allow"])
+    settle_count = 0
+
+    def settle() -> None:
+        nonlocal settle_count
+        settle_count += 1
+        if settle_count == 1:
+            # Round 0 tapped notifications, but its fade lingers, and tracking's own alert joins it:
+            # two "Allow" buttons now enumerable together fail the per-label uniqueness check for
+            # either, landing round 1 in "unhandled" rather than "already_dismissed".
+            driver.system_alert_buttons = [
+                _button("Allow"),
+                _button("Don't Allow"),
+                _button("Allow"),
+                _button("Ask App Not to Track"),
+            ]
+        elif settle_count == 2:
+            # Tracking's own alert resolves elsewhere (an interruption monitor, say) by round 2, but
+            # notifications' own tap still never actually landed.
+            driver.system_alert_buttons = [_button("Allow"), _button("Don't Allow")]
+
+    guard = AlertGuardConfig(rules=[notifications, tracking])
+    alerts: list[AlertEvent] = []
+    cleared = guard(driver, alerts, settle=settle)
+    assert cleared and alerts == [AlertEvent(label="Allow")]  # tracking never actually tapped
+    assert guard.blocked_note == uncleared_prompt_note("Allow")
+
+
 def test_the_end_of_step_guard_clears_a_native_leftover_note_once_the_surface_reads_absent() -> (
     None
 ):
