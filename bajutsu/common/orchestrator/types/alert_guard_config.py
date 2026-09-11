@@ -322,7 +322,17 @@ class AlertGuardConfig:
                 # reach "absent" — and any app-owned sheet stacked underneath — instead of
                 # spending the whole bound re-reading the same alert.
                 if not tree_note_pending:
-                    note = ""
+                    # `buttons` is the whole enumerable SpringBoard surface, not this one rule's
+                    # own set, so declining a re-tap here does not mean nothing else is up: a
+                    # second, still-live alert no rule identifies can sit right alongside it. Only
+                    # the labels of rules this call has already answered are accounted for;
+                    # anything else on the surface gets the same diagnosis a fresh "unhandled"
+                    # probe would give it — the "dismissed" branch's own clear above self-corrects
+                    # on a later round that re-probes fresh buttons, but a round that keeps
+                    # declining the same rule never does, so it must check this itself.
+                    answered = {label for _, labels in dismissed_native for label in labels}
+                    leftover = [b for b in buttons if b not in answered]
+                    note = alert_block_note(leftover) if leftover else ""
                 settle()
                 continue
             if state == "absent":

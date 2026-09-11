@@ -770,9 +770,12 @@ Android; on iOS it rests on the fast suite's bookkeeping proof alone.
   that read enumerates every alert SpringBoard currently holds and so changes the moment a
   different alert joins or leaves the surface, which the alert already dismissed did not do. A
   later alert resolving to a different rule — including one sharing the tapped label alone (the
-  built-in `notifications` and `tracking` prompts both grant `"Allow"`) — still taps as usual. Once
-  a tree-dismissed button clears, the call excludes it from matching again for the rest of its own
-  rounds, so a lingering button there never reaches a second tap either. A button that never
+  built-in `notifications` and `tracking` prompts both grant `"Allow"`) — still taps as usual. A
+  round that declines a repeat tap still checks the buttons the probe read against every rule
+  answered so far: a queued second alert no rule identifies can sit right alongside the one this
+  call already dismissed, and the decline alone does not mean the rest of the surface is clear.
+  Once a tree-dismissed button clears, the call excludes it from matching again for the rest of its
+  own rounds, so a lingering button there never reaches a second tap either. A button that never
   becomes reachable within the bound carries its own note, distinct from the one an alert no rule
   identifies carries, rather than reading as a bare missing element. That note survives a later
   round that finds nothing to match, or one that goes on to dismiss an unrelated alert on the other

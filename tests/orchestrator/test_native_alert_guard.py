@@ -1645,6 +1645,11 @@ def test_the_end_of_step_guard_does_not_retap_a_fading_alert_when_another_one_jo
     cleared, alerts = _call(driver, guard)
     assert cleared and alerts == [AlertEvent(label="Allow")]
     assert sum(1 for a in driver.actions if a[0] == "handle_system_alert") == 1
+    # The joining alert ("OK" / "Cancel") is one this call never answered — `already_dismissed`
+    # declining to re-tap the first alert must not read as "nothing else is up" and silently drop
+    # it (BE-0418): the eventual failure still needs to name it, the same as a fresh "unhandled".
+    assert "an unhandled system alert is blocking the screen" in guard.blocked_note
+    assert "OK" in guard.blocked_note and "Cancel" in guard.blocked_note
 
 
 def test_the_end_of_step_guard_keeps_a_pending_tree_note_through_a_repeated_native_alert() -> None:
