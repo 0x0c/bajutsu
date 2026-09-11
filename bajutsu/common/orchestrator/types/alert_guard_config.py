@@ -133,6 +133,20 @@ class AlertGuardConfig:
         """
         return [rule for rule in self.rules if rule.in_tree]
 
+    @property
+    def native_rules(self) -> list[ResolvedAlertRule]:
+        """The rules `probe_native` may act on: those whose prompt SpringBoard can raise.
+
+        `probe_native` and `__call__`'s own re-resolution of what it just tapped must filter
+        identically — the re-resolution is only correct because it reproduces `probe_native`'s
+        selection exactly, over the same `buttons` and `dismissed`. A single property, rather than
+        `[r for r in self.rules if r.native]` spelled out at each call site, keeps the two from
+        drifting: a rule this filter admits that `probe_native` itself excludes (or the reverse)
+        would have `_resolve_alert_rule` return `None` right where a caller asserts it cannot,
+        turning a merely failed step into an aborted scenario. Mirrors `tree_rules` above.
+        """
+        return [rule for rule in self.rules if rule.native]
+
     def probe_native(
         self,
         driver: base.Driver,
@@ -191,12 +205,12 @@ class AlertGuardConfig:
             # The step is waiting on this very alert and taps it on its own next read. Not
             # "absent": an alert *is* up, and "absent" is the one answer licensing an in-tree tap.
             return "reserved", None, list(buttons)
-        # Filtered to `native`, not the full `self.rules`: an in-tree-only shape's identifying
+        # Filtered to `native_rules`, not the full `self.rules`: an in-tree-only shape's identifying
         # labels are ordinary vocabulary a real SpringBoard alert could coincidentally offer (the
         # 26.5 save sheet's shape is just "Save" / "Not Now"), and matching it here would answer
         # through `handle_system_alert` a prompt that surface can never actually reach — the same
         # undeclared-screen tap this proposal removes everywhere else (BE-0406).
-        native_rules = [r for r in self.rules if r.native]
+        native_rules = self.native_rules
         if matching_alert_rule(native_rules, buttons) is None:
             return "unhandled", None, list(buttons)
         # A shape does identify the alert, but it may be one this call has already answered,
@@ -374,9 +388,7 @@ class AlertGuardConfig:
                 # return member only this one caller needs — so this always agrees with what
                 # `probe_native` actually acted on, including when the plain first match was
                 # itself already answered and the tap landed on its not-yet-answered fallback.
-                rule = _resolve_alert_rule(
-                    [r for r in self.rules if r.native], buttons, dismissed_native
-                )
+                rule = _resolve_alert_rule(self.native_rules, buttons, dismissed_native)
                 assert rule is not None  # the round that just dismissed this alert matched it
                 dismissed_native |= {rule.identifying_labels}
                 cleared = True
@@ -412,7 +424,7 @@ class AlertGuardConfig:
                         # branch below already names an unlanded tap, rather than letting the
                         # still-fading story clear a note that turns out to be the step's own last
                         # chance to explain the eventual element-not-found.
-                        rule = matching_alert_rule([r for r in self.rules if r.native], buttons)
+                        rule = matching_alert_rule(self.native_rules, buttons)
                         assert rule is not None  # "already_dismissed" only follows a plain match
                         note = uncleared_prompt_note(rule.tap_label)
                     else:
@@ -453,8 +465,13 @@ class AlertGuardConfig:
                     settle()
                     continue
                 # Otherwise this round's tree read may simply have caught a still-animating screen
-                # mid-transition rather than a genuinely clear one, so `note` is left as an earlier
-                # round's diagnosis left it rather than erased on this round's own account.
+                # mid-transition rather than a genuinely clear one, so a tree diagnosis is left as
+                # an earlier round's read left it rather than erased on this round's own account.
+                # A native one is not: this round's probe answered "absent", a deterministic
+                # no-SpringBoard-alert fact, so an `already_dismissed` round's leftover note would
+                # otherwise name an alert this call has since watched go away.
+                if not tree_note_pending:
+                    note = ""
                 break
             # "unhandled": an alert is up that no rule identifies. BE-0402 leaves it alone rather
             # than asking a model where to tap, so the step keeps failing — but on its own timeout

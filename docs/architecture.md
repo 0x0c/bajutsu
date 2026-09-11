@@ -788,18 +788,23 @@ Android; on iOS it rests on the fast suite's bookkeeping proof alone.
   queued second alert no rule identifies can sit right alongside the one this call already
   dismissed, and the decline alone does not mean the rest of the surface is clear. A button that
   never becomes reachable within the bound carries its own note, distinct from the one an alert no
-  rule identifies carries, rather than reading as a bare missing element. That note survives a
-  later round that finds nothing to match, or one that goes on to dismiss an unrelated alert on the
-  other surface, rather than either round erasing a real, still-open diagnosis. XCUITest itself
-  intervenes on an alert that interrupts an in-flight interaction *before* this guard ever polls,
-  and left alone answers with the alert's own default button — silently overriding a scenario's
-  policy with nothing in the report. The runner therefore installs an interruption monitor that
-  presses the same rule-named button the reactive guard would, and records what it pressed as an
-  ordinary `AlertEvent`; the orchestrator resolves each rule's labels and pushes them, alongside
-  whether the guard governs the scenario at all, once per scenario over `POST /interruptionPolicy`,
-  dropping a rule this surface can never meet (an in-process prompt never interrupts another
-  process's interaction). A `handleSystemAlert` step's own prompt/choice form is not necessarily
-  among those rules — the step exists precisely for a prompt an author chooses not to declare in
+  rule identifies carries, rather than reading as a bare missing element. A native alert the call
+  did tap carries that same note once it is still the only thing on the surface as the bound is
+  spent: three consecutive reads of a live, policy-named alert is evidence the tap never landed,
+  not that its dismiss animation is merely still playing out. The tree note survives a later round
+  that finds nothing to match, or one that goes on to dismiss an unrelated alert on the other
+  surface, rather than either round erasing a real, still-open diagnosis. A native leftover note
+  does not survive that same kind of later round, though: once its own probe proves the surface
+  absent, that is a deterministic fact the diagnosis cannot outlive. XCUITest itself intervenes on
+  an alert that interrupts an in-flight interaction *before* this guard ever polls, and left alone
+  answers with the alert's own default button — silently overriding a scenario's policy with
+  nothing in the report. The runner therefore installs an interruption monitor that presses the
+  same rule-named button the reactive guard would, and records what it pressed as an ordinary
+  `AlertEvent`; the orchestrator resolves each rule's labels and pushes them, alongside whether the
+  guard governs the scenario at all, once per scenario over `POST /interruptionPolicy`, dropping a
+  rule this surface can never meet (an in-process prompt never interrupts another process's
+  interaction). A `handleSystemAlert` step's own prompt/choice form is not necessarily among those
+  rules — the step exists precisely for a prompt an author chooses not to declare in
   `systemAlertHandling` — so while that one step waits the orchestrator pushes one more rule for
   the step's own target alongside the scenario's, and restores the scenario's own policy once the
   step returns, fails, or the wait raises. Without it, an earlier action's own interruption could

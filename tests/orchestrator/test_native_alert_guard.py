@@ -1631,6 +1631,39 @@ def test_the_end_of_step_guard_never_retaps_a_native_alert_it_already_dismissed(
     assert settle_calls == 3
 
 
+def test_the_end_of_step_guard_clears_a_native_leftover_note_once_the_surface_reads_absent() -> (
+    None
+):
+    # An `already_dismissed` round's leftover note names a *native* alert `probe_native` actually
+    # enumerated. A later round's own probe answering `"absent"` is a deterministic no-SpringBoard-
+    # alert fact (`probe_native`'s own docstring), so that note is now stale evidence of an alert
+    # this call has since watched go away -- unlike a tree diagnosis, which a merely-ambiguous tree
+    # read cannot contradict this cleanly, and which this fix must not touch.
+    driver = _fake_with_alert(["Allow", "Don't Allow"])
+    guard = AlertGuardConfig(rules=[guard_rule("Allow", identifying=("Allow", "Don't Allow"))])
+    settle_count = 0
+
+    def settle() -> None:
+        nonlocal settle_count
+        settle_count += 1
+        if settle_count == 1:
+            # Round 0's own alert fades, and a second, unrelated one queues alongside it.
+            driver.system_alert_buttons = [
+                _button("Allow"),
+                _button("Don't Allow"),
+                _button("OK"),
+                _button("Cancel"),
+            ]
+        elif settle_count == 2:
+            # Both are gone by round 2 -- an interruption monitor answered the second one, say.
+            driver.system_alert_buttons = []
+
+    alerts: list[AlertEvent] = []
+    cleared = guard(driver, alerts, settle=settle)
+    assert cleared and alerts == [AlertEvent(label="Allow")]
+    assert guard.blocked_note == ""
+
+
 def test_the_end_of_step_guard_does_not_retap_a_fading_alert_when_another_one_joins_it() -> None:
     # The native dedup keys on the matched rule's own shape, not the raw buttons read: that read
     # (`system_alert_labels()`) enumerates every alert SpringBoard currently holds, so a still-
