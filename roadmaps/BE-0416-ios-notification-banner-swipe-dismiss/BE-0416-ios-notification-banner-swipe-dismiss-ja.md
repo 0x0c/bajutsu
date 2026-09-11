@@ -9,6 +9,7 @@
 | 提案者 | [@0x0c](https://github.com/0x0c) |
 | 状態 | **実装中** |
 | トラッキング Issue | [検索](https://github.com/bajutsu-e2e/bajutsu/issues?q=is%3Aissue+label%3Aroadmap-tracking+in%3Atitle+"BE-0416") |
+| 実装 PR | [#1975](https://github.com/bajutsu-e2e/bajutsu/pull/1975)（単位 1、4、6、7） |
 | トピック | プラットフォーム対応 |
 | 関連 | [BE-0177](../BE-0177-run-behavior-target-config/BE-0177-run-behavior-target-config-ja.md)、[BE-0314](../BE-0314-scenario-interrupt-handlers/BE-0314-scenario-interrupt-handlers-ja.md)、[BE-0315](../BE-0315-ios-native-system-alert-handling/BE-0315-ios-native-system-alert-handling-ja.md)、[BE-0399](../BE-0399-ios-system-alert-interruption-policy/BE-0399-ios-system-alert-interruption-policy-ja.md)、[BE-0406](../BE-0406-system-alert-declared-prompts/BE-0406-system-alert-declared-prompts-ja.md) |
 <!-- /BE-METADATA -->
@@ -190,7 +191,7 @@ Unit 1 は、純粋な照会が割り込み監視を呼ばず、通知バナー�
 
 ログ：
 
-- 2026-09-11 — 専用の Simulator（iPhone 17 Pro / iOS 26.5、iPhone 16 Pro / iOS 18.6）で単位 1 を
+- 2026-09-11 — [#1975](https://github.com/bajutsu-e2e/bajutsu/pull/1975) — 専用の Simulator（iPhone 17 Pro / iOS 26.5、iPhone 16 Pro / iOS 18.6）で単位 1 を
   測定し、その結果に合わせて単位 2〜4 を書き直しました。単位 4 を実装しました。runner の割り込み
   監視が、アラートのポリシーより前に通知バナーを判定し、実測した枠を起点にスワイプで消し、割り込みを
   引き受ける前に消えたことを確認し、`notificationBanner` 種別を持つ `AlertEvent` として報告します。

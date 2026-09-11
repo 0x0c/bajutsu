@@ -9,6 +9,7 @@
 | Author | [@0x0c](https://github.com/0x0c) |
 | Status | **In progress** |
 | Tracking issue | [Search](https://github.com/bajutsu-e2e/bajutsu/issues?q=is%3Aissue+label%3Aroadmap-tracking+in%3Atitle+"BE-0416") |
+| Implementing PR | [#1975](https://github.com/bajutsu-e2e/bajutsu/pull/1975) (units 1, 4, 6, 7) |
 | Topic | Platform support |
 | Related | [BE-0177](../BE-0177-run-behavior-target-config/BE-0177-run-behavior-target-config.md), [BE-0314](../BE-0314-scenario-interrupt-handlers/BE-0314-scenario-interrupt-handlers.md), [BE-0315](../BE-0315-ios-native-system-alert-handling/BE-0315-ios-native-system-alert-handling.md), [BE-0399](../BE-0399-ios-system-alert-interruption-policy/BE-0399-ios-system-alert-interruption-policy.md), [BE-0406](../BE-0406-system-alert-declared-prompts/BE-0406-system-alert-declared-prompts.md) |
 <!-- /BE-METADATA -->
@@ -278,7 +279,7 @@ interrupted one.
 
 Log:
 
-- 2026-09-11 — Unit 1 measured on dedicated Simulators (iPhone 17 Pro / iOS 26.5, iPhone 16 Pro /
+- 2026-09-11 — [#1975](https://github.com/bajutsu-e2e/bajutsu/pull/1975) — Unit 1 measured on dedicated Simulators (iPhone 17 Pro / iOS 26.5, iPhone 16 Pro /
   iOS 18.6), and Units 2–4 rewritten against what it found. Unit 4 landed: the runner's interruption
   monitor now recognizes a notification banner ahead of the alert policy, swipes it away by its own
   measured frame, confirms the clearance before claiming the interruption, and reports it as an
