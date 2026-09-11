@@ -1453,13 +1453,23 @@ def test_the_end_of_step_guard_names_a_permanently_obstructed_prompt() -> None:
 
     driver = _NeverLands()
     guard = AlertGuardConfig(rules=[guard_rule("Not Now")])
-    cleared, alerts = _call(driver, guard)
+    settle_calls = 0
+
+    def settle() -> None:
+        nonlocal settle_calls
+        settle_calls += 1
+
+    cleared, alerts = _call(driver, guard, settle=settle)
     assert not cleared and alerts == []
     assert "a system prompt the guard could not clear is still up" in guard.blocked_note
     assert "Not Now" in guard.blocked_note
     # Pins the round bound itself: a widened `_GUARD_CALL_MAX_ROUNDS` would retap (and re-settle)
     # more times here without any other assertion in the suite noticing.
     assert driver.tap_calls == 3
+    # And pins the settle on a round that found a button not yet tappable, not only on one that
+    # dismissed (BE-0418 Unit 1): without it the next round's retap — and, on the bound-exhausting
+    # round, the caller's own read — lands on a scrim still mid-presentation.
+    assert settle_calls == 3
 
 
 def test_the_end_of_step_guard_preserves_an_uncleared_tree_note_past_an_unrelated_native_dismissal() -> (
