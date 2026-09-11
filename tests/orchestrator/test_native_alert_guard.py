@@ -1867,14 +1867,15 @@ def test_the_end_of_step_guard_reports_a_native_alert_uncleared_after_a_leading_
 def test_the_end_of_step_guard_reports_a_second_native_alert_stuck_behind_an_earlier_ones_fade() -> (
     None
 ):
-    # The decline streak must anchor on the *shape* of the most recently tapped alert directly, not
-    # on whichever shape `matching_alert_rule`'s own plain, dedup-blind pick happens to return: an
-    # earlier dismissal's own still-enumerable fade can crowd the recent one out of that pick, which
-    # would otherwise leave the streak stuck at 0 forever once two native shapes have been tapped in
-    # the same call (review finding). Wide (round 0) never actually clears, and narrow -- tapped on
-    # round 1 once wide's own fade excludes it -- never clears either; `matching_alert_rule`'s plain
-    # pick keeps returning wide (checked first, widest-first) on every later round even though
-    # narrow is the shape this streak is meant to be tracking.
+    # `_bound_exhaustion_note` must anchor on the *shape* of the most recently tapped alert
+    # directly, not on whichever shape `matching_alert_rule`'s own plain, dedup-blind pick happens
+    # to return: an earlier dismissal's own still-enumerable fade can crowd the recent one out of
+    # that pick, which would otherwise lose the diagnosis for the rest of the call once two native
+    # shapes have been tapped in it (review finding). Wide (round 0) never actually clears, and
+    # narrow -- tapped on round 1 once wide's own fade excludes it -- never clears either;
+    # `matching_alert_rule`'s plain pick keeps returning wide (first in `native_rules`, which stays
+    # in declaration order -- `_widest_first` is the tree path's own, not this one's) on every later
+    # round even though narrow is the shape the check is meant to be reading.
     wide = ResolvedAlertRule(identifying_labels=frozenset({"A1", "A2"}), tap_label="A1")
     narrow = ResolvedAlertRule(identifying_labels=frozenset({"B1"}), tap_label="B1")
     driver = _fake_with_alert(["A1", "A2"])

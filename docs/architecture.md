@@ -781,9 +781,9 @@ Android; on iOS it rests on the fast suite's bookkeeping proof alone.
   only re-read the same surface or find the alert gone on its own, and continuing risks losing this
   round's own diagnosis to that second case. A native alert whose fade outlasts that settle still
   reads back, unchanged, on a later round.
-  Matched against a shape a previous round already dismissed, or a narrower
+  Where a later round's read matches a shape a previous round already dismissed, or a narrower
   rendering of one — two of a `savePassword` policy's three rules nest that way, though only on the
-  in-tree surface that prompt ever reaches, and both tap the same button — that round declines to
+  in-tree surface that prompt ever reaches, and both tap the same button — the round declines to
   tap it at all: the same alert still fading, not a distinct one, so a repeat tap never reaches the
   device and never risks landing on nothing or on whatever the closing alert has by then revealed
   underneath it, on either path. Both are keyed on a rule's own shape rather than the buttons a
