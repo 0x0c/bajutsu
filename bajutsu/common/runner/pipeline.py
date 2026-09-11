@@ -49,7 +49,14 @@ from bajutsu.common.orchestrator import (
     scenario_slug,
 )
 from bajutsu.common.orchestrator.types import _no_network
-from bajutsu.common.report import git_revision, run_provenance, scenario_render_inputs, write_report
+from bajutsu.common.report import (
+    ScenarioPlanSource,
+    git_revision,
+    run_provenance,
+    scenario_render_inputs,
+    scenario_source_meta,
+    write_report,
+)
 from bajutsu.common.runner.mailbox import build_mailbox_reader
 from bajutsu.common.runner.recovery import (
     CrashRecoveryBudget,
@@ -1073,6 +1080,7 @@ def run_and_report(
     secret_values: list[str] | None = None,
     source_name: str | None = None,
     description: str | None = None,
+    plan_sources: Mapping[str, ScenarioPlanSource] | None = None,
     progress: ProgressFn | None = None,
     baselines_dir: Path | None = None,
     schemas_dir: Path | None = None,
@@ -1096,9 +1104,11 @@ def run_and_report(
     Beyond `run_all`'s arguments (`force_erase_on_retry`, `cancelled`, and `trace_driver` pass
     straight through — see their docstrings there), `runs_dir` + `run_id` locate this run's artifact directory
     (`runs_dir/run_id`),
-    `source_name` / `description` are recorded in the report, and `config_source` — the Git source
-    the config came from (BE-0063), or None for a local config — is stamped into the manifest's
-    provenance so a branch-based run states the exact commit it executed.
+    `source_name` / `description` are recorded in the report, `plan_sources` (keyed by declared
+    scenario name — `run/cli.py`'s `_load_scenarios`) feeds the report's verbatim YAML / per-step
+    line numbers, and `config_source` — the Git source the config came from (BE-0063), or None for
+    a local config — is stamped into the manifest's provenance so a branch-based run states the
+    exact commit it executed.
 
     Returns:
         The per-scenario results and the path to the written `manifest.json`.
@@ -1134,6 +1144,7 @@ def run_and_report(
         run_id,
         description=description,
         source_name=source_name,
+        plan_sources=plan_sources,
         secret_values=secret_values,
         config_source=config_source,
         exec_provenance=exec_provenance,
@@ -1153,6 +1164,7 @@ def run_matrix_and_report(
     *,
     source_name: str | None = None,
     description: str | None = None,
+    plan_sources: Mapping[str, ScenarioPlanSource] | None = None,
     secret_values: list[str] | None = None,
     config_source: dict[str, str] | None = None,
     exec_provenance: dict[str, str | None] | None = None,
@@ -1213,6 +1225,7 @@ def run_matrix_and_report(
         run_id,
         description=description,
         source_name=source_name,
+        plan_sources=plan_sources,
         secret_values=secret_values,
         config_source=config_source,
         exec_provenance=exec_provenance,
@@ -1284,6 +1297,7 @@ def _assemble_report(
     *,
     source_name: str | None = None,
     description: str | None = None,
+    plan_sources: Mapping[str, ScenarioPlanSource] | None = None,
     secret_values: list[str] | None = None,
     config_source: dict[str, str] | None = None,
     exec_provenance: dict[str, str | None] | None = None,
@@ -1298,14 +1312,19 @@ def _assemble_report(
     Every one of them goes through a sink carrying the run's bound secret values, so a literal that
     reached a run-level artifact (an assertion's expected/actual text in the manifest or the HTML) is
     masked on the way in rather than rewritten afterwards (BE-0331). The scenario definitions already
-    hold tokens, not values, so this only ever catches result text.
+    hold tokens, not values, so this only ever catches result text. `plan_sources` feeds the report's
+    YAML tab from each scenario's own on-disk text instead of a re-dump (BE-xxxx) — the sink's own
+    scrub (above) still runs over it like every other artifact, on top of the structural TOTP-secret
+    masking `scenario_sources` already applied when it read the file.
     """
     # Snapshot for evidence with literal `totp.secret` seeds masked (BE-0152) — a `${secrets.*}`
     # reference is kept and its resolved value is masked by the sink below.
     snapshot = [redact_totp_secrets(s) for s in scenarios]
     # The merged Result tab renders each scenario as a structured view (definitions) with a toggle
-    # to the raw YAML (sources). The same helper feeds the offline re-render, so the two match.
-    definitions, sources = scenario_render_inputs(snapshot)
+    # to the raw YAML (sources). The same helper feeds the offline re-render, so the two match
+    # whenever `plan_sources` is unavailable there too (an older run, or one BE-cli didn't produce).
+    definitions, sources = scenario_render_inputs(snapshot, plan_sources)
+    source_files, step_lines = scenario_source_meta(snapshot, plan_sources)
     writer = RunArtifactWriter(run_dir, Redactor(None, values=secret_values))
     # Keep the executed scenario alongside its results (re-runnable / reviewable).
     scenario_yaml = dump_scenario_file(snapshot, description)
@@ -1332,4 +1351,6 @@ def _assemble_report(
         writer=writer,
         target=target,
         label=label,
+        source_files=source_files,
+        step_lines=step_lines,
     )

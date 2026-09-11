@@ -148,9 +148,33 @@ def test_expand_file_returns_scenarios_and_file_description(tmp_path: Path) -> N
         "description: a suite\nscenarios:\n  - name: demo\n    steps:\n      - tap: { id: home.title }\n",
         encoding="utf-8",
     )
-    scenarios, description = _expand_file(path, _eff(), root=tmp_path)
+    scenarios, description, plan_sources = _expand_file(path, _eff(), root=tmp_path)
     assert description == "a suite"
     assert [s.name for s in scenarios] == ["demo"]
+    assert plan_sources["demo"].file_name == "s.yaml"
+    assert plan_sources["demo"].step_lines == [5]
+
+
+def test_expand_file_setup_expansion_drops_step_lines(tmp_path: Path) -> None:
+    # A `setup` prelude prepends steps, so the pre-expansion step count no longer matches the
+    # executed one — line numbers would misattribute, so they're dropped; the verbatim text (with
+    # its comments) is kept regardless, since it is still accurate as authored.
+    (tmp_path / "setup.yaml").write_text(
+        "- name: setup\n  steps:\n    - tap: { id: login }\n", encoding="utf-8"
+    )
+    path = tmp_path / "s.yaml"
+    path.write_text(
+        "- name: demo  # the scenario under test\n  steps:\n    - tap: { id: home.title }\n",
+        encoding="utf-8",
+    )
+    scenarios, _description, plan_sources = _expand_file(
+        path, _eff(setup="setup.yaml"), root=tmp_path
+    )
+    assert len(scenarios[0].steps) == 2  # the setup step, then the scenario's own
+    plan = plan_sources["demo"]
+    assert plan.step_lines == []
+    assert plan.text is not None
+    assert "the scenario under test" in plan.text  # the comment survives
 
 
 def test_expand_file_missing_setup_ref_exits_2(tmp_path: Path) -> None:
@@ -203,11 +227,14 @@ def test_load_scenarios_single_file(tmp_path: Path) -> None:
         "description: suite\nscenarios:\n  - name: demo\n    steps:\n      - tap: { id: home.title }\n",
         encoding="utf-8",
     )
-    scenarios, description, source_name, files = _load_scenarios(_eff(), [str(scn)], "x")
+    scenarios, description, source_name, files, plan_sources = _load_scenarios(
+        _eff(), [str(scn)], "x"
+    )
     assert [s.name for s in scenarios] == ["demo"]
     assert description == "suite"  # the single file's description rides back
     assert source_name == "s.yaml"
     assert files == [scn]
+    assert plan_sources["demo"].file_name == "s.yaml"
 
 
 def test_load_scenarios_multiple_files_share_one_run(tmp_path: Path) -> None:
@@ -219,13 +246,15 @@ def test_load_scenarios_multiple_files_share_one_run(tmp_path: Path) -> None:
             f"scenarios:\n  - name: {demo}\n    steps:\n      - tap: {{ id: home.title }}\n",
             encoding="utf-8",
         )
-    scenarios, description, source_name, files = _load_scenarios(
+    scenarios, description, source_name, files, plan_sources = _load_scenarios(
         _eff(), [str(tmp_path / "a.yaml"), str(tmp_path / "b.yaml")], "x"
     )
     assert [s.name for s in scenarios] == ["one", "two"]  # concatenated, order preserved
     assert description is None  # a multi-file run carries no single-file description
     assert source_name == tmp_path.name  # labelled by the common parent, not a lone file
     assert files == [tmp_path / "a.yaml", tmp_path / "b.yaml"]
+    assert plan_sources["one"].file_name == "a.yaml"
+    assert plan_sources["two"].file_name == "b.yaml"
 
 
 # --- _filter_scenarios: --tag/--exclude selection plus the --erase override

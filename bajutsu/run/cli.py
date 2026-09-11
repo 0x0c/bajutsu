@@ -39,6 +39,7 @@ from bajutsu.common.github import actions as github_actions
 from bajutsu.common.orchestrator import DEFAULT_ALERT_POLL_INTERVAL, AlertGuardConfig, RunResult
 from bajutsu.common.orchestrator.types import ResolvedAlertRule
 from bajutsu.common.platform_lifecycle import ProvisionProfile, environment_for
+from bajutsu.common.report import ScenarioPlanSource
 from bajutsu.common.report.archive import archive_run_dir
 from bajutsu.common.report.manifest import MAX_LABEL_LENGTH, _run_backend
 from bajutsu.common.run_meta.files import DEFAULT_RUNS_DIR
@@ -54,6 +55,7 @@ from bajutsu.common.scenario import (
     SystemAlertRule,
     apply_setups,
     contained_ref,
+    declared_name,
     dump_mocks,
     expand_components,
     expand_data,
@@ -61,6 +63,7 @@ from bajutsu.common.scenario import (
     load_scenario_file,
     load_scenarios,
     read_csv,
+    scenario_sources,
     select_scenarios,
 )
 from bajutsu.common.scenario.system_alerts import (
@@ -158,16 +161,30 @@ def _scenario_files(
     return files, False
 
 
-def _expand_file(path: Path, eff: Effective, root: Path) -> tuple[list[Scenario], str | None]:
+def _expand_file(
+    path: Path, eff: Effective, root: Path
+) -> tuple[list[Scenario], str | None, dict[str, ScenarioPlanSource]]:
     """Load one scenario file and expand its setup/component/data refs.
 
     Each ref is resolved relative to THIS file's directory, so a multi-file dir run keeps every
     file's refs local. Component and data refs are confined to *root* (the suite dir, or the file's
     own dir for a single-file run), so a scenario cannot read outside its suite (BE-0174). Returns
-    the expanded scenarios plus the file-level description.
+    the expanded scenarios, the file-level description, and — keyed by each *expanded* scenario's
+    declared name (BE-xxxx) — its report plan source: the scenario's own verbatim YAML as authored
+    in *path*, and its steps' original line numbers there. A scenario whose setup/component
+    expansion changed its step count keeps the verbatim text but drops its line numbers, since a
+    wrong line would be worse than none; data-row expansion (which never changes step shape) keeps
+    both, shared by every row.
     """
-    scenario_file = load_scenario_file(path.read_text(encoding="utf-8"))
+    text = path.read_text(encoding="utf-8")
+    scenario_file = load_scenario_file(text)
     scenarios = scenario_file.scenarios
+    raw_sources = scenario_sources(text)
+    pre_step_counts = {s.name: len(s.steps) for s in scenarios}
+    plan_by_name = {
+        s.name: ScenarioPlanSource(file_name=path.name, text=raw.text, step_lines=raw.step_lines)
+        for s, raw in zip(scenarios, raw_sources, strict=True)
+    }
     # Refs (setup/use/data) resolve relative to this scenario file's own directory.
     base_dir = path.parent
     try:
@@ -197,7 +214,21 @@ def _expand_file(path: Path, eff: Effective, root: Path) -> tuple[list[Scenario]
     except (OSError, ValueError) as e:
         typer.echo(f"data の展開に失敗: {e}")
         raise typer.Exit(2) from None
-    return scenarios, scenario_file.description
+    # Every scenario here derives from `scenario_file.scenarios` — the same objects, mutated in
+    # place, for the setup/component path; a fresh one keeping the base's name (`declared_name`) for
+    # a data row — so `base_name` is always a `plan_by_name` key; a miss would be this function's own
+    # bug, not a malformed scenario file, so it fails loudly rather than silently dropping the plan.
+    plan_sources: dict[str, ScenarioPlanSource] = {}
+    for s in scenarios:
+        base_name = declared_name(s.name)
+        plan = plan_by_name[base_name]
+        # `apply_setups`/`expand_components` mutate `Scenario.steps` in place, so a changed count
+        # against the pre-expansion snapshot means this scenario's line numbers no longer line up
+        # with its executed steps (data-row expansion never changes the count, so a row keeps them).
+        if pre_step_counts[base_name] != len(s.steps):
+            plan = ScenarioPlanSource(file_name=plan.file_name, text=plan.text, step_lines=[])
+        plan_sources[base_name] = plan
+    return scenarios, scenario_file.description, plan_sources
 
 
 def _resolve_config_and_engines(
@@ -259,12 +290,13 @@ def _resolve_secrets(eff: Effective) -> tuple[dict[str, str], list[str]]:
 
 def _load_scenarios(
     eff: Effective, scenario: list[str], target_name: str
-) -> tuple[list[Scenario], str | None, str, list[Path]]:
+) -> tuple[list[Scenario], str | None, str, list[Path], dict[str, ScenarioPlanSource]]:
     """Load and fully expand the run's scenarios: the `--scenario` files, or the target's dir.
 
     Each file's setup/component/data refs resolve relative to its own directory, then the expanded
     scenarios concatenate into one run. Returns the scenarios, the single-file description (None for
-    a multi-file or directory run), the report's source label, and the source files.
+    a multi-file or directory run), the report's source label, the source files, and every
+    scenario's report plan source (BE-xxxx) — see `_expand_file`.
     """
     files, single = _scenario_files(eff, scenario, target_name)
     # The containment root for refs (BE-0174): the single file's own directory for a lone `--scenario`
@@ -278,14 +310,16 @@ def _load_scenarios(
         root = Path(eff.evidence_dirs.scenarios or files[0].parent)
     scenarios: list[Scenario] = []
     description: str | None = None
+    plan_sources: dict[str, ScenarioPlanSource] = {}
     for path in files:
-        expanded, file_desc = _expand_file(path, eff, root)
+        expanded, file_desc, file_plan_sources = _expand_file(path, eff, root)
         scenarios.extend(expanded)
+        plan_sources.update(file_plan_sources)
         if single:
             description = file_desc
     # The report's source label: the single file's name, else the root dir's name.
     source_name = files[0].name if single else root.name
-    return scenarios, description, source_name, files
+    return scenarios, description, source_name, files, plan_sources
 
 
 def _filter_scenarios(
@@ -907,6 +941,9 @@ class _RunPlan:
     scenarios: list[Scenario]
     description: str | None
     source_name: str
+    # Each scenario's report plan source (BE-xxxx): its own file name, verbatim YAML (comments
+    # intact), and steps' original line numbers, keyed by its declared name — see `_expand_file`.
+    plan_sources: dict[str, ScenarioPlanSource]
     engines: list[str]
     actuator: str
     backends: list[str]
@@ -1038,6 +1075,7 @@ def _dispatch_single(
             secret_values=plan.secret_values,
             source_name=plan.source_name,
             description=plan.description,
+            plan_sources=plan.plan_sources,
             progress=progress_fn,
             baselines_dir=plan.baselines_dir,
             schemas_dir=plan.schemas_dir,
@@ -1122,6 +1160,7 @@ def _dispatch_matrix(
         plan.run_id,
         source_name=plan.source_name,
         description=plan.description,
+        plan_sources=plan.plan_sources,
         secret_values=plan.secret_values,
         label=plan.label or None,
         config_source=plan.config_source,
@@ -1416,7 +1455,9 @@ def run(
         browsers=browsers,
     )
     secret_bindings, secret_values = _resolve_secrets(eff)
-    scenarios, description, source_name, files = _load_scenarios(eff, scenario or [], target_name)
+    scenarios, description, source_name, files, plan_sources = _load_scenarios(
+        eff, scenario or [], target_name
+    )
     scenarios = _filter_scenarios(
         scenarios,
         tag,
@@ -1480,6 +1521,7 @@ def run(
                 scenarios=scenarios,
                 description=description,
                 source_name=source_name,
+                plan_sources=plan_sources,
                 engines=engines,
                 actuator=actuator,
                 backends=backends,
