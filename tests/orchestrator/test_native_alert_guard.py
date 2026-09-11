@@ -1390,6 +1390,39 @@ def test_the_end_of_step_guard_leaves_a_second_native_alert_unhandled_after_clea
     assert "Weird Button" in guard.blocked_note
 
 
+def test_a_note_from_a_cleared_stacked_call_does_not_survive_a_retry_that_passes() -> None:
+    # The step-runner's `not ok` conjunct, pinned (BE-0418 review finding): a cleared stacked call's
+    # note explains a failure the retry still has, but when the dismiss reveals the step's own
+    # target and the retry lands, the step passed — the still-unhandled second alert's note must not
+    # tag along onto a step with nothing to explain. Every other stacked-call test either has an
+    # empty note or a retry that fails, so without `not ok` this is the one case that would silently
+    # start tagging a passing step with a failure diagnosis.
+    from bajutsu.common.orchestrator import run_scenario
+    from bajutsu.common.scenario import load_scenarios
+
+    go = _button("Go")
+    go["identifier"] = "go"
+
+    def react(d: FakeDriver, kind: str, _arg: object) -> None:
+        if kind == "handle_system_alert":
+            d.system_alert_buttons = [_button("Weird Button")]  # a second, unhandled alert
+            d.screen = [go]  # ...and the dismiss reveals the step's own target
+
+    driver = _fake_with_alert(["Allow"], react=react)
+    guard = AlertGuardConfig(rules=[guard_rule("Allow")])
+    result = run_scenario(
+        driver,
+        load_scenarios("- name: t\n  steps:\n    - tap: { id: go }\n")[0],
+        alert_guard=guard,
+    )
+    assert result.ok
+    # Asserted so the test cannot pass vacuously: `not ok` only suppresses anything while the
+    # note itself is non-empty.
+    assert "Weird Button" in guard.blocked_note
+    assert result.steps[0].reason == ""
+    assert result.steps[0].alerts == [AlertEvent(label="Allow")]  # the first alert did clear
+
+
 def test_a_note_from_a_cleared_stacked_call_still_reaches_the_step_s_own_failure() -> None:
     # The same stacked case, driven through `run_scenario` (BE-0418): `cleared` and a non-empty
     # `blocked_note` are no longer mutually exclusive the way a single-shot dismiss made them, so the
