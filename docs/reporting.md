@@ -137,8 +137,10 @@ means the same thing after the run that produced it exits
   `scenarios` stays the flat result list, each entry tagged with its `engine`; `matrix` is
   `{ engines, scenarios, cells: { "<scenario>": { "<engine>": { ok, sid, failure } } } }` — a pure
   aggregation of those per-engine verdicts (the report renders it as a grid). `ok` is all-must-pass
-  across every engine × scenario. Omitted for a single-engine / iOS run. (`schemaVersion` is `4`
-  or higher once this block can appear.)
+  across every engine × scenario. Omitted for a single-engine / iOS run. Nothing enforces a unique
+  `name:` across a multi-file run, so a second scenario sharing an earlier one's name gets its own
+  row labeled with a `(2)`, `(3)`, … suffix rather than overwriting the first's cell. (`schemaVersion`
+  is `4` or higher once this block can appear.)
 
 ## junit.xml
 

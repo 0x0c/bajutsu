@@ -82,21 +82,50 @@ SCHEMA_VERSION = 10
 def _matrix(results: list[RunResult]) -> dict[str, object] | None:
     """Aggregate engine-tagged results into the engine x scenario pass/fail matrix (BE-0076).
 
-    Pure aggregation of the verdicts already in `results`: it derives the engine and scenario axes
-    (each in first-seen order) and a `cells[scenario][engine]` view of every per-engine verdict, so
-    a scenario green on one engine and red on another is the machine-detected incompatibility. None
-    for a single-engine / iOS run (no result carries an `engine`), so that path keeps the v1 shape.
+    Pure aggregation of the verdicts already in `results`: it derives the engine axis (first-seen
+    order) and a `cells[scenario][engine]` view of every per-engine verdict, so a scenario green on
+    one engine and red on another is the machine-detected incompatibility. None for a single-engine
+    / iOS run (no result carries an `engine`), so that path keeps the v1 shape.
+
+    A `.name` is not guaranteed unique across a multi-file run (`run/cli.py`'s
+    `_visual_asserting_scenarios` hits the same trap and avoids it by keying on `id()` instead), so
+    keying `cells` on the raw name would let a second same-named scenario silently overwrite the
+    first's cell. Two same-named scenarios are told apart by their position among same-named results
+    *within each engine's own ordering* — a `--browsers` pass runs every engine over the identical
+    ordered scenario list, so the Nth "login" on chromium and the Nth "login" on webkit are the same
+    source scenario. The first occurrence of a name keeps the bare name as its row label; a later
+    occurrence gets a "(N)" suffix, bumped past any label already taken — including one a *different*
+    scenario's literal name happens to equal — so it never collides with an already-assigned row.
     """
     if not any(r.engine for r in results):
         return None
     engines = list(dict.fromkeys(r.engine for r in results if r.engine))  # ordered-unique
-    scenarios = list(dict.fromkeys(r.scenario for r in results))
-    cells: dict[str, dict[str, dict[str, object]]] = {s: {} for s in scenarios}
+
+    occurrence: dict[tuple[str, str], int] = {}  # (engine, name) -> next occurrence index
+    label_of_occurrence: dict[tuple[str, int], str] = {}  # (name, occurrence index) -> row label
+    used_labels: set[str] = set()  # every label already handed out, so a synthesized "(N)" suffix
+    # can't collide with another scenario whose literal name happens to equal that suffixed string
+    scenarios: list[str] = []
+    cells: dict[str, dict[str, dict[str, object]]] = {}
     for r in results:
+        idx = occurrence.get((r.engine, r.scenario), 0)
+        occurrence[(r.engine, r.scenario)] = idx + 1
+        occurrence_key = (r.scenario, idx)
+        label = label_of_occurrence.get(occurrence_key)
+        if label is None:
+            label = r.scenario
+            n = 1
+            while label in used_labels:
+                n += 1
+                label = f"{r.scenario} ({n})"
+            used_labels.add(label)
+            label_of_occurrence[occurrence_key] = label
+            scenarios.append(label)
+            cells[label] = {}
         # The runner stamps `sid` with the dir it actually wrote (`NN-slug`), so the cell links to
         # the real `<engine>/<sid>` evidence; fall back to the slug only for a sid-less result.
         sid = r.sid or scenario_slug(r.scenario)
-        cells[r.scenario][r.engine] = {
+        cells[label][r.engine] = {
             "ok": r.ok,
             "sid": f"{r.engine}/{sid}",
             "failure": r.failure,
