@@ -12,6 +12,7 @@
 | 実装 PR | [#1498](https://github.com/bajutsu-e2e/bajutsu/pull/1498), [#1565](https://github.com/bajutsu-e2e/bajutsu/pull/1565) |
 | トピック | コントリビューターワークフロー |
 | 関連 | [BE-0203](../BE-0203-claude-code-pr-review/BE-0203-claude-code-pr-review-ja.md)、[BE-0222](../BE-0222-daily-doc-freshness-pr/BE-0222-daily-doc-freshness-pr-ja.md) |
+| 無効化 | [BE-0419](../BE-0419-retire-prose-companion-pr/BE-0419-retire-prose-companion-pr-ja.md) |
 <!-- /BE-METADATA -->
 
 ## はじめに
@@ -193,6 +194,9 @@ pull request と同じように、自分の都合でレビューしてマージ�
 - [x] `docs/ai-development.md` とその対訳 `docs/ja/ai-development.md` — 「PR レビューコメントへの
   対応」の下に companion PR の仕組みを記載
 - [x] この仕組みを指す短い `CLAUDE.md` の 1 行
+- [x] [BE-0419](../BE-0419-retire-prose-companion-pr/BE-0419-retire-prose-companion-pr-ja.md)により
+  無効化：companion PRのジョブとスクリプト、`(non-blocking, prose)`という印を廃止しました。
+  言い回しだけの指摘も、ほかの指摘と同じく、元のpull requestへの通常のpushで直します。
 
 ### ログ
 

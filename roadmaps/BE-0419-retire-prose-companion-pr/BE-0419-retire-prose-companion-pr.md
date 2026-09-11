@@ -85,10 +85,7 @@ finding, and the fix instead arrives as the contributor's own push to their own 
 - Both prose lenses' judging scope and severity floor in `.github/claude-review-prompt.md`.
 - The `review` job itself, and everything BE-0347 governs about when it runs.
 - `roadmaps/BE-0343-prose-companion-pr/` stays `Implemented` — that was, and remains, an accurate
-  record of what shipped. It gets a `Superseded by` link once this item's own id is allocated; the id
-  does not exist while this item still carries the `BE-0419` placeholder, so that link is a deferred
-  follow-up (tracked in Progress below), the same way this item's own `Implementing PR` row is filled
-  in only once its pull request exists.
+  record of what shipped. It now also carries a `Superseded by` link to this item.
 
 ### The three companion pull requests already open
 
@@ -128,8 +125,8 @@ source pull request no longer needs it. No new companion pull request opens once
   `.claude/skills/claude-review/SKILL.md` with `make skills`
 - [x] Update the `CLAUDE.md` bullet and the `docs/ai-development.md` / `docs/ja/ai-development.md`
   sections
-- [ ] Add the reciprocal `Superseded by` link on `roadmaps/BE-0343-prose-companion-pr/` once this
-  item's id is allocated (deferred — see *What does not change* above)
+- [x] Add the reciprocal `Superseded by` link on `roadmaps/BE-0343-prose-companion-pr/` once this
+  item's id is allocated
 
 ### Log
 
@@ -137,6 +134,8 @@ source pull request no longer needs it. No new companion pull request opens once
   ([`propose-and-build`](../../.apm/skills/propose-and-build/SKILL.md)). Three companion pull
   requests were already open at the time (#1978, #1980, #1982); they are left as ordinary,
   independently mergeable pull requests rather than closed.
+- Added the reciprocal `Superseded by` link on `roadmaps/BE-0343-prose-companion-pr/` now that this
+  item's id (`BE-0419`) is allocated.
 
 ## References
 
