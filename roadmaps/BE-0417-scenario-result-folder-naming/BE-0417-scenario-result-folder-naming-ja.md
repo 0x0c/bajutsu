@@ -1,6 +1,6 @@
 [English](BE-0417-scenario-result-folder-naming.md) · **日本語**
 
-# BE-0417 — シナリオの結果ディレクトリ名を、由来するシナリオファイルにちなませる
+# BE-0417 — シナリオの結果ディレクトリ名を、読み込み元のシナリオファイルにちなんだ名前にする
 
 <!-- BE-METADATA -->
 | 項目 | 値 |
@@ -79,7 +79,7 @@
    一切現れてはなりません。現れると、
    `record` や `audit`、将来のシナリオ編集機能が書き出すシナリオファイルに、読み込み時だけの詳細
    がスキーマの一部として紛れ込んでしまいます。
-2. **2つのローダーが、この属性を設定します。** ファイルからシナリオを読み込むデバイスフリーな
+2. **2つのローダーが、この属性を設定します。** ファイルからシナリオを読み込む、デバイス不要の
    ローダーは2つあります。どちらも、最終的な `list[Scenario]` に対して `source_stem` を設定
    します。設定するのは、返す直前です。`expand_data` による CSV（Comma Separated Values、
    カンマ区切り値）の行ごとの複製が、すでに終わったあとに設定します。データ駆動で展開された
@@ -89,7 +89,7 @@
    - [`bajutsu/common/scenario/load_expanded.py:63-89`](../../bajutsu/common/scenario/load_expanded.py)
      の `load_expanded_scenarios()`。`audit`、`trace --explain`、`coverage`、serve Web UI の
      カバレッジビューが共有します。`load_scenarios_dir()` 経由で、スイート全体を読む他の
-     デバイスフリーな読み手にも及びます。
+     デバイス不要な読み手にも及びます。
 3. **`sid` 組み立てが、狭い範囲のサニタイザを通してこの属性を読みます。フォールバックも備えます。**
    [`bajutsu/common/runner/pipeline.py:269`](../../bajutsu/common/runner/pipeline.py) と、
    クロスブラウザマトリクスの `_cancelled_pass` にある `:1173` の2箇所を書き換えます。
