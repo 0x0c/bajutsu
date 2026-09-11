@@ -19,7 +19,11 @@ from conftest import guard_rule
 from bajutsu.common.drivers import base
 from bajutsu.common.drivers.fake import FakeDriver
 from bajutsu.common.orchestrator import AlertEvent, AlertGuardConfig
-from bajutsu.common.orchestrator.types import ResolvedAlertRule, match_alert_rule
+from bajutsu.common.orchestrator.types import (
+    ResolvedAlertRule,
+    match_alert_rule,
+    uncleared_prompt_note,
+)
 from bajutsu.common.scenario import Wait
 
 
@@ -1616,7 +1620,10 @@ def test_the_end_of_step_guard_never_retaps_a_native_alert_it_already_dismissed(
     alerts: list[AlertEvent] = []
     cleared = guard(driver, alerts, settle=settle)
     assert cleared and alerts == [AlertEvent(label="Allow")]  # one dismissal, not three
-    assert guard.blocked_note == ""
+    # The bound is spent with the same alert still up on every round: three consecutive reads is
+    # evidence the tap never actually landed, not that its dismiss animation is merely still
+    # playing out, so the last round names it rather than clearing the note (BE-0418).
+    assert guard.blocked_note == uncleared_prompt_note("Allow")
     assert sum(1 for action in driver.actions if action[0] == "handle_system_alert") == 1
     # Every round still settles, the declined ones included: each one enumerated a live alert
     # mid-fade, and a caller reading the screen the instant this call returns must not read one
@@ -1773,14 +1780,25 @@ def test_the_end_of_step_guard_finds_a_stacked_alert_behind_a_fading_first_match
     )
     second = ResolvedAlertRule(identifying_labels=frozenset({"OK", "Cancel"}), tap_label="OK")
 
+    taps = 0
+
     def react(d: FakeDriver, kind: str, _arg: object) -> None:
-        if kind == "handle_system_alert":
+        nonlocal taps
+        if kind != "handle_system_alert":
+            return
+        taps += 1
+        if taps == 1:
+            # The first tap's own alert is still fading (its buttons linger), and the second,
+            # disjoint alert has now also raised — both enumerable together, which is exactly the
+            # round `_resolve_alert_rule`'s retry must see past.
             d.system_alert_buttons = [
                 _button("Allow"),
                 _button("Don't Allow"),
                 _button("OK"),
                 _button("Cancel"),
             ]
+        else:
+            d.system_alert_buttons = []  # both alerts genuinely gone once the second is tapped
 
     driver = _fake_with_alert(["Allow", "Don't Allow"], react=react)
     guard = AlertGuardConfig(rules=[notifications, second])

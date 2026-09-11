@@ -364,7 +364,7 @@ class AlertGuardConfig:
         tree_note_pending = False
         dismissed_native: frozenset[frozenset[str]] = frozenset()
         dismissed_tree_shapes: frozenset[frozenset[str]] = frozenset()
-        for _ in range(_GUARD_CALL_MAX_ROUNDS):
+        for round_index in range(_GUARD_CALL_MAX_ROUNDS):
             state, event, buttons = self.probe_native(driver, dismissed=dismissed_native)
             if state == "dismissed":
                 assert event is not None  # "dismissed" always carries its event (see probe_native)
@@ -402,7 +402,21 @@ class AlertGuardConfig:
                     # declining the same rule never does, so it must check this itself.
                     answered = {label for labels in dismissed_native for label in labels}
                     leftover = [b for b in buttons if b not in answered]
-                    note = alert_block_note(leftover) if leftover else ""
+                    if leftover:
+                        note = alert_block_note(leftover)
+                    elif round_index == _GUARD_CALL_MAX_ROUNDS - 1:
+                        # The bound is spent and the only thing still on the surface is the alert
+                        # this call already tapped: three consecutive reads of a live, policy-named
+                        # alert is evidence the tap never actually landed, not that its dismiss
+                        # animation is merely still playing out. Name it the same way the in-tree
+                        # branch below already names an unlanded tap, rather than letting the
+                        # still-fading story clear a note that turns out to be the step's own last
+                        # chance to explain the eventual element-not-found.
+                        rule = matching_alert_rule([r for r in self.rules if r.native], buttons)
+                        assert rule is not None  # "already_dismissed" only follows a plain match
+                        note = uncleared_prompt_note(rule.tap_label)
+                    else:
+                        note = ""
                 settle()
                 continue
             if state == "absent":

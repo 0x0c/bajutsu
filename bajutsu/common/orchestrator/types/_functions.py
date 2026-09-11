@@ -36,12 +36,13 @@ def _no_network() -> list[NetworkExchange]:
 def alert_block_note(buttons: Sequence[str]) -> str:
     """What the guard saw blocking the screen, for a failure reason to name (BE-0402).
 
-    *buttons* are the labels a native probe read off an alert no rule identifies —
-    `probe_native`'s `"unhandled"` answer, and only that. Empty means the block was inferred from
-    the collapsed-tree proxy rather than enumerated — a surface `springboard.alerts` cannot see, or
-    a backend with no native query at all — so the note hedges rather than naming buttons nobody
-    read. A prompt the policy *did* name and the in-tree dismiss failed to clear is a different
-    story, and gets `uncleared_prompt_note` below instead.
+    *buttons* are the labels blocking the screen that no rule accounts for — `probe_native`'s
+    `"unhandled"` answer, or the leftover buttons an `already_dismissed` round finds beyond every
+    shape this call has already answered (`AlertGuardConfig.__call__`, BE-0418). Empty means the
+    block was inferred from the collapsed-tree proxy rather than enumerated — a surface
+    `springboard.alerts` cannot see, or a backend with no native query at all — so the note hedges
+    rather than naming buttons nobody read. A prompt the policy *did* name and the in-tree dismiss
+    failed to clear is a different story, and gets `uncleared_prompt_note` below instead.
     """
     if buttons:
         return f"{_UNHANDLED_ALERT_NOTE} (buttons: {', '.join(buttons)})"

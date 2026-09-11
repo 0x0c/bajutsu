@@ -238,19 +238,27 @@ larger proposal. It would need to revisit BE-0402's own reasoning first.
 Log:
 
 - [#1979](https://github.com/bajutsu-e2e/bajutsu/pull/1979) implemented all five units.
-  `AlertGuardConfig.__call__` loops up to `_GUARD_CALL_MAX_ROUNDS`
-  (3), appending every dismissed `AlertEvent` into a caller-supplied list and returning whether
-  anything cleared; `dismiss_from_tree_once` gained a `NotTappable` outcome and an `exclude`
-  parameter for the round-bounded landing-race retry; both call sites
-  (`loop/_step_runner.py`, `loop/_functions.py`) moved to the new
-  `(driver, alerts, *, settle) -> bool` contract, gating their note-append on the note alone
-  rather than on whether the call cleared anything. `docs/architecture.md` and its Japanese
-  mirror describe the new multi-round behavior. The fast suite covers the stacked-alert,
-  landing-race, permanently-obstructed, and settle-on-exhaustion cases the design calls for,
-  plus two dedup edge cases surfaced during self-review: a native alert reappearing after a
-  distinct one clears in between (the dedup must remember every dismissal this call, not only
-  the round right before it), and a tree diagnosis that must survive an unrelated native
-  dismissal on the other surface rather than being silently erased.
+  `AlertGuardConfig.__call__` loops up to `_GUARD_CALL_MAX_ROUNDS` (3), appending every dismissed
+  `AlertEvent` into a caller-supplied list and returning whether anything cleared;
+  `dismiss_from_tree_once` gained a `NotTappable` outcome, an `exclude` parameter, and a `(result,
+  buttons)` return for the round-bounded landing-race retry; both call sites
+  (`loop/_step_runner.py`, `loop/_functions.py`) moved to the new `(driver, alerts, *, settle) ->
+  bool` contract, gating their note-append on the note alone rather than on whether the call
+  cleared anything. `docs/architecture.md` and its Japanese mirror describe the new multi-round
+  behavior. Live review on the PR surfaced several further correctness gaps in the dedup itself,
+  fixed in the same PR: `probe_native` gained a sixth state, `already_dismissed`, declining a
+  repeat tap on an already-answered alert before it reaches the device, rather than tapping and
+  discarding the duplicate event; the dedup keys on a matched rule's `identifying_labels` instead
+  of the raw buttons a probe reads, since that read enumerates the whole surface and moves the
+  moment a different alert joins it; `_resolve_alert_rule` retries among the shapes not yet
+  answered when the plain match lands on one already answered, so a stacked alert behind the fade
+  is still found on both the native and tree paths, and treats a narrower rendering of an
+  already-answered shape as answered too, since a policy's own rules for one prompt can nest
+  (`savePassword`'s three shapes are one such case). A round that exhausts the bound with the only
+  thing still on screen being the alert this call already tapped now reports it via
+  `uncleared_prompt_note`, rather than the note going silently empty. The fast suite covers the
+  stacked-alert, landing-race, permanently-obstructed, settle-on-exhaustion, nested-shape, and
+  lingering-tree-exclusion cases the design and the live review both call for.
 
 ## References
 
