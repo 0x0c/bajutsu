@@ -10,7 +10,6 @@ from bajutsu.common.drivers import base
 
 from ._functions import (
     alert_block_note,
-    match_alert_rule,
     matching_alert_rule,
     selector_names_button,
     uncleared_prompt_note,
@@ -49,20 +48,21 @@ NativeAlertState = Literal[
 ]
 
 
-def _resolve_native_rule(
+def _resolve_alert_rule(
     rules: Sequence[ResolvedAlertRule],
     buttons: Sequence[str],
     dismissed: frozenset[frozenset[str]],
 ) -> ResolvedAlertRule | None:
-    """The native rule a round should act on, honoring the same-shape retry `probe_native` and
-    `AlertGuardConfig.__call__` (BE-0418) must agree on bit for bit.
+    """The rule a round should act on, honoring the same-shape retry `probe_native`,
+    `dismiss_from_tree_once`, and `AlertGuardConfig.__call__` (BE-0418) must all agree on bit for
+    bit — shared by the native and tree paths alike, since both face the same lingering-fade race.
 
     The plain match, unless its shape is one `dismissed` already names — a lingering fade of an
     already-answered alert — in which case the search retries among the shapes not yet dismissed,
     so a real, not-yet-answered alert enumerable alongside that fade (the stacked case this loop
     exists to clear) is still found rather than declined along with the fade. `__call__` calls
-    this again, over the same `buttons` a "dismissed" round just read, to learn which shape it
-    tapped without `probe_native` growing a return member only one caller needs.
+    this again, over the same `buttons` a dismissing round just read, to learn which shape it
+    tapped without either probe growing a return member only one caller needs.
     """
     rule = matching_alert_rule(rules, buttons)
     if rule is not None and rule.identifying_labels in dismissed:
@@ -79,7 +79,7 @@ class NotTappable:
     Distinguished from `None` ("nothing to do here") so the caller's own round-bounded loop can
     retry the same tap rather than giving up on it (BE-0418) — the in-tree twin of the retry
     `_alert_guard_gate.py` already carries across polls, for the same scrim-over-a-still-animating-
-    sheet race. `label` is the tap label `match_alert_rule` already resolved, so a caller that gives
+    sheet race. `label` is the tap label `_resolve_alert_rule` already resolved, so a caller that gives
     up can name it in `uncleared_prompt_note` without resolving it a second time.
     """
 
@@ -187,11 +187,11 @@ class AlertGuardConfig:
             return "unhandled", None, list(buttons)
         # A shape does identify the alert, but it may be one this call has already answered,
         # still matching because that alert's own dismiss animation outran `settle` — regardless
-        # of what else the SpringBoard surface now enumerates alongside it. `_resolve_native_rule`
+        # of what else the SpringBoard surface now enumerates alongside it. `_resolve_alert_rule`
         # retries among the shapes not yet answered in that case, so a real, not-yet-answered
         # alert enumerable alongside the fade (the stacked case this loop exists to clear) is
         # still found rather than declined along with it.
-        rule = _resolve_native_rule(native_rules, buttons, dismissed)
+        rule = _resolve_alert_rule(native_rules, buttons, dismissed)
         if rule is None:
             # Every matching shape here is one this call already answered, and a repeat tap would
             # land on nothing (the alert genuinely gone) or on whatever the closing alert has by
@@ -217,8 +217,8 @@ class AlertGuardConfig:
         return "dismissed", AlertEvent(label=label), list(buttons)
 
     def dismiss_from_tree_once(
-        self, driver: base.Driver, *, exclude: frozenset[str] = frozenset()
-    ) -> AlertEvent | NotTappable | None:
+        self, driver: base.Driver, *, exclude: frozenset[frozenset[str]] = frozenset()
+    ) -> tuple[AlertEvent | NotTappable | None, list[str]]:
         """Tap a scenario-named dismiss button visible in the driver's own tree, once.
 
         The one-shot twin of `_AlertGuardGate._dismiss_from_tree` (waits.py), for the end-of-step and
@@ -233,56 +233,60 @@ class AlertGuardConfig:
         an identifier-less labelled button on an alert one of the scenario's own in-tree-capable
         rules identifies, resolving uniquely.
 
-        `exclude` withholds a label already dismissed earlier in the same call (BE-0418): a button
-        that stays in the tree past its own dismiss animation would otherwise match again, and
-        tapping it a second time risks landing on an application button the closing sheet has by
-        then revealed — the same false "tap did not land" the mid-wait path's own `_tree_signature`
-        comparison exists to avoid, without needing that comparison here: a label this call has
-        already cleared has nothing left for a second tap to usefully answer. Checked *after* the
-        match, not by filtering the candidate rules beforehand: two rules can share one alert's
-        `identifying_labels` while naming different `tap_label`s — a scenario's `choice` overriding
-        a target's for the same prompt (BE-0177) — and dropping only the already-tapped rule from
-        the candidates would promote its sibling, matching the very same alert and tapping the
-        opposite button on it.
+        `exclude` names every shape already dismissed earlier in the same call (BE-0418), via
+        `_resolve_alert_rule` — the same shared, post-match lookup `probe_native` uses, and for the
+        same two reasons. First, a button that stays in the tree past its own dismiss animation
+        would otherwise match again, and tapping it a second time risks landing on an application
+        button the closing sheet has by then revealed; declining a repeat match closes that.
+        Second, retrying among the shapes not yet excluded — rather than ending the search at the
+        first, already-answered match — still finds a real, not-yet-answered alert enumerable
+        alongside that fade (the stacked case this loop exists to clear), and keying on
+        `identifying_labels` rather than `tap_label` means two rules sharing one alert's shape
+        under different choices (a scenario's `choice` overriding a target's for the same prompt,
+        BE-0177) are excluded together rather than one promoting the other to tap the opposite
+        button on the alert this call already answered.
 
         Returns the `AlertEvent` for the button it tapped, `NotTappable` when the button resolved but
         the tap could not land — a scrim still covering it mid-animation, which the caller's own
-        round-bounded loop retries — or None when nothing matched, the matched label is already
-        excluded, the match was ambiguous, or the tap lost a race with the prompt closing itself.
+        round-bounded loop retries — or None when nothing not-yet-excluded matched, the match was
+        ambiguous, or the tap lost a race with the prompt closing itself; alongside it, the buttons
+        this round's own tree read found, so a caller can resolve the same match again to learn
+        which shape a returned `AlertEvent` belongs to.
         """
         rules = self.tree_rules
         if not rules:
-            return None
+            return None, []
         elements = driver.query()
         buttons = [
             el["label"]
             for el in elements
             if el["label"] and not el["identifier"] and base.Trait.BUTTON in el["traits"]
         ]
-        label = match_alert_rule(rules, buttons)
-        if label is None or label in exclude:
-            return None
+        rule = _resolve_alert_rule(rules, buttons, exclude)
+        if rule is None:
+            return None, buttons
+        label = rule.tap_label
         # The same uniqueness pre-check the mid-wait path applies: a bare `{"label": label}` selector
         # ignores traits, so an identified app button of the same name would make the tap ambiguous.
         if (
             sum(1 for el in elements if el["label"] == label and base.Trait.BUTTON in el["traits"])
             != 1
         ):
-            return None
+            return None, buttons
         try:
             driver.tap({"label": label, "traits": [base.Trait.BUTTON]})
         except (base.ElementNotFound, base.AmbiguousSelector):
             # The prompt closed itself, or another button of that name appeared. Both benign here:
             # this is one opportunistic attempt on a step that has already failed, and the step's own
             # outcome still decides the verdict.
-            return None
+            return None, buttons
         except base.ElementNotTappable:
             # Visible but not yet reachable — a scrim the sheet draws over its own button before
             # finishing its presentation animation. Not a reason to give up: the caller's own
             # round-bounded loop retries the same tap, mirroring the mid-wait path's own retry for
             # this exception (BE-0418).
-            return NotTappable(label=label)
-        return AlertEvent(label=label)
+            return NotTappable(label=label), buttons
+        return AlertEvent(label=label), buttons
 
     def __call__(
         self,
@@ -309,18 +313,21 @@ class AlertGuardConfig:
         caller reading the screen right after this call returns never reads one still
         mid-animation. `settle` is best-effort and bounded, though: a dismiss whose animation
         outlasts it can still be up, unchanged, on a later round's read, and neither path re-taps
-        it. The native one passes every `(tap_label, identifying_labels)` pair naming a rule it
-        has already dismissed this call into `probe_native`, which declines to tap a match already
-        in that set — the same alert still fading, even a round or two after a *different* alert
-        cleared in between, rather than a second real tap on the device that risks landing on
-        whatever the closing alert has by then revealed underneath it. Keyed on the matched rule's
-        own shape rather than the raw buttons read, since that read enumerates every alert
-        SpringBoard currently holds and so changes the moment a different alert joins or leaves
-        the surface, which the alert already dismissed did not do. A later alert resolving to a
-        different rule — including one sharing only the tapped label (`notifications` and
-        `tracking` both grant `"Allow"`) — still taps as usual. The tree one withholds a label it
-        has already cleared from matching at all, so there too the second tap never happens (see
-        `dismiss_from_tree_once`).
+        it. Both pass every shape (a rule's `identifying_labels`) they have already dismissed this
+        call into `_resolve_alert_rule` (shared with `probe_native` and `dismiss_from_tree_once`),
+        which retries among the shapes not yet dismissed before declining a match that lands back
+        on one of them — the same alert still fading, even a round or two after a *different*
+        alert cleared in between, rather than a second real tap on the device that risks landing
+        on nothing or on whatever the closing alert has by then revealed underneath it. Keyed on a
+        rule's own shape rather than the raw buttons a probe reads, since that read enumerates
+        every alert the surface currently holds and so changes the moment a different alert joins
+        or leaves it, which the alert already dismissed did not do — and rather than a rule's own
+        `tap_label`, since two rules can share one alert's shape under different choices (a
+        scenario's `choice` overriding a target's for the same prompt, BE-0177), and keying on the
+        label alone would let one such rule's exclusion promote its sibling to tap the opposite
+        button on the same alert. A later alert resolving to a genuinely different shape —
+        including one sharing only the tapped label (`notifications` and `tracking` both grant
+        `"Allow"`) — still taps as usual on either path.
 
         `note` likewise survives a round that resolves a *different* surface: a tree button stuck
         behind a scrim (`NotTappable`) stays named in the eventual `blocked_note` even if a later
@@ -331,7 +338,7 @@ class AlertGuardConfig:
         note = ""
         tree_note_pending = False
         dismissed_native: frozenset[frozenset[str]] = frozenset()
-        dismissed_tree_labels: frozenset[str] = frozenset()
+        dismissed_tree_shapes: frozenset[frozenset[str]] = frozenset()
         for _ in range(_GUARD_CALL_MAX_ROUNDS):
             state, event, buttons = self.probe_native(driver, dismissed=dismissed_native)
             if state == "dismissed":
@@ -342,7 +349,7 @@ class AlertGuardConfig:
                 # return member only this one caller needs — so this always agrees with what
                 # `probe_native` actually acted on, including when the plain first match was
                 # itself already answered and the tap landed on its not-yet-answered fallback.
-                rule = _resolve_native_rule(
+                rule = _resolve_alert_rule(
                     [r for r in self.rules if r.native], buttons, dismissed_native
                 )
                 assert rule is not None  # the round that just dismissed this alert matched it
@@ -377,10 +384,16 @@ class AlertGuardConfig:
                 # No *SpringBoard* alert, which is both the licence to tap an app element (XCUITest
                 # answers an interrupting out-of-process alert before synthesizing any interaction)
                 # and the case where an app-owned prompt is the remaining explanation for the block.
-                tree_result = self.dismiss_from_tree_once(driver, exclude=dismissed_tree_labels)
+                tree_result, tree_buttons = self.dismiss_from_tree_once(
+                    driver, exclude=dismissed_tree_shapes
+                )
                 if isinstance(tree_result, AlertEvent):
                     alerts.append(tree_result)  # excluded once cleared, so never a repeat report
-                    dismissed_tree_labels |= {tree_result.label}
+                    # Re-resolves which shape was just tapped, over the same `buttons` this round's
+                    # own tree read already found, the same way the native branch above does.
+                    rule = _resolve_alert_rule(self.tree_rules, tree_buttons, dismissed_tree_shapes)
+                    assert rule is not None  # the round that just dismissed this alert matched it
+                    dismissed_tree_shapes |= {rule.identifying_labels}
                     cleared = True
                     note = ""
                     tree_note_pending = False

@@ -1750,13 +1750,44 @@ def test_the_end_of_step_guard_finds_a_stacked_alert_behind_a_fading_first_match
     assert guard.blocked_note == ""  # both alerts accounted for; nothing left over
 
 
-def test_dismiss_from_tree_once_declines_an_excluded_label() -> None:
+def test_dismiss_from_tree_once_declines_an_excluded_shape() -> None:
     # Direct unit coverage of the `exclude` parameter itself: a button that would otherwise resolve
-    # and tap cleanly is withheld once its label is excluded, exactly as if no rule named it.
+    # and tap cleanly is withheld once its shape (`identifying_labels`) is excluded, exactly as if
+    # no rule named it. Also confirms the buttons this round's own tree read found come back
+    # alongside the result even when nothing was tapped, so a caller can resolve the same match
+    # again without a second, possibly-different query.
     driver = FakeDriver([_button("Not Now")])
     guard = AlertGuardConfig(rules=[guard_rule("Not Now")])
-    assert guard.dismiss_from_tree_once(driver, exclude=frozenset({"Not Now"})) is None
+    result, buttons = guard.dismiss_from_tree_once(
+        driver, exclude=frozenset({frozenset({"Not Now"})})
+    )
+    assert result is None
+    assert buttons == ["Not Now"]
     assert not any(action[0] == "tap" for action in driver.actions)
+
+
+def test_the_end_of_step_guard_finds_a_second_tree_alert_behind_an_excluded_first_match() -> None:
+    # The tree twin of the native "stacked alert behind a fading first match" case: excluding the
+    # winning match must not end the search the instant it lands back on an already-answered
+    # shape — a real, differently-shaped second alert revealed once the first tap lands (BE-0418's
+    # own stacked case) must still be found via the retry among the shapes not yet excluded.
+    first = ResolvedAlertRule(
+        identifying_labels=frozenset({"Not Now"}), tap_label="Not Now", native=False, in_tree=True
+    )
+    second = ResolvedAlertRule(
+        identifying_labels=frozenset({"Later"}), tap_label="Later", native=False, in_tree=True
+    )
+
+    def react(d: FakeDriver, kind: str, arg: object) -> None:
+        if kind == "tap" and isinstance(arg, dict) and arg.get("label") == "Not Now":
+            d.screen = [*d.screen, _button("Later")]  # revealed once the first tap lands
+
+    driver = FakeDriver([_button("Not Now")], react=react)
+    guard = AlertGuardConfig(rules=[first, second])
+    cleared, alerts = _call(driver, guard)
+    assert cleared
+    assert alerts == [AlertEvent(label="Not Now"), AlertEvent(label="Later")]
+    assert guard.blocked_note == ""
 
 
 def test_the_end_of_step_guard_reports_two_native_alerts_sharing_a_tap_label() -> None:
