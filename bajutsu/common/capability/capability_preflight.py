@@ -25,7 +25,9 @@ The map gates only the **true hard requirements** the capability set cleanly dec
 - `select` / `copy` need `textSelection` (BE-0280): select-all + clipboard copy on the focused
   field. A backend with no select-all handle raises `UnsupportedAction` and does not advertise the
   token, so a scenario selecting or copying is rejected up front. `delete` / `clear` are not gated:
-  they actuate `delete_text` (a run of backspaces), which every backend backs.
+  `delete` actuates `delete_text` (a run of backspaces), which every backend backs, and `clear` only
+  *opportunistically* uses `textSelection` (select-all then one backspace) when a backend advertises
+  it, falling back to a counted `delete_text` run when it doesn't — so neither ever needs the token.
 - a `visual` assertion needs `screenshot`.
 - a device-control step needs the capability token for its own operation (BE-0212 split the coarse
   `deviceControl` of BE-0128 into per-operation tokens): `setLocation` needs

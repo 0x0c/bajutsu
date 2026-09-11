@@ -210,7 +210,8 @@ def _emit_step(step: Step) -> list[str]:  # noqa: PLR0911, PLR0912
             "not generated"
         ]
     if step.clear is not None:
-        # UiObject2.clear() empties the focused field — the faithful peer of the driver's clear (BE-0265).
+        # UiObject2.clear() empties the focused field — the faithful peer of the driver's
+        # select-all-then-backspace clear (BE-0265).
         return _act(step.clear.into.as_selector(), "clear()")
     if step.delete is not None:
         by = _by(step.delete.into.as_selector())

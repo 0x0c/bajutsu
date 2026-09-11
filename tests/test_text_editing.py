@@ -13,6 +13,12 @@ from bajutsu.common.orchestrator import run_scenario
 from bajutsu.common.scenario import load_scenarios
 
 
+class _NoTextSelectionDriver(FakeDriver):
+    """A coordinate-only fake: no select-all handle, like the live/Appium iOS route (BE-0280)."""
+
+    CAPABILITIES = frozenset(FakeDriver.CAPABILITIES - {base.Capability.TEXT_SELECTION})
+
+
 def _field(identifier: str, value: str | None) -> base.Element:
     return {
         "identifier": identifier,
@@ -32,14 +38,28 @@ def _run(
     return result.ok, driver.actions, result.failure
 
 
-def test_clear_focuses_then_backspaces_the_current_length() -> None:
+def test_clear_focuses_then_selects_all_and_backspaces_once() -> None:
     ok, actions, failure = _run(
         "    - clear: { into: { id: form.note } }\n", [_field("form.note", "hello")]
     )
     assert ok, failure
-    # Focus the field, then remove exactly its current length (5) — agnostic to what it held.
-    assert [a[0] for a in actions] == ["tap", "delete_text"]
-    assert actions[1] == ("delete_text", 5)
+    # Focus the field, select its whole content, then a single backspace removes the selection —
+    # correct regardless of where the tap actually left the caret (FakeDriver advertises
+    # TEXT_SELECTION).
+    assert [a[0] for a in actions] == ["tap", "select_all", "delete_text"]
+    assert actions[2] == ("delete_text", 1)
+
+
+def test_clear_without_text_selection_falls_back_to_counted_backspace() -> None:
+    # A backend with no select-all handle (e.g. the live/Appium iOS route, BE-0280) can't actuate
+    # select-all-then-backspace, so `clear` falls back to backspacing the reported value's length.
+    driver = _NoTextSelectionDriver(screen=[_field("form.note", "hello")])
+    result = run_scenario(
+        driver, load_scenarios("- name: s\n  steps:\n    - clear: { into: { id: form.note } }\n")[0]
+    )
+    assert result.ok, result.failure
+    assert [a[0] for a in driver.actions] == ["tap", "delete_text"]
+    assert driver.actions[1] == ("delete_text", 5)
 
 
 def test_clear_on_empty_field_deletes_nothing() -> None:

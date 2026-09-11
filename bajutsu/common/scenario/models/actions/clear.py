@@ -7,14 +7,15 @@ from bajutsu.common.scenario.models.selector import Selector
 
 
 class Clear(_Model):
-    """`clear` action — clear the field's entire current content (backspace-equivalent; BE-0265).
+    """`clear` action — clear the field's entire current content (BE-0265).
 
-    Realized as one backspace per character of the field's reported `value`, so it stays agnostic to
-    what the field held. That count comes from the accessibility `value`, which equals the character
-    count for a plain text field; a field whose `value` is masked or reformatted (a secure/password
-    field, a currency mask) can report a length that differs from what is deletable, so `clear` may
-    under- or over-delete there. Backend actuation fidelity for such fields is build-time triage
-    (per *Detailed design*); verify the outcome with a `value` assertion when it matters.
+    On a backend that can select the field's content (`Capability.TEXT_SELECTION`), realized as a
+    platform select-all followed by one backspace: a backspace with an active selection removes the
+    whole selection, so this is correct regardless of where the focusing tap lands the caret, and
+    unaffected by whether the reported `value` matches the field's real deletable length (a
+    secure/password field, a currency mask). A backend with no select-all handle falls back to one
+    backspace per character of the field's reported `value`; there, a masked/reformatted `value` can
+    still cause an under- or over-delete. Verify the outcome with a `value` assertion when it matters.
     """
 
     into: Selector
