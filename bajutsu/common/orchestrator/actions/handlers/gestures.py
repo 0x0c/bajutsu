@@ -172,6 +172,12 @@ def _do_clear(driver: base.Driver, step: Step, _r: object, _c: object, _b: objec
         # moves the caret to the end (a caret placed mid-string could leave a remainder undeleted).
         driver.select_all()
         driver.delete_text(1)
+        # The select-all's effect is unverifiable from here and a chord the platform maps elsewhere
+        # would leave the field all but untouched, so confirm and finish with the counted run rather
+        # than reporting a success that deleted one character.
+        remaining = base.resolve_unique(driver.query(), sel)["value"] or ""
+        if remaining:
+            driver.delete_text(len(remaining))
     else:
         # No select-all handle: fall back to the length-counted backspace run.
         driver.delete_text(len(current))

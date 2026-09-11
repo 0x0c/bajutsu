@@ -8,7 +8,7 @@ selection-state contract `copy` relies on — `copy` fails deterministically wit
 from __future__ import annotations
 
 from bajutsu.common.drivers import base
-from bajutsu.common.drivers.fake import FakeDriver
+from bajutsu.common.drivers.fake import FakeDriver, React
 from bajutsu.common.orchestrator import run_scenario
 from bajutsu.common.scenario import load_scenarios
 
@@ -31,23 +31,49 @@ def _field(identifier: str, value: str | None) -> base.Element:
 
 
 def _run(
-    spec: str, screen: list[base.Element]
+    spec: str, screen: list[base.Element], react: React | None = None
 ) -> tuple[bool, list[tuple[str, object]], str | None]:
-    driver = FakeDriver(screen=screen)
+    driver = FakeDriver(screen=screen, react=react)
     result = run_scenario(driver, load_scenarios(f"- name: s\n  steps:\n{spec}")[0])
     return result.ok, driver.actions, result.failure
 
 
 def test_clear_focuses_then_selects_all_and_backspaces_once() -> None:
+    # Model a backend where select-all-then-backspace genuinely empties the field.
+    def react(d: FakeDriver, kind: str, _arg: object) -> None:
+        if kind == "delete_text":
+            d.screen = [_field("form.note", "")]
+
     ok, actions, failure = _run(
-        "    - clear: { into: { id: form.note } }\n", [_field("form.note", "hello")]
+        "    - clear: { into: { id: form.note } }\n", [_field("form.note", "hello")], react=react
     )
     assert ok, failure
     # Focus the field, select its whole content, then a single backspace removes the selection —
     # correct regardless of where the tap actually left the caret (FakeDriver advertises
-    # TEXT_SELECTION).
+    # TEXT_SELECTION). The field reads back empty, so no counted-backspace backstop follows.
     assert [a[0] for a in actions] == ["tap", "select_all", "delete_text"]
     assert actions[2] == ("delete_text", 1)
+
+
+def test_clear_falls_back_to_counted_backspace_when_select_all_has_no_effect() -> None:
+    # A select-all chord the platform maps to something else (e.g. Playwright's `Control+a` moving
+    # the caret rather than selecting, on a host where the browser reserves `ControlOrMeta+a` for
+    # that) leaves the field's content untouched by `select_all` + a single backspace. The read-back
+    # `value` check catches this and finishes the job with the counted backspace run, rather than
+    # reporting success after deleting at most one character.
+    def react(d: FakeDriver, kind: str, arg: object) -> None:
+        if kind == "delete_text" and arg == 1:
+            return  # the ineffective select-all leaves the field's content untouched
+        if kind == "delete_text":
+            d.screen = [_field("form.note", "")]
+
+    ok, actions, failure = _run(
+        "    - clear: { into: { id: form.note } }\n", [_field("form.note", "hello")], react=react
+    )
+    assert ok, failure
+    assert [a[0] for a in actions] == ["tap", "select_all", "delete_text", "delete_text"]
+    assert actions[2] == ("delete_text", 1)
+    assert actions[3] == ("delete_text", 5)  # the counted backstop, run against the unchanged value
 
 
 def test_clear_without_text_selection_falls_back_to_counted_backspace() -> None:
