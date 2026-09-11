@@ -9,6 +9,7 @@
 | Author | [@0x0c](https://github.com/0x0c) |
 | Status | **Implemented** |
 | Tracking issue | [Search](https://github.com/bajutsu-e2e/bajutsu/issues?q=is%3Aissue+label%3Aroadmap-tracking+in%3Atitle+"BE-0418") |
+| Implementing PR | [#1979](https://github.com/bajutsu-e2e/bajutsu/pull/1979) |
 | Topic | Platform support |
 | Related | [BE-0269](../BE-0269-ios-alert-guard-early-wait-intervention/BE-0269-ios-alert-guard-early-wait-intervention.md), [BE-0315](../BE-0315-ios-native-system-alert-handling/BE-0315-ios-native-system-alert-handling.md), [BE-0399](../BE-0399-ios-system-alert-interruption-policy/BE-0399-ios-system-alert-interruption-policy.md), [BE-0402](../BE-0402-run-alert-guard-drop-vision-fallback/BE-0402-run-alert-guard-drop-vision-fallback.md), [BE-0406](../BE-0406-system-alert-declared-prompts/BE-0406-system-alert-declared-prompts.md) |
 <!-- /BE-METADATA -->
@@ -236,7 +237,8 @@ larger proposal. It would need to revisit BE-0402's own reasoning first.
 
 Log:
 
-- Implemented all five units. `AlertGuardConfig.__call__` loops up to `_GUARD_CALL_MAX_ROUNDS`
+- [#1979](https://github.com/bajutsu-e2e/bajutsu/pull/1979) implemented all five units.
+  `AlertGuardConfig.__call__` loops up to `_GUARD_CALL_MAX_ROUNDS`
   (3), appending every dismissed `AlertEvent` into a caller-supplied list and returning whether
   anything cleared; `dismiss_from_tree_once` gained a `NotTappable` outcome and an `exclude`
   parameter for the round-bounded landing-race retry; both call sites

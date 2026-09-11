@@ -9,6 +9,7 @@
 | 提案者 | [@0x0c](https://github.com/0x0c) |
 | 状態 | **実装済み** |
 | トラッキング Issue | [検索](https://github.com/bajutsu-e2e/bajutsu/issues?q=is%3Aissue+label%3Aroadmap-tracking+in%3Atitle+"BE-0418") |
+| 実装 PR | [#1979](https://github.com/bajutsu-e2e/bajutsu/pull/1979) |
 | トピック | Platform support |
 | 関連 | [BE-0269](../BE-0269-ios-alert-guard-early-wait-intervention/BE-0269-ios-alert-guard-early-wait-intervention-ja.md), [BE-0315](../BE-0315-ios-native-system-alert-handling/BE-0315-ios-native-system-alert-handling-ja.md), [BE-0399](../BE-0399-ios-system-alert-interruption-policy/BE-0399-ios-system-alert-interruption-policy-ja.md), [BE-0402](../BE-0402-run-alert-guard-drop-vision-fallback/BE-0402-run-alert-guard-drop-vision-fallback-ja.md), [BE-0406](../BE-0406-system-alert-declared-prompts/BE-0406-system-alert-declared-prompts-ja.md) |
 <!-- /BE-METADATA -->
@@ -247,7 +248,8 @@ docstring には、シートの登場アニメーションが終わるまでボ�
 
 ログ：
 
-- 5 つのユニットをすべて実装しました。`AlertGuardConfig.__call__` は `_GUARD_CALL_MAX_ROUNDS`
+- [#1979](https://github.com/bajutsu-e2e/bajutsu/pull/1979) で 5 つのユニットをすべて実装しました。
+  `AlertGuardConfig.__call__` は `_GUARD_CALL_MAX_ROUNDS`
   （3）まで内部でループし、解消した `AlertEvent` を呼び出し側が渡すリストへ追記し、1 件以上
   片付けたかどうかを真偽値で返します。`dismiss_from_tree_once` には `NotTappable` という帰結と `exclude`
   引数を追加し、着地レースに対する有界の再試行を実装しました。2 か所の呼び出し元
