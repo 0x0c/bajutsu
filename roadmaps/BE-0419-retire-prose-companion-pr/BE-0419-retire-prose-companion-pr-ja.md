@@ -85,10 +85,7 @@ no-op経路を持つジョブです。言い回しの指摘が現れたときだ
 - `.github/claude-review-prompt.md`にある、2つのレンズの判定範囲と基準です。
 - `review`ジョブ自体と、BE-0347が定めるその実行タイミングです。
 - `roadmaps/BE-0343-prose-companion-pr/`は`実装済み`のままです。実際に実装され、出荷された記録だ
-  からです。本項目のidが割り当てられた時点で`Superseded by`のリンクを追加します。本項目が
-  `BE-0419`という仮の識別子のままである間は、そのidが存在しないため、このリンク付けは後回しにし
-  ます（進捗の節に記録します）。本項目自身の`実装 PR`欄を、pull requestができてから埋めるのと同
-  じ扱いです。
+  からです。いまは本項目への`Superseded by`のリンクも持っています。
 
 ### すでに開いている3件のcompanion pull request
 
@@ -129,8 +126,8 @@ no-op経路を持つジョブです。言い回しの指摘が現れたときだ
   `.claude/skills/claude-review/SKILL.md`を同期する
 - [x] `CLAUDE.md`の箇条書きと、`docs/ai-development.md` / `docs/ja/ai-development.md`の該当節を
   更新する
-- [ ] 本項目のidが割り当てられた時点で、`roadmaps/BE-0343-prose-companion-pr/`に相互リンクとなる
-  `Superseded by`を追加する（後回し。「変わらない点」を参照）
+- [x] 本項目のidが割り当てられた時点で、`roadmaps/BE-0343-prose-companion-pr/`に相互リンクとなる
+  `Superseded by`を追加する
 
 ### ログ
 
@@ -138,6 +135,8 @@ no-op経路を持つジョブです。言い回しの指摘が現れたときだ
   （[`propose-and-build`](../../.apm/skills/propose-and-build/SKILL.md)）。当時すでに開いていた
   3件のcompanion pull request（#1978、#1980、#1982）は、閉じずに、独立してマージできる通常の
   pull requestとして残しました。
+- 本項目のid（`BE-0419`）の割り当てを受けて、`roadmaps/BE-0343-prose-companion-pr/`に相互リンクと
+  なる`Superseded by`を追加しました。
 
 ## 参考
 

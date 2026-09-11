@@ -12,6 +12,7 @@
 | Implementing PR | [#1498](https://github.com/bajutsu-e2e/bajutsu/pull/1498), [#1565](https://github.com/bajutsu-e2e/bajutsu/pull/1565) |
 | Topic | Contributor workflow |
 | Related | [BE-0203](../BE-0203-claude-code-pr-review/BE-0203-claude-code-pr-review.md), [BE-0222](../BE-0222-daily-doc-freshness-pr/BE-0222-daily-doc-freshness-pr.md) |
+| Superseded by | [BE-0419](../BE-0419-retire-prose-companion-pr/BE-0419-retire-prose-companion-pr.md) |
 <!-- /BE-METADATA -->
 
 ## Introduction
@@ -193,6 +194,9 @@ entry.
 - [x] `docs/ai-development.md` and its `docs/ja/ai-development.md` mirror — documenting the
   companion-PR mechanism under "Responding to PR review comments"
 - [x] A short `CLAUDE.md` bullet pointing at the documented mechanism
+- [x] Superseded by [BE-0419](../BE-0419-retire-prose-companion-pr/BE-0419-retire-prose-companion-pr.md):
+  the companion-PR job, its script, and the `(non-blocking, prose)` marker are retired. A wording-only
+  finding is fixed like any other, with a normal push to the source pull request.
 
 ### Log
 
