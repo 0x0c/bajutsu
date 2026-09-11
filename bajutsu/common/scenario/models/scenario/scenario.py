@@ -4,7 +4,14 @@ from __future__ import annotations
 
 from typing import Annotated, Any, Literal, Self
 
-from pydantic import AliasChoices, BeforeValidator, Field, field_validator, model_validator
+from pydantic import (
+    AliasChoices,
+    BeforeValidator,
+    Field,
+    PrivateAttr,
+    field_validator,
+    model_validator,
+)
 
 from bajutsu.common.deprecations import reject_renamed_key
 from bajutsu.common.drivers.base import PERMISSION_SERVICES
@@ -99,6 +106,25 @@ class Scenario(_Model):
         validation_alias=AliasChoices("iosTipKitHandling"),
         serialization_alias="iosTipKitHandling",
     )
+    # Provenance (BE-0417): the stem of the file this scenario was loaded from, filled in by the
+    # device-free file loaders after parsing — never something a scenario's own YAML declares. A
+    # `PrivateAttr` rather than an ordinary field so it never appears in `model_dump()`: leaking
+    # into a re-serialized scenario (record, audit, a future scenario editor) would turn a
+    # load-time detail into part of the authored schema.
+    _source_stem: str | None = PrivateAttr(default=None)
+
+    @property
+    def source_stem(self) -> str | None:
+        """The stem of the file this scenario was loaded from, or `None` outside a file loader."""
+        return self._source_stem
+
+    def set_source_stem(self, stem: str) -> None:
+        """Record the stem of the file this scenario was loaded from (BE-0417).
+
+        Called only by the device-free file loaders, on the final expanded scenario list, right
+        before they return it.
+        """
+        self._source_stem = stem
 
     @model_validator(mode="before")
     @classmethod

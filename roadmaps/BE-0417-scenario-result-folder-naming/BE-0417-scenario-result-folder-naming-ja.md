@@ -7,7 +7,7 @@
 |---|---|
 | 提案 | [BE-0417](BE-0417-scenario-result-folder-naming-ja.md) |
 | 提案者 | [@0x0c](https://github.com/0x0c) |
-| 状態 | **提案** |
+| 状態 | **実装済み** |
 | トラッキング Issue | [検索](https://github.com/bajutsu-e2e/bajutsu/issues?q=is%3Aissue+label%3Aroadmap-tracking+in%3Atitle+"BE-0417") |
 | トピック | コードベース品質・技術的負債 |
 | 関連 | [BE-0200](../BE-0200-run-id-contract/BE-0200-run-id-contract-ja.md) |
@@ -145,7 +145,24 @@
 > 作業分解(作業の単位ごとに1つ)に対応し、ログには変更内容と時期(古い順)を PR へのリンクと
 > ともに記録します。
 
-- [ ] 未着手。
+- [x] 作業単位 1——`Scenario.source_stem`：`PrivateAttr` のプライベート属性、読み取り専用の
+  `source_stem` プロパティ、そして `set_source_stem()` セッターを追加します。ローダーから
+  `_source_stem` へ直接代入すると `ruff` の `SLF001` に抵触するため、公開セッター経由の書き込みに
+  しています（プロパティ自体は設計どおり読み取り専用のままです）。
+- [x] 作業単位 2——`_expand_file()`（`bajutsu/run/cli.py`）と `load_expanded_scenarios()`
+  （`bajutsu/common/scenario/load_expanded.py`）が、それぞれ展開後の最終的なシナリオ一覧に対し、
+  返す直前に `set_source_stem()` を呼び出します。
+- [x] 作業単位 3——`scenario_slug()` の隣に `sanitize_source_stem()` を追加します。
+  `bajutsu/common/runner/pipeline.py` の `run_one` と `_cancelled_pass` は、`s.source_stem` を
+  この関数に通して `sid` を組み立て、読み込み元ファイルが不明なときだけ `scenario_slug(s.name)`
+  にフォールバックします。
+- [x] 作業単位 4——`docs/reporting.md` と `docs/ja/reporting.md` の出力レイアウトに `<sid>/`
+  の階層を追加しました（これまで `<stepId>/` が `runs/<runId>/` の直下にぶら下がっているように
+  見えていましたが、実際のランタイムはすでにこの階層で証跡を書き出しています）。あわせて `sid`
+  の導出規則を説明する 1 行を追加しました。
+- [x] 作業単位 5——上記すべてに対するテストを追加しました。`_cancelled_pass` のマトリクス経路、
+  両ローダーのデータ駆動展開ケース、`sanitize_source_stem()` の文字置換、そして `source_stem`
+  が `model_dump()` に現れないことを確認しています。
 
 ## 参考
 

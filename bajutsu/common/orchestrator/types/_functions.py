@@ -206,3 +206,15 @@ def scenario_slug(name: str) -> str:
     """A filesystem-safe id derived from a scenario name (for its evidence dir)."""
     slug = re.sub(r"[^0-9a-zA-Z]+", "-", name).strip("-").lower()
     return slug or "scenario"
+
+
+def sanitize_source_stem(stem: str) -> str:
+    """Make a scenario file's stem safe as an evidence-dir `sid` component (BE-0417).
+
+    `sid` is not only a filesystem path segment: `report.html`'s asset links and serve's
+    `/runs/<runId>/<sid>/…` routes interpolate it unescaped, so a character unsafe in an HTML
+    attribute or URL path segment (`#`, `?`, …) would silently truncate those links. Only
+    characters outside `[A-Za-z0-9_.-]` are replaced, with `_` and `.` left alone (unlike
+    `scenario_slug`), so a plain stem such as `login_flow` comes back unchanged.
+    """
+    return re.sub(r"[^A-Za-z0-9_.-]", "_", stem)

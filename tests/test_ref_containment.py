@@ -46,6 +46,29 @@ def test_in_root_data_file_still_loads(tmp_path: Path) -> None:
     assert [s.steps[0].tap.id for s in out] == ["btn.a", "btn.b"]  # type: ignore[union-attr]
 
 
+def test_load_expanded_scenarios_sets_source_stem_from_the_file_name(tmp_path: Path) -> None:
+    # BE-0417: every expanded scenario carries the loaded file's own stem, independent of its name:.
+    scenario = _write(
+        tmp_path / "login_flow.yaml",
+        "- name: Login succeeds with a valid password\n  steps:\n    - tap: { id: ok }\n",
+    )
+    out = load_expanded_scenarios(scenario)
+    assert [s.source_stem for s in out] == ["login_flow"]
+
+
+def test_load_expanded_scenarios_data_driven_rows_all_share_the_source_stem(tmp_path: Path) -> None:
+    # Every row a data-driven scenario expands into is set *after* expand_data, so it carries the
+    # same stem as the file it came from, not just the pre-expansion source scenario.
+    root = tmp_path / "suite"
+    _write(root / "data" / "cases.csv", "target\nbtn.a\nbtn.b\n")
+    scenario = _write(
+        root / "scenarios" / "login_flow.yaml",
+        '- name: s\n  dataFile: ../data/cases.csv\n  steps:\n    - tap: { id: "${row.target}" }\n',
+    )
+    out = load_expanded_scenarios(scenario, root=root)
+    assert [s.source_stem for s in out] == ["login_flow", "login_flow"]
+
+
 def test_absolute_component_ref_rejected(tmp_path: Path) -> None:
     secret = _write(tmp_path / "outside" / "secret.yaml", "steps:\n  - tap: { id: TOPSECRET }\n")
     scenario = _write(

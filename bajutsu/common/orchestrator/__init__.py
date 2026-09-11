@@ -31,6 +31,7 @@ from bajutsu.common.orchestrator.types import (
     StepOutcome,
     drain_interruptions,
     push_interruption_policy,
+    sanitize_source_stem,
     scenario_slug,
 )
 from bajutsu.common.orchestrator.waits import _POLL, _wait
@@ -59,5 +60,6 @@ __all__ = [
     "drain_interruptions",
     "push_interruption_policy",
     "run_scenario",
+    "sanitize_source_stem",
     "scenario_slug",
 ]

@@ -24,6 +24,22 @@ def _scenarios(*names: str) -> list[Scenario]:
     return [Scenario.model_validate({"name": n, "steps": [{"tap": {"id": "ok"}}]}) for n in names]
 
 
+def test_cancelled_matrix_pass_sid_prefers_source_stem_over_name(tmp_path: Path) -> None:
+    """`_cancelled_pass`'s `sid` follows the same source-stem-over-name rule as `run_one` (BE-0417)."""
+    scenarios = _scenarios("Login succeeds with a valid password")
+    scenarios[0].set_source_stem("login_flow")
+    results = run_matrix_and_report(
+        _eff(),
+        scenarios,
+        ["chromium"],
+        lambda engine, run_dir: [],  # never reached: cancelled() is already True
+        tmp_path / "runs",
+        "run1",
+        cancelled=lambda: True,
+    )[0]
+    assert [r.sid for r in results] == ["00-login_flow"]
+
+
 def test_a_cancel_before_the_run_fails_every_scenario_in_order() -> None:
     results = run_all(_eff(), _scenarios("a", "b", "c"), _lease, cancelled=lambda: True)
     # One result per scenario, in declaration order: nothing downstream has to know a cancellation

@@ -19,17 +19,22 @@ runs/<runId>/
 ├── junit.xml         # CI integration (1 scenario = 1 testcase)
 ├── ctrf.json         # Common Test Report Format (richer CI consumers: PR comments, dashboards)
 ├── report.html       # self-contained HTML (no external assets)
-└── <stepId>/         # per-step evidence (when using FileSink)
-    ├── before.png    # screenshot, before the step acts
-    ├── after.png     # screenshot, after it acts
-    ├── elements.json # query() dump
-    ├── segment.mp4   # video (interval)
-    └── device.log    # deviceLog (interval)
+└── <sid>/            # one scenario's evidence (per-scenario, when using FileSink)
+    └── <stepId>/     # per-step evidence
+        ├── before.png    # screenshot, before the step acts
+        ├── after.png     # screenshot, after it acts
+        ├── elements.json # query() dump
+        ├── segment.mp4   # video (interval)
+        └── device.log    # deviceLog (interval)
 ```
 
 The CLI assigns `runId` as `YYYYMMDD-HHMMSS`. `bajutsu/common/run_meta/id.py`
 ([BE-0200](../roadmaps/BE-0200-run-id-contract/BE-0200-run-id-contract.md)) mints it once, so every
-call site shares one format. `stepId` is `step.name` or `step<i>`.
+call site shares one format. `sid` is `{NN}-{slug}`: a zero-padded run-order index plus the stem of
+the scenario's own source file (`login_flow.yaml` → `login_flow`), or a slug of the scenario's
+`name:` field when no source file is known — a scenario built directly rather than loaded from disk
+([BE-0417](../roadmaps/BE-0417-scenario-result-folder-naming/BE-0417-scenario-result-folder-naming.md)).
+`stepId` is `step.name` or `step<i>`.
 
 ## manifest.json
 
