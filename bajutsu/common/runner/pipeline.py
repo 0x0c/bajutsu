@@ -44,6 +44,7 @@ from bajutsu.common.orchestrator import (
     MailboxReader,
     ProgressFn,
     RunResult,
+    SkippedCapture,
     push_interruption_policy,
     run_scenario,
     sanitize_source_stem,
@@ -398,16 +399,18 @@ class _ScenarioRunner:
                     f"✘ scenario {i + 1}/{self.total}: {s.name} "
                     f"(crash recovery abandoned: {given_up_cause})"
                 )
+            never_leased_failure = f"backend crash recovery skipped: {given_up_cause}, so this scenario was never leased"
             return RunResult(
                 scenario=s.name,
                 ok=False,
                 steps=[],
                 backend=actuator or "",
                 sid=sid,
-                failure=(
-                    f"backend crash recovery skipped: {given_up_cause}, so this scenario was never "
-                    "leased"
-                ),
+                failure=never_leased_failure,
+                # No device was ever leased, so no recording was ever attempted — disclose why the
+                # report's video player is empty instead of leaving it looking like a plain miss
+                # (BE-0020's channel, reused here rather than left to a bare "no recording").
+                skipped_captures=[SkippedCapture(kind="video", reason=never_leased_failure)],
             )
         # Backend-crash recovery: a mid-scenario runner/host crash (base.BackendCrashError) is
         # backend infrastructure, not a verdict — discard the dead lease, lease a fresh device (a
@@ -732,6 +735,10 @@ class _ScenarioRunner:
             backend=actuator or "",
             sid=sid,
             failure=failure,
+            # Every attempt's own recording died with the lease that crashed under it, so no
+            # `Artifact` ever reaches this result — disclose the gap instead of leaving the report's
+            # video player looking like recording was simply never attempted (BE-0020's channel).
+            skipped_captures=[SkippedCapture(kind="video", reason=failure)],
         )
 
     def _run_on_lease(

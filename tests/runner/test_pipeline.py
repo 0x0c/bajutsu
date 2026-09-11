@@ -162,6 +162,12 @@ def test_run_all_fails_a_scenario_that_crashes_every_attempt() -> None:
     # operator watching progress into expecting a fourth attempt that the budget doesn't allow).
     assert "respawning" not in messages[-1]
     assert sum("respawning" in m for m in messages) == 2  # only the 2 attempts that did retry
+    # Every attempt's own recording died with the lease that crashed under it, so no video artifact
+    # ever reaches this result — the gap is disclosed via `skipped_captures` (BE-0020) so the report
+    # says why, instead of showing an empty player with no explanation.
+    video_skips = [c for c in results[0].skipped_captures if c.kind == "video"]
+    assert len(video_skips) == 1
+    assert video_skips[0].reason == results[0].failure
 
 
 def test_run_all_crash_retries_zero_disables_recovery() -> None:
@@ -1057,6 +1063,11 @@ def test_run_all_run_crash_recovery_budget_latch_skips_every_remaining_scenario(
     assert "run-level crash-recovery budget" in (results[1].failure or "")
     assert "run-level crash-recovery budget" in (results[2].failure or "")
     assert "never leased" in (results[2].failure or "")
+    # "c" never leased a device, so no recording was ever attempted — disclosed the same way as an
+    # exhausted crash-retry loop, not left to the report's generic "no recording" (BE-0020).
+    video_skips = [c for c in results[2].skipped_captures if c.kind == "video"]
+    assert len(video_skips) == 1
+    assert video_skips[0].reason == results[2].failure
 
 
 def test_run_all_run_crash_recovery_budget_does_not_fail_a_scenario_after_a_slow_but_successful_recovery() -> (
