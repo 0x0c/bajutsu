@@ -23,8 +23,10 @@ class Capability:
     SELECT_OPTION = "selectOption"  # set a native <select> by value; web only (BE-0191)
     # `select`/`copy` on the focused field (BE-0265). A backend that can select and copy natively
     # advertises this; a coordinate-only backend with no select-all handle does not and raises
-    # UnsupportedAction — the same actuate-or-raise promise as MULTI_TOUCH (BE-0280). `delete` /
-    # `clear` need no token: every backend actuates `delete_text` (a run of backspaces).
+    # UnsupportedAction — the same actuate-or-raise promise as MULTI_TOUCH (BE-0280). `delete` needs
+    # no token: every backend actuates `delete_text` (a run of backspaces). `clear` needs no token
+    # either — it opportunistically selects-all-then-backspaces-once where this is advertised, and
+    # falls back to a counted `delete_text` run everywhere else.
     TEXT_SELECTION = "textSelection"
     # Tap a button on an out-of-process iOS SpringBoard permission prompt by a native accessibility
     # query, deterministically (BE-0316). Only the resident-runner XCUITest backend advertises it:
