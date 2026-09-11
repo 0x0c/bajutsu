@@ -341,9 +341,10 @@ class AlertGuardConfig:
         clear a stacked alert while a later one leaves a second unhandled, and the caller reports both
         facts rather than treating them as mutually exclusive.
 
-        `settle` runs after every round that acted on a live alert — one that dismissed something,
-        one that found a button not yet tappable, and one that declined a still-fading alert it
-        had already dismissed — the caller's own `settle_after_alert_dismiss` bound to its
+        `settle` runs after every round that acted on a live alert or found one it could not yet
+        resolve — one that dismissed something, one that found a button not yet tappable, one that
+        declined a still-fading alert it had already dismissed, and one that read a shared-label
+        collision no rule could uniquely match — the caller's own `settle_after_alert_dismiss` bound to its
         `clock`/`transitions`/`cancelled`, including the round that exhausts the bound, so a
         caller reading the screen right after this call returns never reads one still
         mid-animation. `settle` is best-effort and bounded, though: a dismiss whose animation
@@ -449,9 +450,9 @@ class AlertGuardConfig:
                         and round_index - native_dismiss_round == native_declines
                     ):
                         # The bound is spent and every round since the most recent tap has declined
-                        # that same shape again: three consecutive reads of a live, policy-named
-                        # alert is evidence the tap never actually landed, not that its dismiss
-                        # animation is merely still playing out — nor that a round of some other
+                        # that same shape again: every read since the tap showing a live,
+                        # policy-named alert is evidence the tap never actually landed, not that
+                        # its dismiss animation is merely still playing out — nor that a round of some other
                         # kind (an "unhandled" collision, an "absent" the tree answered) sat between
                         # the tap and now, which would leave the gap short of `native_declines` and
                         # this branch unreached. A call that cleared everything anyway never reaches

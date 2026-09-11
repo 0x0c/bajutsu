@@ -773,31 +773,32 @@ Android; on iOS it rests on the fast suite's bookkeeping proof alone.
   out any label this call has already answered, so it does not re-name an alert already cleared. A
   native alert whose fade outlasts that settle still reads back, unchanged, on a later round.
   Matched against a shape a previous round already dismissed, or a narrower rendering of one — two
-  of a `savePassword` policy's three rules nest that way, both tapping the same button — that round
-  declines to tap it at all: the same alert still fading, not a distinct one, so a repeat tap never
-  reaches the device and never risks landing on nothing or on whatever the closing alert has by
-  then revealed underneath it, on either path. Both are keyed on a rule's own shape rather than the
-  buttons a probe reads, since that read enumerates every alert the surface currently holds and so
-  changes the moment a different alert joins or leaves it, which the alert already dismissed did
-  not do. Both key on shape rather than a rule's own tap label, too: two rules can share one
-  alert's shape under different choices, a scenario's `choice` overriding a target's for the same
-  prompt, and keying on the label alone would let one such rule's exclusion promote its sibling to
-  tap the opposite button on the alert this call already answered. A later alert resolving to a
-  shape that is neither a match nor a narrower rendering of one already dismissed — including one
-  sharing the tapped label alone (the built-in `notifications` and `tracking` prompts both grant
-  `"Allow"`) — still taps as usual once it is no longer read alongside the one already dismissed;
-  two such alerts read together instead share that label's count, so neither uniquely matches and
-  the round reports the surface as unhandled. A match landing back on an already-answered shape
-  does not by itself end the round on either path: a real, not-yet-answered alert can be enumerable
-  right alongside that fade, so the search retries among the shapes not yet dismissed before
-  declining. A round that declines a repeat native tap still checks the buttons the probe read
-  against every shape answered so far: a queued second alert no rule identifies can sit right
-  alongside the one this call already dismissed, and the decline alone does not mean the rest of
-  the surface is clear. A button that never becomes reachable within the bound carries its own
-  note, distinct from the one an alert no rule identifies carries, rather than reading as a bare
-  missing element. A native alert the call did tap carries that same note once it is still the only
-  thing on the surface as the bound is spent: three consecutive reads of a live, policy-named alert
-  is evidence the tap never landed, not that its dismiss animation is merely still playing out. The
+  of a `savePassword` policy's three rules nest that way, though only on the in-tree surface that
+  prompt ever reaches, and both tap the same button — that round declines to tap it at all: the
+  same alert still fading, not a distinct one, so a repeat tap never reaches the device and never
+  risks landing on nothing or on whatever the closing alert has by then revealed underneath it, on
+  either path. Both are keyed on a rule's own shape rather than the buttons a probe reads, since
+  that read enumerates every alert the surface currently holds and so changes the moment a
+  different alert joins or leaves it, which the alert already dismissed did not do. Both key on
+  shape rather than a rule's own tap label, too: two rules can share one alert's shape under
+  different choices, a scenario's `choice` overriding a target's for the same prompt, and keying on
+  the label alone would let one such rule's exclusion promote its sibling to tap the opposite
+  button on the alert this call already answered. A later alert resolving to a shape that is
+  neither a match nor a narrower rendering of one already dismissed — including one sharing the
+  tapped label alone (the built-in `notifications` and `tracking` prompts both grant `"Allow"`) —
+  still taps as usual once it is no longer read alongside the one already dismissed; two such
+  alerts read together instead share that label's count, so neither uniquely matches and the round
+  reports the surface as unhandled. A match landing back on an already-answered shape does not by
+  itself end the round on either path: a real, not-yet-answered alert can be enumerable right
+  alongside that fade, so the search retries among the shapes not yet dismissed before declining. A
+  round that declines a repeat native tap still checks the buttons the probe read against every
+  shape answered so far: a queued second alert no rule identifies can sit right alongside the one
+  this call already dismissed, and the decline alone does not mean the rest of the surface is
+  clear. A button that never becomes reachable within the bound carries its own note, distinct from
+  the one an alert no rule identifies carries, rather than reading as a bare missing element. A
+  native alert the call did tap carries that same note once it is still the only thing on the
+  surface as the bound is spent: every read since the tap showing a live, policy-named alert is
+  evidence the tap never landed, not that its dismiss animation is merely still playing out. The
   tree note survives a later round that finds nothing to match, or one that goes on to dismiss an
   unrelated alert on either surface — native or in-tree — rather than either round erasing a real,
   still-open diagnosis. A native leftover note does not survive that same kind of later round,
