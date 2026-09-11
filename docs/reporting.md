@@ -276,8 +276,12 @@ authored. Comments and formatting stay intact: the report slices this text strai
 source file. It never re-serializes the parsed model. A literal `totp.secret` still gets masked in
 place. A scenario whose `setup`/component expansion changed its step count keeps this verbatim
 text. The text stays accurate as written. It loses the `#` column's line numbers, for the same
-reason. An offline re-render (`bajutsu report`, below) falls back to the structured re-dump it
-always used. The original file's raw text was never persisted into the run.
+reason. A `data`/`dataFile`-driven scenario always shows the structured re-dump instead. It never
+shows the verbatim text. Every row shares one authored template. Substituting `${row.*}` per row
+leaves the step count unchanged. A verbatim slice would show the same unsubstituted template for
+every row. It would never show what that row actually ran. An offline re-render (`bajutsu report`,
+below) falls back to the structured re-dump it always used. The original file's raw text was never
+persisted into the run.
 
 A `visual` expectation renders an **interactive baseline-vs-actual comparator** beneath its row,
 with four modes: **Swipe** (drag a divider to wipe between the two), **Onion** (a slider cross-fades

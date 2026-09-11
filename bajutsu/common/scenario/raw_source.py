@@ -103,8 +103,15 @@ def _redact_totp_secrets(raw_lines: list[str], node: yaml.Node, offset: int) -> 
                 out[start_line][:col_start] + _TOTP_PLACEHOLDER + out[start_line][col_end:]
             )
         else:
-            # A block-scalar secret spans multiple lines — collapse the whole span to one
-            # placeholder line rather than leave any of its literal content visible.
-            indent = out[start_line][: len(out[start_line]) - len(out[start_line].lstrip(" "))]
-            out[start_line : end_line + 1] = [f"{indent}{_TOTP_PLACEHOLDER}"]
+            # A block/folded scalar secret spans multiple lines. Keep everything on the start
+            # line before the scalar itself — the `secret:` key and its `|`/`>` indicator — so the
+            # splice stays parseable YAML with the key intact, instead of leaving a bare value
+            # under `totp:`. PyYAML's `end_mark` for a cleanly-terminated block lands at column 0
+            # of the line *after* its content, so the real last content line is one earlier —
+            # the same column-0 adjustment `_content_span` makes — or the splice would also eat
+            # the sibling key that follows (e.g. `into:`).
+            end_col = secret.end_mark.column
+            last = end_line if end_col > 0 else end_line - 1
+            head = out[start_line][: secret.start_mark.column]
+            out[start_line : last + 1] = [f"{head}{_TOTP_PLACEHOLDER}"]
     return out

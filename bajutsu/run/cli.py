@@ -49,6 +49,7 @@ from bajutsu.common.runner.build import BuildError, build_if_missing
 from bajutsu.common.runner.device_provider import acquire_device
 from bajutsu.common.runner.types import AlertGuardFor
 from bajutsu.common.scenario import (
+    RawScenario,
     Scenario,
     SystemAlertHandling,
     SystemAlertHandlingField,
@@ -173,17 +174,24 @@ def _expand_file(
     declared name (BE-xxxx) — its report plan source: the scenario's own verbatim YAML as authored
     in *path*, and its steps' original line numbers there. A scenario whose setup/component
     expansion changed its step count keeps the verbatim text but drops its line numbers, since a
-    wrong line would be worse than none; data-row expansion (which never changes step shape) keeps
-    both, shared by every row.
+    wrong line would be worse than none. A data-driven scenario (`data`/`dataFile`) drops the
+    verbatim text entirely: `expand_data` substitutes `${row.*}` per row without changing the step
+    count, so the guard above would not catch it, and every row would otherwise share one
+    unsubstituted template — showing none of them what actually ran.
     """
     text = path.read_text(encoding="utf-8")
     scenario_file = load_scenario_file(text)
     scenarios = scenario_file.scenarios
     raw_sources = scenario_sources(text)
     pre_step_counts = {s.name: len(s.steps) for s in scenarios}
+
+    def _plan_source(s: Scenario, raw: RawScenario) -> ScenarioPlanSource:
+        if s.data is not None or s.data_file is not None:
+            return ScenarioPlanSource(file_name=path.name, text=None, step_lines=[])
+        return ScenarioPlanSource(file_name=path.name, text=raw.text, step_lines=raw.step_lines)
+
     plan_by_name = {
-        s.name: ScenarioPlanSource(file_name=path.name, text=raw.text, step_lines=raw.step_lines)
-        for s, raw in zip(scenarios, raw_sources, strict=True)
+        s.name: _plan_source(s, raw) for s, raw in zip(scenarios, raw_sources, strict=True)
     }
     # Refs (setup/use/data) resolve relative to this scenario file's own directory.
     base_dir = path.parent
