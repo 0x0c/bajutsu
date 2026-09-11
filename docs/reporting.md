@@ -234,7 +234,7 @@ example, the `ctrf-io/github-test-reporter` action turns it into a PR comment / 
 
 A self-contained HTML for humans (inline CSS, no external assets). The header shows the run id and
 overall PASS/FAIL. Below that sits the **scenario file name** (`source_name`), the whole suite's
-label. `source_name` names the whole suite. A lone `--scenario` file gives its own name. A
+label. `source_name` names the whole suite. A lone `--scenario` file gives its own name, and a
 multi-file or whole-dir run gives the containing directory's name instead. The **file-level
 `description`** follows when present.
 
@@ -283,13 +283,13 @@ scenario YAML. For a freshly baked `bajutsu run` report, that YAML is the scenar
 authored. Comments and formatting stay intact: the report slices this text straight from the
 source file. It never re-serializes the parsed model. A literal `totp.secret` still gets masked in
 place. A scenario whose `setup`/component expansion changed its step count keeps this verbatim
-text. The text stays accurate as written. It loses the `#` column's line numbers, for the same
-reason. A `data`/`dataFile`-driven scenario always shows the structured re-dump instead. It never
-shows the verbatim text. Every row shares one authored template. Substituting `${row.*}` per row
-leaves the step count unchanged. A verbatim slice would show the same unsubstituted template for
-every row. It would never show what that row actually ran. An offline re-render (`bajutsu report`,
-below) falls back to the structured re-dump it always used. The original file's raw text was never
-persisted into the run.
+text — still accurate as authored — but loses the `#` column's line numbers, which the expansion
+would leave pointing at the wrong steps. A `data`/`dataFile`-driven scenario always shows the
+structured re-dump instead. It never shows the verbatim text. Every row shares one authored
+template. Substituting `${row.*}` per row leaves the step count unchanged. A verbatim slice would
+show the same unsubstituted template for every row. It would never show what that row actually
+ran. An offline re-render (`bajutsu report`, below) falls back to the structured re-dump it always
+used: the original file's raw text was never persisted into the run.
 
 A `visual` expectation renders an **interactive baseline-vs-actual comparator** beneath its row,
 with four modes: **Swipe** (drag a divider to wipe between the two), **Onion** (a slider cross-fades
