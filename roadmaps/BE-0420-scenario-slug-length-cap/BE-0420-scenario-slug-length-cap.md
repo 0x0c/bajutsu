@@ -9,6 +9,7 @@
 | Author | [@0x0c](https://github.com/0x0c) |
 | Status | **Implemented** |
 | Tracking issue | [Search](https://github.com/bajutsu-e2e/bajutsu/issues?q=is%3Aissue+label%3Aroadmap-tracking+in%3Atitle+"BE-0420") |
+| Implementing PR | [#1995](https://github.com/bajutsu-e2e/bajutsu/pull/1995) |
 | Topic | Codebase quality & technical debt |
 | Related | [BE-0417](../BE-0417-scenario-result-folder-naming/BE-0417-scenario-result-folder-naming.md), [BE-0031](../BE-0031-data-driven-scenarios/BE-0031-data-driven-scenarios.md) |
 <!-- /BE-METADATA -->
@@ -181,6 +182,19 @@ completion and writes its evidence directory.
   - a stem keeping at least its first character, the invariant behind unit 3's missing fallback;
   - the `record`-with-no-`--out` path through `scenario_out_name()`;
   - colliding truncated slugs still drawing distinct `sid`s from the `{i:02d}-` prefix.
+
+Log:
+
+- [#1995](https://github.com/bajutsu-e2e/bajutsu/pull/1995) — All 6 units, completing the item.
+  Added `_MAX_SLUG_BYTES = 60` and a private `_cap_bytes()` beside the two slug functions.
+  `scenario_slug()` and `sanitize_source_stem()` each call it last, so a long source-file name or a
+  long in-memory `name` no longer produces an `sid` the filesystem refuses. No call site changed.
+  A self-review pass corrected two claims this change first got wrong. The `scenario_slug`
+  docstring and both `reporting.md` pages had claimed every `sid` carries a run-order prefix. The
+  item's own *Not doing* denies that for the two bare-fallback callers. The rationale for omitting
+  `sanitize_source_stem`'s empty-result fallback had rested on the smallest UTF-8 character being
+  one byte, where the load-bearing fact is that the longest is four. A seventh test now pins that
+  invariant, which nothing had covered.
 
 ## References
 

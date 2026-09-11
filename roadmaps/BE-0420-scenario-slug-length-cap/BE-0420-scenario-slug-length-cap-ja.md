@@ -9,6 +9,7 @@
 | 提案者 | [@0x0c](https://github.com/0x0c) |
 | 状態 | **実装済み** |
 | トラッキング Issue | [検索](https://github.com/bajutsu-e2e/bajutsu/issues?q=is%3Aissue+label%3Aroadmap-tracking+in%3Atitle+"BE-0420") |
+| 実装 PR | [#1995](https://github.com/bajutsu-e2e/bajutsu/pull/1995) |
 | トピック | コードベース品質・技術的負債 |
 | 関連 | [BE-0417](../BE-0417-scenario-result-folder-naming/BE-0417-scenario-result-folder-naming-ja.md)、[BE-0031](../BE-0031-data-driven-scenarios/BE-0031-data-driven-scenarios-ja.md) |
 <!-- /BE-METADATA -->
@@ -188,6 +189,20 @@ CSV展開後の各行が、自分自身の `key=value` というパラメータ�
   - 語幹の先頭1文字は必ず残ること（作業単位 3 でフォールバックを省いた根拠）
   - `scenario_out_name()` を経由する `record` の `--out` なしの経路
   - 切り詰めた結果スラグが衝突しても、`{i:02d}-` の接頭辞によって `sid` が区別されること
+
+ログ：
+
+- [#1995](https://github.com/bajutsu-e2e/bajutsu/pull/1995)——作業単位すべて（6つ）を実装し、本項目
+  を完了しました。2つのスラグ関数の隣に `_MAX_SLUG_BYTES = 60` と非公開の `_cap_bytes()` を
+  追加しました。`scenario_slug()` と `sanitize_source_stem()` は、それぞれ最後にこれを呼びます。
+  由来ファイル名が長い場合も、メモリ上の `name` が長い場合も、ファイルシステムが受け付けない
+  `sid` はもう生まれません。呼び出し箇所は1つも変更していません。
+  セルフレビューで、当初の記述の誤りを2点訂正しました。1点目は、`scenario_slug` の docstring と
+  `reporting.md` の両言語版が、すべての `sid` が実行順の接頭辞を持つと書いていた点です。本項目
+  自身の「やらないこと」が、プレフィックスなしのフォールバック2箇所についてこれを否定しています。
+  2点目は、`sanitize_source_stem()` で空文字列へのフォールバックを省いた根拠です。UTF-8 の最小の
+  文字が1バイトであることを挙げていましたが、根拠となるのは最長が4バイトであることです。どの
+  テストも押さえていなかったこの不変条件を、7つ目のテストで固定しました。
 
 ## 参考
 
