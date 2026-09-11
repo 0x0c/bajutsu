@@ -781,7 +781,8 @@ Android; on iOS it rests on the fast suite's bookkeeping proof alone.
   button's. The branch sits ahead of the `governs` check because neither alert outcome fits a
   banner: a governing policy recorded it as an undeclared interruption and failed an otherwise
   passing step, while an ungoverned one left XCUITest to wait the banner out, measured at ~9s per
-  interrupted interaction against ~0.6s undisturbed. On by default, `false` disables it per scenario
+  interrupted interaction against ~0.6s undisturbed. `systemAlertHandling` itself is on by default,
+  and `false` disables it per scenario — the banner branch above runs either way
 - DSL `iosTipKitHandling` (BE-0389), an opt-in guard for a blocking Apple TipKit tip: TipKit's
   presentation marks the content it covers accessibility-hidden rather than merely occluding it, so a
   blocked tap can fail as `ElementNotFound`, not only `ElementNotTappable`. The XCUITest backend alone
