@@ -36,14 +36,9 @@ ambiguous match." BE-0409 and BE-0410 respond to that risk by ordering themselve
 lands first, so "a gap this item's port surfaces does not have to be independently rediscovered by
 both at once." That ordering lowers the cost of *rediscovering* a gap. It does not stop the two
 ports from disagreeing with each other in the first place. Neither item has started its `find_all` /
-`resolve_unique` port yet. BE-0409 waits on BE-0408, and BE-0410 waits on BE-0409. One related piece
-of Swift code already exists:
-`resolvableMatchingIndex` in
-[`BajutsuKit/Sources/BajutsuRunner/PositionPath.swift`](../../BajutsuKit/Sources/BajutsuRunner/PositionPath.swift).
-It is the runner's own twin of `_collapse_identical_duplicates`, kept in sync with the host today by
-a hand-written comment, not by shared code. Detailed design folds it into the shared crate too. Past
-that one function, no Swift or Kotlin selector code exists today. That makes now the point where one
-implementation costs less than two.
+`resolve_unique` port yet: BE-0409 waits on BE-0408 (now [Implemented](../BE-0408-step-latency-device-executor-protocol/BE-0408-step-latency-device-executor-protocol.md)), and BE-0410 waits on
+BE-0409. No Swift or Kotlin implementation of either function exists today. That makes now the point
+where one implementation costs less than two.
 
 The functions this item would move are already pure data transformations, not platform glue.
 `matches`, `find_all`, `resolve_unique`, and `_collapse_identical_duplicates` in
@@ -67,25 +62,33 @@ reference on the host, and the Rust core becomes the one other pattern engine ei
 runs.
 
 Once built, a later reader can check the result directly.
-[BE-0114](../BE-0114-driver-conformance-suite/BE-0114-driver-conformance-suite.md)'s driver
-conformance suite runs its fixture set against one compiled selector core. Today's plan would instead
-run those fixtures separately against a Swift port and a Kotlin port. Either port could pass the same
-fixtures while still disagreeing with the other on a case the suite does not cover. Adding a new
-selector rule — a new trait, a new fallback — becomes one Rust change both executors pick up on their
-next binary update. Today's plan needs two hand-written changes, kept in step by memory alone.
+BE-0408 already shipped the fixtures that would check it:
+[`tests/fixtures/be0408/`](../../tests/fixtures/be0408/)'s 42 selector-resolution cases and 9
+derived-label cases, replayed against the Python reference by
+[`tests/test_selector_fixtures.py`](../../tests/test_selector_fixtures.py). Today's plan would run
+those same fixtures separately against a Swift port and a Kotlin port, once each exists. Either port
+could pass every fixture while still disagreeing with the other on a case the fixtures do not cover.
+Adding a new selector rule — a new trait, a new fallback — becomes one Rust change both executors
+pick up on their next binary update. Today's plan needs two hand-written changes, kept in step by
+memory alone.
 
 ## Detailed design
 
 **Implementation order.** This item extends the four-item sequence BE-0407 → BE-0408 → BE-0409 →
-BE-0410. BE-0408's own Progress checklist names a step this item replaces: "port `find_all` /
-`resolve_unique` selector semantics to a shared design document precise enough for two independent …
-implementations to agree on." This item ships a compiled crate instead of that document. It lands
-after BE-0408 settles the field-level selector contract — `within`, `idMatches`, the trait
-derivations — and before BE-0409 or BE-0410 write any platform-side matching code. Landing this item
-also removes the reason BE-0409 and BE-0410 order themselves against each other today: both would
-call the same already-verified crate, so neither needs the other's hand-written port to go first.
-Once this item's crate and its two bindings exist, BE-0409 and BE-0410 can proceed in either order,
-or in parallel.
+BE-0410. BE-0408 is [Implemented](../BE-0408-step-latency-device-executor-protocol/BE-0408-step-latency-device-executor-protocol.md)
+([#1949](https://github.com/bajutsu-e2e/bajutsu/pull/1949)): the step this item replaces already
+shipped, as prose rather than as code — a new *Porting contract for a device-side resolver* section
+in [`docs/selectors.md`](../../docs/selectors.md), stating the field-level selector contract
+(`within`, `idMatches`, the trait derivations, the duplicate-collapse key) precisely enough for two
+independent Swift and Kotlin implementations to agree, backed by the fixture corpus Motivation
+cites. This item does not replace an unstarted step; it replaces an already-shipped prose contract —
+"a port must reproduce this by hand, correctly" — with a compiled crate neither port needs to
+reproduce by hand at all. It lands as a follow-up to BE-0408, before BE-0409 or BE-0410 write any
+platform-side matching code, since both would otherwise start hand-porting against a contract this
+item intends to make moot. Landing this item also removes the reason BE-0409 and BE-0410 order
+themselves against each other today: both would call the same already-verified crate, so neither
+needs the other's hand-written port to go first. Once this item's crate and its two bindings exist,
+BE-0409 and BE-0410 can proceed in either order, or in parallel.
 
 **What the crate reimplements, and what stays host-only.** Nine functions from
 [`bajutsu/common/drivers/base/_functions.py`](../../bajutsu/common/drivers/base/_functions.py) are
@@ -121,13 +124,15 @@ Selector pattern matching needs a named engine, not just a signature. `idMatches
 [`regex`](https://docs.rs/regex) crate for `labelMatches`, and reimplements `fnmatch`'s own
 translation of a shell-glob pattern into a regular expression string for `idMatches` — the same
 approach Python's `fnmatch` module itself takes internally — compiling the result with that same
-`regex` crate, so the crate carries exactly one pattern engine rather than two. `regex` does not
-support two constructs Python's `re` does: lookaround (`(?=…)`, `(?!…)`) and backreferences. A
-`labelMatches` pattern using either compiles on the host and fails to compile in the crate — the
+`regex` crate, so the crate carries exactly one pattern engine rather than two. `regex` rejects
+several constructs Python's `re` accepts: lookaround (`(?=…)`, `(?!…)`), backreferences, the `\Z`
+end-of-string anchor (`regex` offers only `\z`), atomic groups and possessive quantifiers, and
+conditional patterns (`(?(id)yes|no)`). A `labelMatches` pattern using any of them compiles on the
+host and fails to compile in the crate — the
 same host/device disagreement this item exists to remove, relocated rather than closed. The crate
 therefore treats a pattern it cannot compile as a distinct, loud failure at first use — folded into
 the shared error enum below — rather than a silent non-match a caller cannot tell apart from "the
-element isn't there." A case in the generated corpus (see Verification) pins one such pattern, so a
+element isn't there." A case added to the fixture corpus (see Verification) pins one such pattern, so a
 future change to either engine
 that reopens the gap fails the suite instead of surfacing as a flaky scenario.
 
@@ -174,36 +179,34 @@ error enum with a fourth variant, `UnsupportedPattern`, added alongside them for
 gap the previous section names — a `labelMatches` value the `regex` crate cannot compile, carrying
 the field name and the pattern itself. Python raises nothing equivalent today, since `re.compile`
 accepts every pattern this fourth variant exists for; a device executor is the only caller that can
-hit it. The other three variants carry structured failure detail — the selector, the
-candidate count, the covering element's identifier and frame — rather than a formatted message
-string. The host, not the device, renders that detail into the message text a run report shows
-today (`resolve_unique` and `raise_if_covered` in
-[`bajutsu/common/drivers/base/_functions.py`](../../bajutsu/common/drivers/base/_functions.py)); a
-Swift or Kotlin caller passes the variant back unformatted over
+hit it. The other three variants carry structured failure detail as typed fields, not a formatted
+message string: `ElementNotFound` carries the selector and a `reason` of `noMatch` or `outOfRange` —
+`resolve_unique` raises two distinct messages today, "the index is out of range" (`_functions.py:324`)
+and "nothing matched" (`:327`), and BE-0408's own fixture corpus already names this same split
+`resolveUnique.reason`, so the variant reuses that name rather than inventing a second one;
+`AmbiguousSelector` carries the selector and the candidate count; `ElementNotTappable` carries the
+selector plus the covering element's identifier, label, and frame — `raise_if_covered` formats
+`covering["identifier"] or covering["label"] or "<unnamed>"` into its message
+(`_functions.py:452`), so the variant needs both fields to reproduce that fallback, not identifier
+alone. The host, not the device, renders these fields into the message text a run report shows
+today; a Swift or Kotlin caller passes the variant back unformatted over
 the existing evidence path, so a step failing on a device executor reads exactly like the same step
 failing on the host does today.
 
-`_collapse_identical_duplicates` gains one parameter the host's own copy does not need: a
-`frame_tolerance: f64`, defaulting to zero, controlling how closely two candidates' frames must
-match to count as the same content. The host always calls it against one atomic snapshot, where a
-genuine duplicate reports identical frames exactly.
+`_collapse_identical_duplicates` ports with no added parameter: the crate's version compares frames
+for exact equality, exactly like the host's, with no tolerance. `docs/selectors.md`'s porting
+contract states why this must stay that way, in a section titled *Two divergences a port must keep,
+not close*.
 [`PositionPath.swift`](../../BajutsuKit/Sources/BajutsuRunner/PositionPath.swift)'s
-`resolvableMatchingIndex` needs a point of slack instead: it re-resolves a recorded element handle
-through separate live calls, one frame read per candidate, made moments apart. It also does two
-things this function does not — it first filters candidates against the recorded handle's own
-attributes, and it treats any disagreement among the survivors as a resolution failure rather than a
-distinct group. Only the frame-matching and grouping logic is shared, not that surrounding contract.
-Exposing the tolerance as a parameter lets `resolvableMatchingIndex` become a thin wrapper: its own
-recorded-attribute filter runs first, the shared function groups what remains, and its existing
-nil-on-disagreement check runs on the result. Two constraints follow from the tolerance itself. The
-shared function compares every candidate against every other, never each against one representative:
-a tolerance is not transitive, so an anchor-based scan could fold candidates a point on either side
-of a middle one into a single group even though the two extremes sit two points apart — collapsing a
-pair `resolvableMatchingIndex` refuses today, and making the verdict depend on the order candidates
-happen to arrive in. And the function returns groups of indices into the caller's own list, not
-groups of elements, for the same reason `find_all` does: the wrapper reads its `Int?` result straight
-off those indices, rather than re-deriving one with a second, hand-written frame comparison of its
-own.
+`resolvableMatchingIndex` and `attributesMatch` already diverge from this module on purpose: a point
+of slack on each frame value, and an ordered-array trait comparison rather than a set. Both exist
+because `resolvableMatchingIndex` answers a different question — whether an already-recorded element
+handle, re-resolved through a fresh live read, is still the same element — while
+`_collapse_identical_duplicates` answers "do these candidates from one atomic snapshot report
+identical content." The contract's own text is explicit that a port "must not 'correct' either one
+toward Python's own behavior." This item's crate therefore stops at `_collapse_identical_duplicates`
+alone; `resolvableMatchingIndex` and `framesEqual` stay exactly as they are, in Swift, untouched by
+this item, and no Progress step here should ever propose folding one into the other.
 
 Android's derived-label fallback (`_derived_label` in
 [`bajutsu/common/drivers/adb/_functions.py`](../../bajutsu/common/drivers/adb/_functions.py), applied
@@ -214,8 +217,9 @@ the shared matching code sees it — on the Python driver today, and inside
 Android-specific branch for this: every caller normalizes its own platform's raw reading into a plain
 `Element` first, then calls the one shared core. This leaves one hand-written Kotlin port —
 `_derived_label` itself has no Rust counterpart — that must still agree with Python's. Its output is
-a single string with no further processing, and BE-0114's fixtures already cover it, so the residual
-risk is far smaller than porting the whole matching path independently was.
+a single string with no further processing, and BE-0408's nine
+[`android_derived_label.json`](../../tests/fixtures/be0408/android_derived_label.json) cases already
+cover it, so the residual risk is far smaller than porting the whole matching path independently was.
 
 **iOS: `BajutsuRunner`.** [`BajutsuKit/Package.swift`](../../BajutsuKit/Package.swift) already builds
 `BajutsuRunner` with a Swift Package Manager build plugin, `OpenAPIGenerator`, that generates Swift
@@ -258,30 +262,40 @@ That build file's own comment already says the server "stays dependency-light" s
 HTTP or JSON library, being a self-contained instrumentation. That comment states a preference
 against an unneeded dependency, not a ban on the native dependency this executor actually needs.
 
-**Verification.** BE-0114's driver conformance suite exercises a `Driver` end to end — seed a screen,
-act, assert — so it carries no `Element`-list-plus-`Selector`-plus-expected-result corpus a CLI could
-read directly. That corpus already exists one level down, though:
-[`tests/test_drivers_base.py`](../../tests/test_drivers_base.py) unit-tests `_functions.py`'s
-functions directly, each case building the same `Element`/`Selector` inputs the crate now takes and
-asserting the same output. A small Rust binary — built for the CI host's own architecture, never
-shipped with the wheel or the resident server — reads a fixture's `Element` list and `Selector` from
-JSON on standard input, and writes the matched indices, or the error variant and its structured
-detail, on standard output. The JSON corpus that CLI reads is *generated from*
-`test_drivers_base.py`'s existing cases, not hand-duplicated alongside them, so the pytest cases stay
-the one source and the crate is checked against exactly what already backs the host's own behavior —
-not a second, independently maintained fixture set that could drift from it unnoticed. Once BE-0409
-and BE-0410 exist, the same corpus runs a third time, through each platform's own binding; a failure
-there narrows at once to "the binding," rather than reopening whether the shared logic itself carries
-the defect.
+**Verification.** [`tests/fixtures/be0408/`](../../tests/fixtures/be0408/) is already the
+language-neutral corpus this crate needs: `selector_resolution.json`'s 42 schema-versioned cases
+(each an `elements` list, one `selector`, and the `findAll` / `resolveUnique` outcome Python
+produces) and `android_derived_label.json`'s 9 cases, both replayed against the Python reference by
+[`tests/test_selector_fixtures.py`](../../tests/test_selector_fixtures.py) on every change today. A
+small Rust binary — built for the CI host's own architecture, never shipped with the wheel or the
+resident server — reads a case's `Element` list and `Selector` from that same JSON on standard
+input, and writes the matched indices, or the error variant and its structured detail, on standard
+output; `test_selector_fixtures.py` gains a second replay path that runs the existing 42 cases
+through this binary, alongside the one that already runs them through Python, so the two stay
+checked against one shared corpus rather than two independently maintained ones.
+
+That corpus, unchanged, covers `find_all` and `resolve_unique` — which exercise `matches` and
+`_collapse_identical_duplicates` internally — but not the five functions this item ports that
+`selector_resolution.json`'s `elements`-plus-`selector` shape cannot express: `contains` (two
+`Frame`s), `frame_center` (one `Frame`), `topmost_at_point` (a `Point` plus a target index),
+`redirect_candidates` and `raise_if_covered` (a target index alongside the selector). The schema
+gains a version 2 for these: a per-case `function` field selects which of the nine the case
+exercises, and each case carries that function's own extra inputs (a point, a target index, a second
+frame) alongside the `elements` list already there. `test_selector_fixtures.py` dispatches on
+`function` the same way it already dispatches on `findAll` / `resolveUnique` presence, so the one
+corpus and the one replay test grow to cover all nine functions instead of splitting into a second
+mechanism. Once BE-0409 and BE-0410 exist, the same corpus runs a third time, through each
+platform's own binding; a failure there narrows at once to "the binding," rather than reopening
+whether the shared logic itself carries the defect.
 
 ## Alternatives considered
 
-- **Keep BE-0408's current plan: a written design document, two independently written Swift and
-  Kotlin ports, checked only by the conformance suite.** Rejected as the sole safeguard. The risk
-  BE-0408 already names — two independent copies must agree on every case, including which candidate
-  an ambiguous match reports — stays live instead of a design removing it. Every future selector rule
-  would need two hand-written patches, kept in step by test failures discovered after the fact, not
-  prevented by construction.
+- **Leave BE-0408's shipped plan as the final state: a written porting contract plus a fixture
+  corpus, and two independently written Swift and Kotlin ports checked against it.** Rejected as the
+  sole safeguard. The risk BE-0408 already names — two independent copies must agree on every case,
+  including which candidate an ambiguous match reports — stays live instead of a design removing it.
+  Every future selector rule would need two hand-written patches, kept in step by test failures
+  discovered after the fact, not prevented by construction.
 - **Extend the same Rust core to Python too, through PyO3, for one three-language
   implementation.** Rejected. `bajutsu`'s pip package is pure Python today. It keeps its
   base install free of the AI SDK and Playwright on purpose, as opt-in extras rather than base
@@ -325,11 +339,11 @@ the defect.
 - [ ] Port the nine selector and geometry functions from
   [`bajutsu/common/drivers/base/_functions.py`](../../bajutsu/common/drivers/base/_functions.py),
   changing `find_all` and `redirect_candidates` to return `Vec<u32>`, `resolve_unique` a `u32`
-  (indices into the caller's `elements`) in place of elements, `topmost_at_point` /
-  `redirect_candidates` / `raise_if_covered` to take a `target_index: u32` in place of an `Element`,
-  and `_collapse_identical_duplicates` to take a `frame_tolerance: f64` and return groups of indices
-  — comparing every candidate against every other, not each against one representative, so a
-  non-zero tolerance stays as strict as the exact-match case about what counts as one group:
+  (indices into the caller's `elements`) in place of elements, and `topmost_at_point` /
+  `redirect_candidates` / `raise_if_covered` to take a `target_index: u32` in place of an `Element`.
+  Port `_collapse_identical_duplicates` with no added parameter, comparing frames for exact equality
+  exactly like the host — `docs/selectors.md`'s porting contract keeps this divergent from
+  `resolvableMatchingIndex` on purpose, so no step here should unify the two:
   - `matches`
   - `find_all`
   - `resolve_unique`
@@ -339,32 +353,36 @@ the defect.
   - `redirect_candidates`
   - `raise_if_covered`
   - `frame_center`
-- [ ] Build the CLI conformance-runner binary, and a generator that turns
-  [`tests/test_drivers_base.py`](../../tests/test_drivers_base.py)'s existing cases into the JSON
-  corpus that binary reads, so the corpus stays derived from those cases rather than hand-duplicated
-  alongside them.
+- [ ] Add a version 2 to [`tests/fixtures/be0408/`](../../tests/fixtures/be0408/)'s schema with a
+  per-case `function` field and each function's own extra inputs (a point, a target index, a second
+  frame), covering the five functions version 1's `elements`-plus-`selector` shape cannot express
+  (`contains`, `frame_center`, `topmost_at_point`, `redirect_candidates`, `raise_if_covered`).
+  Extend [`tests/test_selector_fixtures.py`](../../tests/test_selector_fixtures.py) to dispatch on
+  `function` and replay the new cases against the Python reference, the same way it already replays
+  version 1.
+- [ ] Build the CLI conformance-runner binary that reads a
+  [`tests/fixtures/be0408/`](../../tests/fixtures/be0408/) case from JSON on standard input and
+  writes the matched indices, or the error variant and its structured detail, on standard output.
+  Extend `test_selector_fixtures.py` with a second replay path that runs the existing corpus through
+  this binary, alongside the path that already runs it through Python.
 - [ ] Wire `cargo` and `uniffi-bindgen` into the `BajutsuKit` Swift Package build, producing an
   `.xcframework` (three platform slices merged from four `cargo build` targets: Simulator, device,
   and macOS) binary target `BajutsuRunner` links against.
-  Narrow [`PositionPath.swift`](../../BajutsuKit/Sources/BajutsuRunner/PositionPath.swift)'s
-  `resolvableMatchingIndex` to a thin wrapper around the shared grouping function, and retire
-  `framesEqual`.
 - [ ] Wire `cargo-ndk` and `uniffi-bindgen` into `BajutsuAndroidUIAutomatorServer`'s Gradle build,
   producing the Kotlin bindings and `arm64-v8a` / `x86_64` `jniLibs` its executor links against.
-- [ ] Update the hand-sync contract docstrings the shared functions retire: the "runner-side twin"
-  comment on `_collapse_identical_duplicates` in
-  [`bajutsu/common/drivers/base/_functions.py`](../../bajutsu/common/drivers/base/_functions.py),
-  and the matching comments on `resolvableMatchingIndex` and its `RecordedAttributes` in
-  [`PositionPath.swift`](../../BajutsuKit/Sources/BajutsuRunner/PositionPath.swift).
 - [ ] Add a Rust CI lane (`cargo test`, `cargo fmt --check`, `clippy`) for `rust/selector-core/`, and
   decide whether `make check` invokes it directly or a separate workflow does.
-- [ ] Update BE-0408's Progress checklist, and BE-0409's / BE-0410's "port … to Swift / Kotlin"
-  steps, to call the compiled bindings instead — keeping BE-0410's derived-label port as its own
-  step, since `_derived_label` normalizes before the shared core runs. Drop the iOS-port-first
-  sequencing from BE-0409's Detailed design, and from BE-0410's Implementation order and Sequence
-  status lines. Repoint BE-0409's Sequence status line from BE-0408 to this item, and BE-0410's from
-  BE-0409 to this item, since both now depend on this item's crate rather than on the order between
-  themselves.
+- [ ] Update `docs/selectors.md`'s *Porting contract for a device-side resolver* section (and its
+  [Japanese mirror](../../docs/ja/selectors.md)) to state that `find_all`, `resolve_unique`, and
+  `_collapse_identical_duplicates` come from this crate rather than a hand-written Swift or Kotlin
+  port, leaving the *Two divergences a port must keep, not close* section unchanged — those two
+  divergences describe `resolvableMatchingIndex`, which this item does not touch. Update BE-0409's
+  and BE-0410's "port … to Swift / Kotlin" steps to call the compiled bindings instead, keeping
+  BE-0410's derived-label port as its own step, since `_derived_label` normalizes before the shared
+  core runs. Drop the iOS-port-first sequencing from BE-0409's Detailed design, and from BE-0410's
+  Implementation order and Sequence status lines. Repoint BE-0409's Sequence status line from
+  BE-0408 to this item, and BE-0410's from BE-0409 to this item, since both now depend on this
+  item's crate rather than on the order between themselves.
 - [ ] Once the `roadmap-id` workflow allocates this item's id on `main`, backfill a reciprocal
   `Related` link into BE-0408, BE-0409, and BE-0410.
 
@@ -383,4 +401,7 @@ the defect.
 [`bajutsu/common/drivers/base/_functions.py`](../../bajutsu/common/drivers/base/_functions.py),
 [`bajutsu/common/drivers/adb/_functions.py`](../../bajutsu/common/drivers/adb/_functions.py),
 [`BajutsuKit/Sources/BajutsuRunner/PositionPath.swift`](../../BajutsuKit/Sources/BajutsuRunner/PositionPath.swift),
+[`docs/selectors.md`](../../docs/selectors.md),
+[`tests/fixtures/be0408/`](../../tests/fixtures/be0408/),
+[`tests/test_selector_fixtures.py`](../../tests/test_selector_fixtures.py),
 [UniFFI](https://mozilla.github.io/uniffi-rs/)

@@ -35,13 +35,11 @@ BE-0408自身の設計は、リスクを明確に名指ししています。端�
 ばなりません。BE-0409とBE-0410は、順序付けでこのリスクに対応しています。iOS側の移植を先に行い、「この
 移植が明らかにするギャップを、両プラットフォームが個別に再発見しなくて済むように」する設計です。この順序
 付けは、ギャップを再発見するコストを下げます。しかし、2つの移植が最初から食い違うこと自体は防ぎません。
-どちらの項目も、`find_all`／`resolve_unique`の移植をまだ始めていません。BE-0409はBE-0408の完了を待って
-おり、BE-0410はBE-0409の完了を待っています。関連するSwiftのコードは、すでに1つ存在します。
-[`BajutsuKit/Sources/BajutsuRunner/PositionPath.swift`](../../BajutsuKit/Sources/BajutsuRunner/PositionPath.swift)
-の`resolvableMatchingIndex`です。これは、`_collapse_identical_duplicates`のランナー側の双子であり、
-今日はコメントによる手動の同期でホスト側と揃えています。詳細設計では、これも共有クレートへ畳み込みます。
-この1関数を除けば、SwiftのセレクタコードもKotlinのセレクタコードも、今日の時点でまだ存在しません。
-だからこそ今は、1つの実装が2つの実装より安く済む時点です。
+どちらの項目も、`find_all`／`resolve_unique`の移植をまだ始めていません。BE-0409は
+BE-0408（今は[Implemented](../BE-0408-step-latency-device-executor-protocol/BE-0408-step-latency-device-executor-protocol-ja.md)）
+の完了を待っており、BE-0410はBE-0409の完了を待っています。SwiftのコードもKotlinのコードも、
+`find_all`／`resolve_unique`の実装は今日の時点でまだ存在しません。だからこそ今は、1つの実装が2つの実装
+より安く済む時点です。
 
 本項目が移す関数は、すでに純粋なデータ変換です。プラットフォーム固有の配線ではありません。
 [`bajutsu/common/drivers/base/_functions.py`](../../bajutsu/common/drivers/base/_functions.py)の
@@ -63,26 +61,33 @@ Swift移植は`NSRegularExpression`とFoundation自身のglob処理に頼るで�
 2エンジンへ減ります。ホスト側ではPythonの`re`と`fnmatch`が引き続き検証済みの基準であり続けます。Rustコア
 は、端末実行エンジンが走らせるもう1つのエンジンになります。
 
-実装が終われば、後の読者はこの結果を直接確かめられます。
-[BE-0114](../BE-0114-driver-conformance-suite/BE-0114-driver-conformance-suite-ja.md)のドライバ適合
-スイートは、1つのコンパイル済みセレクタコアに対してフィクスチャ一式を実行します。現行の計画では、Swift
-とKotlinそれぞれの移植に対して、別々に実行することになります。それぞれの移植は同じフィクスチャに通り
-ながら、スイートが網羅していないケースで互いに食い違う可能性があります。新しいセレクタ規則（新しい
-trait、新しいフォールバック）を追加するときの手間も変わります。共有コアなら、1回のRustの変更を
-両方の実行エンジンが次のバイナリ更新で拾います。現行の計画では、記憶だけを頼りに歩調を合わせる、2回の
-手書きの変更が必要です。
+実装が終われば、後の読者はこの結果を直接確かめられます。BE-0408は、それを確かめるためのフィクスチャを
+すでに出荷しています。[`tests/fixtures/be0408/`](../../tests/fixtures/be0408/)の42件のセレクタ解決
+ケースと9件の派生ラベルケースで、
+[`tests/test_selector_fixtures.py`](../../tests/test_selector_fixtures.py)がPythonの実装と照合して
+います。現行の計画では、SwiftとKotlinそれぞれの移植ができた時点で、この同じフィクスチャを別々に実行
+することになります。それぞれの移植は全フィクスチャに通りながら、フィクスチャが網羅していないケースで
+互いに食い違う可能性があります。新しいセレクタ規則（新しいtrait、新しいフォールバック）を追加すると
+きの手間も変わります。共有コアなら、1回のRustの変更を両方の実行エンジンが次のバイナリ更新で拾います。
+現行の計画では、記憶だけを頼りに歩調を合わせる、2回の手書きの変更が必要です。
 
 ## 詳細設計
 
-**実装順序。** 本項目は、BE-0407→BE-0408→BE-0409→BE-0410という4項目の並びを拡張します。BE-0408自身の
-進捗チェックリストは、本項目が置き換える手順を記載しています。「`find_all`／`resolve_unique`のセレクタ意味論
-を、2つの独立した実装が一致できるだけ精密な共有設計文書に落とし込む」という手順です。本項目は、この文書
-の代わりにコンパイル済みクレートを用意します。着手のタイミングは、BE-0408がフィールドレベルのセレクタ
-契約（`within`、`idMatches`、traitの導出）を確定させたあとです。BE-0409またはBE-0410がプラットフォーム側
-の照合コードを書き始める前に着手します。本項目が着地すると、BE-0409とBE-0410が互いに順序付けている理由
-も消えます。両者とも同じ検証済みのクレートを呼ぶだけになるため、どちらかの手書き移植を先に待つ必要が
-なくなります。本項目のクレートと2つのバインディングができたあとは、BE-0409とBE-0410はどちらの順で進め
-ても、並行に進めてもかまいません。
+**実装順序。** 本項目は、BE-0407→BE-0408→BE-0409→BE-0410という4項目の並びを拡張します。
+BE-0408は[Implemented](../BE-0408-step-latency-device-executor-protocol/BE-0408-step-latency-device-executor-protocol-ja.md)
+（[#1949](https://github.com/bajutsu-e2e/bajutsu/pull/1949)）です。本項目が置き換える手順は、コード
+としてではなく、文章としてすでに出荷済みです。
+[`docs/selectors.md`](../../docs/selectors.md)に新設された「端末側リゾルバの移植契約」節が、
+フィールドレベルのセレクタ契約（`within`、`idMatches`、traitの導出、重複排除のキー）を、2つの独立した
+SwiftとKotlinの実装が一致できるだけ精密に述べており、動機の節が挙げたフィクスチャ一式でこれを裏づけて
+います。本項目が置き換えるのは、まだ着手していない手順ではありません。「これを手作業で正しく再現する」
+というすでに出荷済みの文章による契約を、どちらの移植も手作業で再現する必要のないコンパイル済みクレート
+へ置き換えます。着手のタイミングはBE-0408への後続作業としてであり、BE-0409またはBE-0410がプラット
+フォーム側の照合コードを書き始める前です。そうしないと、両者とも本項目が無用にしようとしている契約を
+相手に、手作業での移植を始めてしまいます。本項目が着地すると、BE-0409とBE-0410が互いに順序付けている
+理由も消えます。両者とも同じ検証済みのクレートを呼ぶだけになるため、どちらかの手書き移植を先に待つ必要
+がなくなります。本項目のクレートと2つのバインディングができたあとは、BE-0409とBE-0410はどちらの順で
+進めても、並行に進めてもかまいません。
 
 **クレートで実装し直す関数と、ホスト側だけに残す関数。**
 [`bajutsu/common/drivers/base/_functions.py`](../../bajutsu/common/drivers/base/_functions.py)の
@@ -117,15 +122,17 @@ Pythonの`fnmatch.fnmatchcase`を、`labelMatches`は`re.compile(...).search`を
 （[`_functions.py:112-122`](../../bajutsu/common/drivers/base/_functions.py)）。クレートは
 `labelMatches`に[`regex`](https://docs.rs/regex)クレートを使い、`idMatches`には`fnmatch`自身が内部で
 行っているのと同じアプローチ、つまりシェルのglobパターンを正規表現文字列へ翻訳する処理を移植したうえで、
-同じ`regex`クレートでコンパイルします。こうすることで、クレートが抱えるパターンエンジンは2つではなく
-1つで済みます。`regex`はPythonの`re`が持つ2つの構文、先読み・後読み（`(?=…)`、`(?!…)`）と後方参照を
-サポートしません。どちらかを使った`labelMatches`のパターンは、ホストではコンパイルできますが、クレート
-ではコンパイルできません。これは、本項目がなくそうとしているホストと端末の食い違いが、なくなったので
-はなく場所を移しただけということです。そのためクレートは、コンパイルできないパターンを、呼び出し元が
-「要素が存在しない」場合と区別できない静かな不一致にせず、初回使用時の明確で大きな失敗として扱います。
-この失敗は次節のエラー列挙型に組み込みます。BE-0114のフィクスチャがそのようなパターンを1件固定して
-おけば、どちらかのエンジンへの将来の変更がこのギャップを再び開いたとき、不安定なシナリオとして表面化
-する前にスイートで検出できます。
+同じ`regex`クレートでコンパイルします。こうすることで、クレートが抱えるパターンエンジンをちょうど1つに
+絞れます。`regex`は、Pythonの`re`が受け付ける複数の構文を拒否します。先読み・後読み
+（`(?=…)`、`(?!…)`）、後方参照、文字列終端アンカー`\Z`（`regex`が持つのは`\z`だけです）、原子グループと
+所有量指定子、そして条件付きパターン（`(?(id)yes|no)`）です。これらのいずれかを使った`labelMatches`の
+パターンは、ホストではコンパイルできますが、クレートではコンパイルできません。これは、本項目がなく
+そうとしているホストと端末の食い違いが、なくなったのではなく場所を移しただけということです。そのため
+クレートは、コンパイルできないパターンを、呼び出し元が「要素が存在しない」場合と区別できない静かな
+不一致にせず、初回使用時の明確で大きな失敗として扱います。この失敗は次節のエラー列挙型に組み込みます。
+フィクスチャ一式に追加する1件のケース（検証の節を参照）がそのようなパターンを固定しておけば、どちらか
+のエンジンへの将来の変更がこのギャップを再び開いたとき、不安定なシナリオとして表面化する前にスイート
+で検出できます。
 
 `gesture_anchor`も同じく純粋ですが、本項目の範囲外です。BE-0408が端末へ移すのは`tap`、`type`、`swipe`、
 `scroll`であり、`gesture_anchor`が支点を計算する2本指の`pinch`／`rotate`ではありません。この関数を今
@@ -154,7 +161,7 @@ UniFFIの辞書型レコードになります。`identifier`、`label`、`value`
 移植する価値はありません。そのため各呼び出し元がこの処理を済ませます。今日同じ処理を担う
 Pythonのヘルパー`id_candidates`は、クレートへ移さずホスト側に残る理由がここにあります。クレート内部
 の`matches`と`find_all`は、すでに正規化されたリストだけを見ます。`within`は、`Selector`が自分自身の
-`within`フィールドの中に入れ子になりうるため、`Option<Box<Selector>>`になります。`index`は`u32`では
+`within`フィールドを入れ子として持てるため、`Option<Box<Selector>>`になります。`index`は`u32`では
 なく`Option<i32>`になります。Pythonでは末尾からの位置を表す負の値を受け付けるためです
 （`_functions.py:322-325`）。Pythonの`total=False`な辞書でのフィールドの不在は、両側で同じ`None`
 になります。
@@ -170,34 +177,33 @@ PythonのコードとJavaScript object notation（JSON）のワイヤフォー�
 持ち、`regex`クレートがコンパイルできない`labelMatches`の値を表す）とあわせて、1つのUniFFIエラー
 列挙型になります。今日のPythonにはこれに相当するものはありません。`re.compile`はこの4つ目のバリアント
 が存在する理由となるパターンをすべて受け付けるためで、これに当たるのは端末実行エンジンだけです。
-残る3つのバリアントは、整形済みのメッセージ文字列ではなく、セレクタ・候補数・被覆した要素の識別子と
-フレームといった、構造化された失敗の詳細を持ちます。この詳細を、今日
-実行レポートが表示するメッセージ文へ整形するのはホスト側であり、デバイス側ではありません
-（[`bajutsu/common/drivers/base/_functions.py`](../../bajutsu/common/drivers/base/_functions.py)の
-`resolve_unique`と`raise_if_covered`）。SwiftやKotlinの呼び出し元は、整形前のバリアントをそのまま既存のエビデ
-ンス経路へ渡すため、端末実行エンジンで失敗したステップは、今日ホストで失敗した同じステップとまった
-く同じ見え方になります。
+残る3つのバリアントは、整形済みのメッセージ文字列ではなく、型付きフィールドとしての構造化された失敗
+の詳細を持ちます。`ElementNotFound`はセレクタと、`noMatch`または`outOfRange`のいずれかを表す`reason`
+を持ちます。`resolve_unique`は今日、「インデックスが範囲外」（`_functions.py:324`）と「一致なし」
+（`:327`）という2つの異なるメッセージを送出しており、BE-0408自身のフィクスチャ一式もすでにこの同じ
+区別を`resolveUnique.reason`と名付けているため、このバリアントは新しい名前を発明せずその名前を再利用
+します。`AmbiguousSelector`はセレクタと候補数を持ちます。`ElementNotTappable`はセレクタに加えて、
+被覆した要素の識別子・ラベル・フレームを持ちます。`raise_if_covered`は
+`covering["identifier"] or covering["label"] or "<unnamed>"`をメッセージへ整形しており
+（`_functions.py:452`）、このフォールバックを再現するには識別子だけでなく両方のフィールドが必要だから
+です。これらのフィールドを、今日実行レポートが表示するメッセージ文へ整形するのはホスト側であり、
+デバイス側ではありません。SwiftやKotlinの呼び出し元は、整形前のバリアントをそのまま既存のエビデンス
+経路へ渡すため、端末実行エンジンで失敗したステップは、今日ホストで失敗した同じステップとまったく同じ
+見え方になります。
 
-`_collapse_identical_duplicates`には、ホスト側の実装にはない引数を1つ加えます。`frame_tolerance: f64`
-です。デフォルト値はゼロです。2つの候補のフレームがどれだけ近ければ同じ内容として数えるかを決める値
-です。ホスト側は常に1回の原子的なスナップショットに対してこれを呼ぶため、本物の重複登録が報告する
-フレームは厳密に一致します。
+`_collapse_identical_duplicates`は引数を追加せずに移植します。クレート側の実装も、ホスト側とまったく
+同じように、許容差なしでフレームの完全一致を比較します。`docs/selectors.md`の移植契約は、これを
+そのまま保つべき理由を、「守るべきであり閉じてはならない2つの相違」という節で述べています。
 [`PositionPath.swift`](../../BajutsuKit/Sources/BajutsuRunner/PositionPath.swift)の
-`resolvableMatchingIndex`は、これとは違う許容差を必要とします。記録済みの要素ハンドルを、時間差の
-あるライブ呼び出し1回ずつで候補ごとに再解決する場面だからです。さらに、この関数が行っていない2つの
-ことも行っています。記録済みハンドル自身の属性で候補をまず絞り込む処理と、生き残った候補どうしが
-食い違えば1つのグループではなく解決失敗として扱う処理です。共有するのはフレーム照合とグルーピングの
-ロジックだけであり、それを取り巻く契約までは共有しません。この許容差を引数として公開すれば、
-`resolvableMatchingIndex`は薄いラッパーになれます。自前の記録済み属性フィルタを先に走らせ、残った
-候補を共有関数がグルーピングし、既存の「食い違えばnil」判定をその結果に適用する形です。この許容差
-自体から、2つの制約が導かれます。1つ目は、共有関数が全候補どうしを総当たりで比較し、代表1件との
-比較で済ませないという制約です。許容差は推移律を満たさないため、代表を基準にした走査では、中央の
-候補の両側に1ポイントずつ離れた候補どうしを、実際には2ポイント離れているにもかかわらず1つのグループ
-へ畳み込みかねません。これは今日`resolvableMatchingIndex`が拒否している組み合わせを畳み込むことに
-なり、判定が候補の到着順に左右されることにもなります。2つ目は、この関数が要素のグループではなく、
-呼び出し元自身のリストへのインデックスのグループを返すという制約です。理由は`find_all`と同じです。
-ラッパーは、その結果のインデックスから`Int?`をそのまま読み取ります。もう一度、自前の手書きフレーム
-比較でインデックスを導き直す必要はありません。
+`resolvableMatchingIndex`と`attributesMatch`は、すでに意図的にこのモジュールから外れています。
+フレームの各値に1ポイントの許容差を認める点と、traitを集合ではなく順序ありの配列として比較する点です。
+どちらも、`resolvableMatchingIndex`が別の問いに答えているために存在します。すでに記録済みの要素ハンドル
+を、新しいライブ読み取りで再解決してもなお同じ要素かという問いです。一方`_collapse_identical_duplicates`
+は、「これらの候補は1回の原子的なスナップショットから見て内容が同一か」という問いに答えます。移植契約
+自身の文章は、ポートが「どちらか一方もPython自身の挙動へ『修正』してはならない」と明言しています。
+本項目のクレートは、そのため`_collapse_identical_duplicates`だけで止まります。`resolvableMatchingIndex`
+と`framesEqual`はSwift側にそのまま残り、本項目はこれに触れません。ここでのどの進捗ステップも、
+両者を1つに畳み込むことを提案してはなりません。
 
 Androidの派生ラベルのフォールバック（`_derived_label`。
 [`bajutsu/common/drivers/adb/_functions.py`](../../bajutsu/common/drivers/adb/_functions.py)にあり、
@@ -208,8 +214,10 @@ Kotlin側呼び出し元でも同じです。共有クレート側にAndroid固�
 自分のプラットフォームの生の読み取り結果を素の`Element`へ正規化してから、1つの共有コアを呼ぶという
 構造だからです。ここには、手書きのKotlin移植が1つ残ります。`_derived_label`自体にはRust側の対応物が
 ないため、Pythonの実装と歩調を合わせ続ける必要があります。その出力は後続処理のない単一の文字列で
-あり、BE-0114のフィクスチャがすでにこれをカバーしています。この残存リスクは、照合パス全体を独立に
-移植していた場合よりはるかに小さく済みます。
+あり、BE-0408の9件の
+[`android_derived_label.json`](../../tests/fixtures/be0408/android_derived_label.json)ケースがすでに
+これをカバーしています。この残存リスクは、照合パス全体を独立に移植していた場合よりはるかに小さく
+済みます。
 
 **iOS: `BajutsuRunner`。** [`BajutsuKit/Package.swift`](../../BajutsuKit/Package.swift)は、すでに
 Swift Package Managerのビルドプラグイン`OpenAPIGenerator`を使い、`BajutsuRunner`のソースをビルド
@@ -222,7 +230,7 @@ Swift Package Managerのビルドプラグイン`OpenAPIGenerator`を使い、`B
 （`swift build --package-path BajutsuKit`と`swift test --package-path BajutsuKit`）が今日どおりビルド・
 テストを続けられるようにする`aarch64-apple-darwin`です。`x86_64-apple-darwin`のスライスはビルドしません。
 これは対応ホストの範囲を1つ狭めます。Intel Macは、シナリオの実行に必要なSimulatorスライスこそ持ち
-続けますが、今日のようにパッケージをネイティブにビルド・ユニットテストすることはできなくなります。
+続けますが、今日のようにパッケージをネイティブにビルド・ユニットテストできなくなります。
 `swift.yml`がすでにApple Siliconだけで動いているため、本項目はこの狭まりを受け入れます。
 `uniffi-bindgen`は、Swiftバインディングと、
 この4つの`cargo build`成果物を統合した`.xcframework`（2つのSimulatorターゲットは1つのユニバーサル
@@ -246,8 +254,8 @@ interface）にもインストールできます。`cargo-ndk`は、`arm64-v8a`�
 [BE-0208](../BE-0208-android-emulator-e2e-ci/BE-0208-android-emulator-e2e-ci-ja.md)のエミュレータレーン
 向けの`x86_64`へクレートをクロスコンパイルします。これは、この範囲を初めて狭める変更です。32ビット
 端末は、常駐サーバをもう実行できなくなります。本項目は、4つ全部のABI向けにビルドするのではなく、
-この狭まりを受け入れます。32ビットのみのAndroid端末は、2019年以降のPlayストアがアプリから受け付け
-なくなった範囲にすでに入っており、常駐サーバ自身の端末カバレッジは、今日実際のターゲットアプリが配布
+この狭まりを受け入れます。32ビットのみのAndroid端末は、2019年以降のPlayストアがアプリからすでに受け付け
+なくなっており、常駐サーバ自身の端末カバレッジは、今日実際のターゲットアプリが配布
 できる範囲に揃うことになります。`cargo-ndk`が生成した`.so`ファイルは`jniLibs`の下に置きます。
 `uniffi-bindgen`は、実行エンジンが直接呼ぶKotlinバインディングを生成します。このビルドファイル自身
 のコメントは、サーバが
@@ -255,28 +263,39 @@ interface）にもインストールできます。`cargo-ndk`は、`arm64-v8a`�
 持たない、自己完結したインストルメンテーションだからです。これは、不要な依存を避けるという方針の表明
 です。この実行エンジンが実際に必要とするネイティブの依存を禁じるものではありません。
 
-**検証。** BE-0114のドライバ適合スイートは、`Driver`を画面の準備・操作・判定というエンドツーエンドで
-検査するもので、CLIが直接読めるような「`Element`のリスト＋`Selector`＋期待する結果」というフィクス
-チャ一式は持ち合わせていません。ただし、その一式は1階層下にすでに存在します。
-[`tests/test_drivers_base.py`](../../tests/test_drivers_base.py)は`_functions.py`の各関数を直接ユニット
-テストしており、各ケースがクレートの入力と同じ`Element`／`Selector`を組み立て、同じ出力を検証してい
-ます。小さなRustのバイナリ（CIホスト自身のアーキテクチャ向けにビルドし、wheelにも常駐サーバにも同梱
-しません）が、標準入力からフィクスチャの`Element`リストと`Selector`をJSONで読み、一致したインデックス、
-またはエラーのバリアントとその構造化された詳細を標準出力へ書きます。このCLIが読むJSON一式は、
-`test_drivers_base.py`の既存ケースから生成するものであり、それと並行して手で複製するものではありません。
-そのため、基準はあくまでpytest側のケース1つであり続け、クレートはホスト側の挙動をすでに支えている
-まさにそのケースに対して検証されます。並行して独立管理された、こっそりずれうる別のフィクスチャ一式を
-持つわけではありません。BE-0409とBE-0410が実装されたあとは、同じ一式を3回目として、各プラットフォーム
-のバインディング経由でも実行します。そこでフィクスチャが落ちたときは、共有ロジック自体を疑い直す前に、
-まず「バインディング側」だと絞り込めます。
+**検証。** [`tests/fixtures/be0408/`](../../tests/fixtures/be0408/)は、このクレートに必要な言語非依存
+のフィクスチャ一式として、すでに存在しています。`selector_resolution.json`のスキーマ付き42ケース
+（それぞれ`elements`のリスト・1つの`selector`・Pythonが出す`findAll`／`resolveUnique`の結果を持ちます）
+と、`android_derived_label.json`の9ケースを、
+[`tests/test_selector_fixtures.py`](../../tests/test_selector_fixtures.py)が今日すでに変更のたびに
+Pythonの実装と照合しています。小さなRustのバイナリ（CIホスト自身のアーキテクチャ向けにビルドし、
+wheelと常駐サーバのどちらにも同梱しません）が、同じJSONから1ケース分の`Element`リストと`Selector`を標準
+入力で読み、一致したインデックス、またはエラーのバリアントとその構造化された詳細を標準出力へ書きます。
+`test_selector_fixtures.py`は、この42ケースをこのバイナリ経由でも走らせる、2つ目の照合経路を持つよう
+になります。すでにPython経由で走らせている経路と並んで動くため、双方が1つの共有フィクスチャ一式に
+対して検証され続け、独立に管理された別々のフィクスチャ一式にはなりません。
+
+このフィクスチャ一式は、そのままでは`find_all`と`resolve_unique`（内部で`matches`と
+`_collapse_identical_duplicates`を使います）をカバーしますが、本項目が移植する残り5つの関数は、
+`selector_resolution.json`の「`elements`＋`selector`」という形では表せません。`contains`（2つの
+`Frame`）、`frame_center`（1つの`Frame`）、`topmost_at_point`（1つの`Point`と対象のインデックス）、
+`redirect_candidates`と`raise_if_covered`（セレクタに加えて対象のインデックス）です。スキーマにこれら
+のためのバージョン2を加えます。ケースごとの`function`フィールドが9関数のうちどれを検証するかを選び、
+各ケースはその関数固有の追加入力（座標、対象のインデックス、2つ目のフレーム）を、既存の`elements`
+リストと並べて持ちます。`test_selector_fixtures.py`は、すでに`findAll`／`resolveUnique`の有無で
+分岐しているのと同じやり方で`function`によって分岐し、この1つのフィクスチャ一式と1つの照合テストが、
+2つ目の仕組みへ分裂することなく9関数すべてをカバーするよう育ちます。BE-0409とBE-0410が実装された
+あとは、同じ一式を3回目として、各プラットフォームのバインディング経由でも実行します。そこでフィク
+スチャが落ちたときは、共有ロジック自体を疑い直す前に、まず「バインディング側」だと絞り込めます。
 
 ## 検討した代替案
 
-- **BE-0408の現行案を維持する。共有設計文書と、独立に書いたSwift・Kotlinの2つの移植を、適合スイートだけ
-  で検証する案。** 唯一の安全策としては採用しません。BE-0408自身がすでに名指ししているリスクは残ります。
-  2つの独立した実装が、あいまいな一致でどの候補を報告するかまで含めて完全に一致しなければならない、と
-  いうリスクです。このリスクは、設計で取り除かれないまま残ります。今後セレクタ規則を追加するたびに、
-  テストの失敗という事後の発見だけを頼りに、2つの手書きパッチの歩調を合わせる必要があります。
+- **BE-0408が出荷した計画を最終形のまま残す案。文章による移植契約とフィクスチャ一式、そしてそれに照らして
+  検証する、独立に書いたSwift・Kotlinの2つの移植です。** 唯一の安全策としては採用しません。BE-0408自身
+  がすでに名指ししているリスクは残ります。2つの独立した実装が、あいまいな一致でどの候補を報告するかまで
+  含めて完全に一致しなければならない、というリスクです。このリスクは、設計で取り除かれないまま残ります。
+  今後セレクタ規則を追加するたびに、テストの失敗という事後の発見だけを頼りに、2つの手書きパッチの歩調を
+  合わせる必要があります。
 - **同じRustコアをPyO3経由でPythonにも広げ、3言語を1つの実装にまとめる案。** 採用しません。`bajutsu`の
   pipパッケージは、今日は純粋なPythonです。AI SDKとPlaywrightを基本の依存にせず、オプトインの拡張に
   とどめる方針をすでに取っています
@@ -318,11 +337,12 @@ interface）にもインストールできます。`cargo-ndk`は、`arm64-v8a`�
   `regex`がコンパイルできないパターンには`UnsupportedPattern`を返します。
 - [ ] [`bajutsu/common/drivers/base/_functions.py`](../../bajutsu/common/drivers/base/_functions.py)から、
   9つのセレクタ・幾何関数を移植します。`find_all`と`redirect_candidates`は`Vec<u32>`を、
-  `resolve_unique`は`u32`を（いずれも呼び出し元の`elements`へのインデックス）、`topmost_at_point`・
-  `redirect_candidates`・`raise_if_covered`は`Element`の代わりに`target_index: u32`を、
-  `_collapse_identical_duplicates`は`frame_tolerance: f64`を受け取り、インデックスのグループを返す
-  よう、それぞれ変更します。比較は代表1件とではなく全候補どうしの総当たりで行い、許容差が非ゼロでも
-  厳密一致の場合と同じ厳しさで1グループの範囲を判定します。
+  `resolve_unique`は`u32`を（いずれも呼び出し元の`elements`へのインデックス）返し、
+  `topmost_at_point`・`redirect_candidates`・`raise_if_covered`は`Element`の代わりに
+  `target_index: u32`を受け取るよう変更します。`_collapse_identical_duplicates`は引数を追加せず、
+  ホスト側とまったく同じフレームの完全一致で移植します。`docs/selectors.md`の移植契約は、これを
+  `resolvableMatchingIndex`から意図的に切り離しておくためのものなので、ここでの手順が両者を1つに
+  まとめようとしてはなりません。
   - `matches`
   - `find_all`
   - `resolve_unique`
@@ -332,32 +352,35 @@ interface）にもインストールできます。`cargo-ndk`は、`arm64-v8a`�
   - `redirect_candidates`
   - `raise_if_covered`
   - `frame_center`
-- [ ] CLI形式の適合ランナーバイナリと、
-  [`tests/test_drivers_base.py`](../../tests/test_drivers_base.py)の既存ケースをこのバイナリが読む
-  JSON一式へ変換するジェネレータを構築します。JSON一式は既存ケースから生成する形にとどめ、並行して
-  手で複製しません。
+- [ ] [`tests/fixtures/be0408/`](../../tests/fixtures/be0408/)のスキーマにバージョン2を加えます。
+  ケースごとの`function`フィールドと、各関数固有の追加入力（座標、対象のインデックス、2つ目のフレーム）
+  を持たせ、バージョン1の「`elements`＋`selector`」という形では表せない5つの関数（`contains`、
+  `frame_center`、`topmost_at_point`、`redirect_candidates`、`raise_if_covered`）をカバーします。
+  [`tests/test_selector_fixtures.py`](../../tests/test_selector_fixtures.py)を拡張し、`function`に
+  よって分岐して新しいケースをPythonの実装と照合します。バージョン1をすでに照合しているのと同じ
+  やり方です。
+- [ ] [`tests/fixtures/be0408/`](../../tests/fixtures/be0408/)の1ケースをJSONで標準入力から読み、一致
+  したインデックス、またはエラーのバリアントとその構造化された詳細を標準出力へ書く、CLI形式の適合
+  ランナーバイナリを構築します。`test_selector_fixtures.py`に、既存のフィクスチャ一式をこのバイナリ
+  経由で走らせる2つ目の照合経路を、Python経由の経路と並べて追加します。
 - [ ] `cargo`と`uniffi-bindgen`を`BajutsuKit`のSwift Packageビルドに組み込みます。`BajutsuRunner`が
   リンクする`.xcframework`（Simulator、実機、macOS向けの4つの`cargo build`成果物を統合した、実質3系統
   のプラットフォームスライス）バイナリターゲットを生成します。
-  [`PositionPath.swift`](../../BajutsuKit/Sources/BajutsuRunner/PositionPath.swift)の
-  `resolvableMatchingIndex`は、共有グルーピング関数を呼ぶ薄いラッパーへ縮小し、`framesEqual`は廃止
-  します。
 - [ ] `cargo-ndk`と`uniffi-bindgen`を`BajutsuAndroidUIAutomatorServer`のGradleビルドに組み込みます。
   実行エンジンがリンクする、Kotlinバインディングと`arm64-v8a`／`x86_64`向け`jniLibs`を生成します。
-- [ ] 共有する関数が不要にする、手動同期の契約コメントを更新します。
-  [`bajutsu/common/drivers/base/_functions.py`](../../bajutsu/common/drivers/base/_functions.py)の
-  `_collapse_identical_duplicates`にある「ランナー側の双子」というコメントと、
-  [`PositionPath.swift`](../../BajutsuKit/Sources/BajutsuRunner/PositionPath.swift)の
-  `resolvableMatchingIndex`と`RecordedAttributes`にある対応するコメントです。
 - [ ] `rust/selector-core/`向けにRustのCIレーン（`cargo test`、`cargo fmt --check`、`clippy`）を追加し、
   `make check`が直接これを呼ぶか、別のワークフローに任せるかを決めます。
-- [ ] BE-0408の進捗チェックリストと、BE-0409・BE-0410の「Swift／Kotlinへ移植する」手順を、コンパイル済み
-  バインディングを呼ぶ形に更新します。BE-0410の派生ラベル移植は、`_derived_label`が共有コアより手前で
-  正規化を行うため、独立したステップとして残します。あわせて、iOS側移植を先に行うという順序付けを、
-  BE-0409の詳細設計と、BE-0410の実装順序・「順序ステータス」の両方から取り除きます。BE-0409の
-  「順序ステータス」はBE-0408ではなく本項目を指すよう、BE-0410の「順序ステータス」はBE-0409ではなく
-  本項目を指すよう、それぞれ付け替えます。どちらも、互いの完了順ではなく本項目のクレートに依存する
-  ためです。
+- [ ] `docs/selectors.md`の「端末側リゾルバの移植契約」節（および
+  [日本語版](../../docs/ja/selectors.md)）を更新し、`find_all`・`resolve_unique`・
+  `_collapse_identical_duplicates`が手書きのSwift・Kotlin移植ではなくこのクレートに由来すると述べます。
+  「守るべきであり閉じてはならない2つの相違」節はそのまま残します。この2つの相違が説明しているのは
+  `resolvableMatchingIndex`であり、本項目はこれに触れないためです。BE-0409・BE-0410の「Swift／Kotlin
+  へ移植する」手順を、コンパイル済みバインディングを呼ぶ形に更新します。BE-0410の派生ラベル移植は、
+  `_derived_label`が共有コアより手前で正規化を行うため、独立したステップとして残します。あわせて、
+  iOS側移植を先に行うという順序付けを、BE-0409の詳細設計と、BE-0410の実装順序・「順序ステータス」の
+  両方から取り除きます。BE-0409の「順序ステータス」はBE-0408ではなく本項目を指すよう、BE-0410の
+  「順序ステータス」はBE-0409ではなく本項目を指すよう、それぞれ付け替えます。どちらも、互いの完了順
+  ではなく本項目のクレートに依存するためです。
 - [ ] `roadmap-id`ワークフローがmain上で本項目のIDを割り当てたら、BE-0408・BE-0409・BE-0410へ相互の
   「関連」リンクを反映します。
 
@@ -376,4 +399,7 @@ interface）にもインストールできます。`cargo-ndk`は、`arm64-v8a`�
 [`bajutsu/common/drivers/base/_functions.py`](../../bajutsu/common/drivers/base/_functions.py)、
 [`bajutsu/common/drivers/adb/_functions.py`](../../bajutsu/common/drivers/adb/_functions.py)、
 [`BajutsuKit/Sources/BajutsuRunner/PositionPath.swift`](../../BajutsuKit/Sources/BajutsuRunner/PositionPath.swift)、
+[`docs/selectors.md`](../../docs/selectors.md)、
+[`tests/fixtures/be0408/`](../../tests/fixtures/be0408/)、
+[`tests/test_selector_fixtures.py`](../../tests/test_selector_fixtures.py)、
 [UniFFI](https://mozilla.github.io/uniffi-rs/)
