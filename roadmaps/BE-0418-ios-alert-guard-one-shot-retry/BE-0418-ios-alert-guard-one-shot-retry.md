@@ -260,6 +260,13 @@ Log:
   stacked-alert, landing-race, permanently-obstructed, settle-on-exhaustion, nested-shape, and
   lingering-tree-exclusion cases the design and the live review both call for.
 
+  Four files' recorded coverage floors dropped by 0.01-0.02 points each across the PR's rounds
+  and were accepted via `make coverage-floors`, every one traced to pre-existing, unrelated
+  uncovered lines becoming a marginally larger share of a slightly smaller file rather than new
+  untested logic: `loop/_functions.py`, `loop/_step_runner.py` (the original multi-round loop),
+  and `waits/_alert_guard_gate.py`, `waits/_functions.py` (relocating `_tree_signature` to the
+  shared `drivers/elements.py` as the public `tree_signature`).
+
 ## References
 
 - [BE-0269](../BE-0269-ios-alert-guard-early-wait-intervention/BE-0269-ios-alert-guard-early-wait-intervention.md)

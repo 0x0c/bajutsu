@@ -272,6 +272,14 @@ docstring には、シートの登場アニメーションが終わるまでボ�
   ロンプト・ラウンド上限を使い切るケース・入れ子になった形・ツリー側の除外が残り続けるケースを網羅
   しています。
 
+  この PR の各ラウンドを通じて、4 つのファイルの記録済みカバレッジ下限がそれぞれ 0.01〜0.02 ポイン
+  ト下がり、`make coverage-floors` で受け入れました。いずれも、新たに追加した未検証のロジックではな
+  く、既存の無関係な未カバー行がリファクタリング後のわずかに小さくなったファイルの中で占める割合が
+  わずかに増えたことに起因すると確認しています。対象は `loop/_functions.py` と
+  `loop/_step_runner.py`（元の複数ラウンド化）です。もう一組は `waits/_alert_guard_gate.py` と
+  `waits/_functions.py` で、`_tree_signature` を共有モジュール `drivers/elements.py` へ公開関数
+  `tree_signature` として移した変更に伴うものです。
+
 ## 参考
 
 - [BE-0269](../BE-0269-ios-alert-guard-early-wait-intervention/BE-0269-ios-alert-guard-early-wait-intervention-ja.md)
