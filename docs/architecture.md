@@ -821,7 +821,10 @@ Android; on iOS it rests on the fast suite's bookkeeping proof alone.
   every Python↔driver call (`driver`), each host-device round trip inside it (`transport`, plus
   an Android `subprocess` fallback), with timing and step/attempt attribution — into
   `driver_trace.json` next to that scenario's other evidence; diagnostic only, like
-  `--score`/`--zip`, and out of scope for the web (Playwright) backend
+  `--score`/`--zip`. The `transport` / `subprocess` round-trip detail is XCUITest- and adb-only
+  (BE-0415's "Not doing"), but the flag itself is not backend-gated: a web (Playwright) run still
+  writes `driver_trace.json` with the `driver`-level records, since the pipeline wraps whatever
+  driver the lease returns.
 - Reporting (`manifest.json` / `junit.xml` / `ctrf.json` / `report.html`)
 - Config resolution (defaults × targets, redact merge) and actuator selection
 - The `simctl` command layer · the XCUITest automation-snapshot parser · the `doctor` score + per-backend runnability
