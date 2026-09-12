@@ -854,14 +854,17 @@ Android; on iOS it rests on the fast suite's bookkeeping proof alone.
   goes uncleared for that poll's own `poll_interval` rather than being tapped immediately. The same
   poll stopped clearing `blocked_note` unconditionally on that race too, and can now report its own
   note naming whichever buttons no declared rule accounts for on the read — a note this path never
-  produced on a bare `"absent"` answer before. And `_dismiss_from_tree` resolves over the same
+  produced on a bare `"absent"` answer before. Its `"unhandled"` note changed three ways too: a read
+  a rule *did* identify, whose tap then found the label twice, now names that prompt as one the
+  guard could not clear rather than as one no rule identifies; a co-present button no rule
+  identifies on that same read is credited the way the `raced` branch credits one, rather than the
+  ambiguous rule's own diagnosis crowding it out and leaving that button unreported for a whole
+  `poll_interval`; and the note is left alone entirely while an in-tree give-up is still standing —
+  so a `wait` blocked by an undeclared SpringBoard alert sitting on top of a sheet the tree path
+  gave up on reports the sheet, not the alert. And `_dismiss_from_tree` resolves over the same
   widest-first `tree_dedup_rules` the one-shot dismiss already used, rather than plain declaration
   order, so two nested in-tree shapes tap the wider one first regardless of how a scenario declared
-  them — which button a `savePassword`-style policy presses during a `wait` can change accordingly.
-  The gate's own `"unhandled"` branch — reached not only when no rule identifies the alert at all,
-  but also when a matched rule's own tap lands ambiguously — now names a co-present button no rule
-  identifies the same way the `raced` branch does, rather than reporting only the ambiguous rule's
-  diagnosis and leaving anything else the same read enumerated unreported for a whole `poll_interval`
+  them — which button a `savePassword`-style policy presses during a `wait` can change accordingly
 - DSL `iosTipKitHandling` (BE-0389), an opt-in guard for a blocking Apple TipKit tip: TipKit's
   presentation marks the content it covers accessibility-hidden rather than merely occluding it, so a
   blocked tap can fail as `ElementNotFound`, not only `ElementNotTappable`. The XCUITest backend alone
