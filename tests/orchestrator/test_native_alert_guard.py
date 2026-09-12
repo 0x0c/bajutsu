@@ -2523,6 +2523,61 @@ def test_the_end_of_step_guard_keeps_a_stuck_tree_note_when_another_shape_shares
     assert guard.blocked_note == uncleared_prompt_note("Not Now")
 
 
+def test_the_end_of_step_guard_clears_a_stuck_tree_note_when_a_wider_nested_shape_lands() -> None:
+    # The stuck-shape clear used equality, but `exclude`'s own dedup (`dismissed_tree_shapes |=
+    # {rule.identifying_labels}`, feeding `_resolve_alert_rule`'s subset test) can retire a *nested*
+    # stuck shape without ever matching it exactly again. `savePassword`'s narrower shape N and
+    # wider shape W both tap "Not Now" (N subset of W): round 0 catches N's own scrim before W's
+    # third label has rendered; round 1 renders it, and the widest-first match lands on W instead,
+    # closing the sheet N was itself naming. Equality left N marked stuck forever after that,
+    # contradicting `exclude`, which already treats N as answered (BE-0418 review finding).
+    class _NestedShapeStuckThenLands(FakeDriver):
+        def __init__(self) -> None:
+            super().__init__([_button("Save Password"), _button("Not Now")])
+            self.tap_calls = 0
+
+        def tap(self, sel: base.Selector) -> None:
+            self.tap_calls += 1
+            if self.tap_calls == 1:
+                raise base.ElementNotTappable("the scrim has not lifted yet")
+            super().tap(sel)
+
+    driver = _NestedShapeStuckThenLands()
+    narrower = ResolvedAlertRule(
+        identifying_labels=frozenset({"Save Password", "Not Now"}),
+        tap_label="Not Now",
+        native=False,
+        in_tree=True,
+    )
+    wider = ResolvedAlertRule(
+        identifying_labels=frozenset({"Save Password", "Never for This Website", "Not Now"}),
+        tap_label="Not Now",
+        native=False,
+        in_tree=True,
+    )
+    settle_calls = 0
+
+    def settle() -> None:
+        nonlocal settle_calls
+        settle_calls += 1
+        if settle_calls == 1:
+            # The sheet finishes rendering its third label.
+            driver.screen = [
+                _button("Save Password"),
+                _button("Not Now"),
+                _button("Never for This Website"),
+            ]
+        elif settle_calls == 2:
+            # Round 1's tap genuinely closes it.
+            driver.screen = []
+
+    guard = AlertGuardConfig(rules=[narrower, wider])
+    alerts: list[AlertEvent] = []
+    cleared = guard(driver, alerts, settle=settle)
+    assert cleared and alerts == [AlertEvent(label="Not Now")]  # tapped once, on the wider shape
+    assert guard.blocked_note == ""
+
+
 def test_the_end_of_step_guard_does_not_retap_a_fading_alert_when_another_one_joins_it() -> None:
     # The native dedup keys on the matched rule's own shape, not the raw buttons read: that read
     # (`system_alert_labels()`) enumerates every alert SpringBoard currently holds, so a still-

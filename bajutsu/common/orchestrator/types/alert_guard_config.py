@@ -741,13 +741,18 @@ class AlertGuardConfig:
                     # whether the screen has changed since — not merely whether this shape's labels
                     # are still somewhere in it (BE-0418 review finding).
                     tree_dismiss_signature, cleared = tree_read_signature, True
-                    # No stuck diagnosis means whatever `note` holds is stale regardless. One
-                    # matching *this shape* clears too: the prompt it was stuck on finally landed.
-                    # One with a *different shape* survives, even sharing the stuck one's own tap
-                    # label (`savePassword`'s three shapes all tap "Not Now" under `choice: deny`):
-                    # this round dismissed a genuinely different in-tree prompt, which says nothing
-                    # about whether the stuck one is still stuck (BE-0418 review finding).
-                    if stuck_tree_shape is None or rule.identifying_labels == stuck_tree_shape:
+                    # No stuck diagnosis means whatever `note` holds is stale regardless. A stuck
+                    # shape *contained in* this round's own dismissal clears too — not only an exact
+                    # match: `dismissed_tree_shapes |= {rule.identifying_labels}` two lines above
+                    # feeds `_resolve_alert_rule`'s own subset test, so a nested stuck shape can
+                    # never match again this call either, and the two must agree (equality alone
+                    # left a nested `stuck_tree_shape` marked both "answered, never retry" and
+                    # "could not clear" at once, BE-0418 review finding). One with a shape genuinely
+                    # unrelated by containment survives, even sharing the stuck one's own tap label
+                    # (`savePassword`'s three shapes all tap "Not Now" under `choice: deny`): this
+                    # round dismissed a genuinely different in-tree prompt, which says nothing about
+                    # whether the stuck one is still stuck.
+                    if stuck_tree_shape is None or stuck_tree_shape <= rule.identifying_labels:
                         # Gated on this round's own native read, not merely on `state == "absent"`:
                         # the time-of-check/time-of-use race also answers "absent" after a
                         # *non-empty* read, and that only proves the one alert this round tried to
