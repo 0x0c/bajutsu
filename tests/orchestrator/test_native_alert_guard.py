@@ -2488,7 +2488,7 @@ def test_the_end_of_step_guard_names_a_tapped_native_alert_uncleared_after_a_fin
 
 
 def test_the_end_of_step_guard_still_names_a_co_present_alert_no_rule_identifies() -> None:
-    # `_leftover_after_answered` subtracts a dismissed rule's own `identifying_labels`, not the
+    # `subtract_labels` subtracts a dismissed rule's own `identifying_labels`, not the
     # whole round-0 read -- a second, different, unidentified alert already up alongside the one
     # a scenario declares is the ordinary shape of a stacked pair queued by one action (review
     # finding: recording the whole read instead, tried for a different finding, swallowed exactly

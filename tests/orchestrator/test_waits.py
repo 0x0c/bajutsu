@@ -1287,6 +1287,27 @@ def test_wait_guard_keeps_an_in_tree_give_up_note_through_a_race_with_a_leftover
     assert gate.blocked_note == uncleared_prompt_note("Not Now")
 
 
+def test_wait_guard_keeps_an_in_tree_give_up_note_through_an_unhandled_native_alert() -> None:
+    # The `"unhandled"` branch's own note-set is the one write in `_observe_native` that used to
+    # have no `_tree_gave_up` exception, even though the clear-guard above it and both branches
+    # this PR adds around it all make one (BE-0418 review finding). A guarded `wait` on a screen
+    # holding a `savePassword` sheet spends its tap budget and gives up on the tree side; a later,
+    # unrelated native alert no rule identifies must not overwrite that tree note with the hedged
+    # "unhandled" form -- nothing else ever restores it once a live SpringBoard alert blocks
+    # `probed_absent` from holding again.
+    from bajutsu.common.orchestrator.types import uncleared_prompt_note
+    from bajutsu.common.orchestrator.waits import _AlertGuardGate
+
+    driver = FakeDriver([])
+    driver.system_alert_buttons = [el(None, "Weird Button", ["button"])]
+    guard = AlertGuardConfig()
+    gate = _AlertGuardGate(driver=driver, clock=_LogicalClock(), guard=guard, alerts=[])
+    gate._tree_gave_up = True
+    gate.blocked_note = uncleared_prompt_note("Not Now")
+    gate.observe([])
+    assert gate.blocked_note == uncleared_prompt_note("Not Now")
+
+
 def test_wait_guard_does_not_credit_a_rule_matching_alert_rule_would_refuse() -> None:
     # The leftover computation above must match `matching_alert_rule`'s own terms exactly, not a
     # bare subset test (BE-0418 review finding): a shape whose labels are present but not

@@ -14,6 +14,7 @@ from bajutsu.common.orchestrator.types import (
     identified_alert_rules,
     match_alert_rule,
     matching_alert_rule,
+    subtract_labels,
     uncleared_prompt_note,
 )
 
@@ -175,12 +176,17 @@ class _AlertGuardGate:
                 # which is `uncleared_prompt_note`'s own case, not the hedged "unhandled" form
                 # (BE-0418 review finding; see `uncleared_prompt_note`'s docstring).
                 self._collapsed_polls = 0
-                ambiguous_rule = matching_alert_rule(self.guard.native_rules, buttons)
-                self.blocked_note = (
-                    uncleared_prompt_note(ambiguous_rule.tap_label)
-                    if ambiguous_rule is not None
-                    else alert_block_note(buttons)
-                )
+                if not self._tree_gave_up:
+                    # The same exception the clear-guard above and the `raced` branch below both
+                    # make: an in-tree give-up names a prompt a rule *did* identify and a tap
+                    # failed to clear, and nothing re-arms that note once a live SpringBoard alert
+                    # stops `probed_absent` from holding (BE-0418 review finding).
+                    ambiguous_rule = matching_alert_rule(self.guard.native_rules, buttons)
+                    self.blocked_note = (
+                        uncleared_prompt_note(ambiguous_rule.tap_label)
+                        if ambiguous_rule is not None
+                        else alert_block_note(buttons)
+                    )
                 return
             if raced:
                 # The same deference "unhandled" gets, just above: a live, enumerated surface is not
@@ -201,20 +207,18 @@ class _AlertGuardGate:
                 # rather than a hand-rolled copy of its accept test, so this can never credit a
                 # shape a probe itself would refuse -- or refuse one a probe would credit (BE-0418
                 # review finding).
-                identified = [
-                    rule.identifying_labels
-                    for rule in identified_alert_rules(self.guard.native_rules, buttons)
-                ]
-                # Removing one occurrence per credited label rather than subtracting the set union:
-                # equivalent here, since the credit test above admits a shape only when each of its
-                # labels appears exactly once, so this stays defensive rather than load-bearing. It
-                # is `_leftover_after_answered` on the one-shot path that genuinely needs the
-                # multiplicity -- its `dismissed` shapes carry no such per-read check (BE-0418).
-                leftover = list(buttons)
-                for shape in identified:
-                    for label in shape:
-                        if label in leftover:
-                            leftover.remove(label)
+                # Shares `subtract_labels` with `AlertGuardConfig.__call__`'s own `_leftover_note`
+                # (`types/_functions.py`) rather than a second, hand-rolled removal loop -- the
+                # credit test above admits a shape only when each of its labels appears exactly
+                # once, so multiplicity is defensive rather than load-bearing here, but the
+                # subtraction itself stays a single, shared spelling (BE-0418 review finding).
+                leftover = subtract_labels(
+                    buttons,
+                    (
+                        rule.identifying_labels
+                        for rule in identified_alert_rules(self.guard.native_rules, buttons)
+                    ),
+                )
                 if leftover:
                     self._native_unhandled = True
                     if not self._tree_gave_up:

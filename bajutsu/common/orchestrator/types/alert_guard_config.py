@@ -13,6 +13,7 @@ from ._functions import (
     alert_block_note,
     matching_alert_rule,
     selector_names_button,
+    subtract_labels,
     uncleared_prompt_note,
 )
 from .alert_event import AlertEvent
@@ -129,58 +130,17 @@ def _resolve_alert_rule(
     return rule
 
 
-def _leftover_after_answered(
-    buttons: Sequence[str], dismissed: frozenset[frozenset[str]]
-) -> list[str]:
-    """The buttons an `already_dismissed` or `"unhandled"` round has not already accounted for.
-
-    Subtracted with multiplicity, not as a set: `answered = {label for labels in dismissed for
-    label in labels}` followed by `[b for b in buttons if b not in answered]` would treat one
-    already-answered shape as consuming *every* occurrence of its labels at once, so a second,
-    genuinely live alert rendering the identical label pair — two permission prompts both offering
-    "Allow" / "Don't Allow", say — would vanish from `leftover` along with the one already
-    answered. Removing one occurrence per already-answered label instead leaves that second
-    alert's own copy behind to name, while two already-answered shapes sharing a label (BE-0418's
-    own `notifications` / `tracking` pair, both granting "Allow") still cancel out to nothing.
-
-    Subtracts each dismissed rule's own `identifying_labels`, deliberately not the *whole*
-    `buttons` a dismissing round actually read: `buttons` is `system_alert_labels()`'s enumeration
-    of every alert SpringBoard currently holds, not one alert's own button set, so a second,
-    different, unidentified alert already up alongside the one just tapped — the ordinary shape of
-    a stacked pair queued by one action, not a corner case, per
-    `test_the_end_of_step_guard_still_names_a_co_present_alert_no_rule_identifies`
-    (`tests/orchestrator/test_native_alert_guard.py`) — would have its own buttons permanently
-    credited to the tapped alert and never surfaced (review finding: recording the whole read this
-    way was tried and reverted). The trade-off this leaves stands the other way: a rule whose
-    `identifying_labels` deliberately names only *some* of its alert's buttons
-    (`ResolvedAlertRule`'s own docstring — "not a demand that the shape's labels be the alert's
-    whole button set") leaves the rest stranded here, reported as if a second, different, unhandled
-    alert had joined the one already dismissed. No currently declared native shape does this (every
-    entry in `_LABELS` names its prompt's whole button set), and the two failure directions are
-    irreconcilable from a flat button list alone — nothing here can tell "this alert's own unlisted
-    button" apart from "a different alert's button that happens to be enumerable at the same
-    moment" — so this side stays the accepted gap rather than the swallowed-stranger one, which a
-    passing scenario hits today.
-    """
-    leftover = list(buttons)
-    for shape in dismissed:
-        for label in shape:
-            if label in leftover:
-                leftover.remove(label)
-    return leftover
-
-
 def _leftover_note(
     buttons: Sequence[str], dismissed: frozenset[frozenset[str]], fallback: str
 ) -> str:
-    """`alert_block_note` over `_leftover_after_answered`, or *fallback* when nothing is left over.
+    """`alert_block_note` over `subtract_labels`, or *fallback* when nothing is left over.
 
     The one computation `AlertGuardConfig.__call__` (BE-0418) repeats at every round kind that can
     end the call with a native leftover still live: a co-present alert this call has not already
     answered always takes precedence over whatever diagnosis *fallback* would otherwise report,
     since something else is demonstrably still up regardless of what that other diagnosis found.
     """
-    leftover = _leftover_after_answered(buttons, dismissed)
+    leftover = subtract_labels(buttons, dismissed)
     return alert_block_note(leftover) if leftover else fallback
 
 

@@ -21,6 +21,7 @@ from ._functions import (
     sanitize_source_stem,
     scenario_slug,
     selector_names_button,
+    subtract_labels,
     uncleared_prompt_note,
     undeclared_interruption_note,
 )
@@ -77,6 +78,7 @@ __all__ = [
     "sanitize_source_stem",
     "scenario_slug",
     "selector_names_button",
+    "subtract_labels",
     "uncleared_prompt_note",
     "undeclared_interruption_note",
 ]
