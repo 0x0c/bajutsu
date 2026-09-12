@@ -3035,6 +3035,47 @@ def test_the_end_of_step_guard_gives_a_lingering_tree_exclusion_another_round_in
     assert guard.blocked_note == ""
 
 
+def test_the_end_of_step_guard_skips_the_post_loop_query_on_an_unsettled_terminal_tree_break() -> (
+    None
+):
+    # The post-loop check's own fresh `_read_tree` call exists for a path that settled since the
+    # tree was last read -- but the loop's own most common tree exit, a round whose tree read
+    # matches nothing and ends the call right there (`note = ""; break`), settles nothing on its way
+    # to that break. Nothing can have moved the screen since that round's own read already tested
+    # this exact evidence and found it false, so a second `driver.query()` back-to-back against the
+    # same screen would only reproduce the same false (BE-0418 review finding). Round 0 taps "Sheet"
+    # and settle() genuinely closes it; round 1's own tree read finds nothing and ends the call
+    # without settling again.
+    class _CountingQueryDriver(FakeDriver):
+        def __init__(self, screen: list[base.Element]) -> None:
+            super().__init__(screen)
+            self.query_calls = 0
+
+        def query(self) -> list[base.Element]:
+            self.query_calls += 1
+            return super().query()
+
+    driver = _CountingQueryDriver([_button("Sheet")])
+    tree_rule = ResolvedAlertRule(
+        identifying_labels=frozenset({"Sheet"}), tap_label="Sheet", native=False, in_tree=True
+    )
+    guard = AlertGuardConfig(rules=[tree_rule])
+    settle_calls = 0
+
+    def settle() -> None:
+        nonlocal settle_calls
+        settle_calls += 1
+        if settle_calls == 1:
+            driver.screen = []  # the tap genuinely closed the sheet
+
+    alerts: list[AlertEvent] = []
+    cleared = guard(driver, alerts, settle=settle)
+    assert cleared and alerts == [AlertEvent(label="Sheet")]
+    assert guard.blocked_note == ""
+    # Round 0's own tap-time read, round 1's own terminal read -- no third, post-loop query.
+    assert driver.query_calls == 2
+
+
 def test_dismiss_from_tree_once_declines_an_excluded_shape() -> None:
     # Direct unit coverage of the `exclude` parameter itself: a button that would otherwise resolve
     # and tap cleanly is withheld once its shape (`identifying_labels`) is excluded, exactly as if

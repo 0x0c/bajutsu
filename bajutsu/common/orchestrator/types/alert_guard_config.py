@@ -655,6 +655,14 @@ class AlertGuardConfig:
         # once the sheet actually closed can carry the identical label. Comparing full tree identity
         # rather than just this shape's labels catches that case (BE-0418 review finding).
         tree_dismiss_signature: tuple[tuple[str | None, str | None], ...] | None = None
+        # The round index the tree was last read at, so the post-loop check below can tell a stale
+        # cached read from one a settle since then could plausibly have moved past (BE-0418 review
+        # finding): every round that continues past this one calls settle() on its way there, so a
+        # later round index here means at least one settle ran since; without one, nothing can have
+        # advanced the screen, and a round whose own tree read already re-tested this exact evidence
+        # and found it false would have that same fresh read reproduce the same false right back — a
+        # redundant `driver.query()` this comparison lets the post-loop check skip.
+        tree_read_round: int | None = None
         for round_index in range(_GUARD_CALL_MAX_ROUNDS):
             state, event, buttons = self.probe_native(driver, dismissed=dismissed_native)
             if state == "dismissed":
@@ -759,6 +767,7 @@ class AlertGuardConfig:
                     tree_result, tree_buttons, tree_read_signature = self.dismiss_from_tree_once(
                         driver, exclude=dismissed_tree_shapes
                     )
+                    tree_read_round = round_index
                     if isinstance(tree_result, AlertEvent):
                         alerts.append(tree_result)  # excluded once cleared, never a repeat report
                         # Re-resolves which shape was just tapped, over the same `buttons` this
@@ -974,13 +983,23 @@ class AlertGuardConfig:
         # other path — a native alert dismissed on the very last round, say — never runs it, even
         # though the evidence that branch would have used survives right here to check: the tree
         # twin of the native diagnosis's own reach across both `already_dismissed` and `"unhandled"`.
-        # A *fresh* query, deliberately, rather than the last round's own read: every path that
-        # would leave `tree_dismiss_shape` set also called `settle()` on its way here, at least once
-        # and often twice, so this is the one use of that evidence that outlives the settle it was
-        # taken before — a stale read would misreport a sheet the call's own settling has since
-        # watched close (BE-0418 review finding). Read-only, so nothing here risks the unlicensed
-        # tap the loop's own gate above exists to prevent.
-        if not note and tree_dismiss_shape is not None and tree_dismiss_label is not None:
+        # A *fresh* query, deliberately, rather than the last round's own read: a path that leaves
+        # `tree_dismiss_shape` set and reaches here without itself settling first also called
+        # `settle()` on an *earlier* round on its way here, so a stale read would misreport a sheet
+        # the call's own settling has since watched close (BE-0418 review finding). Read-only, so
+        # nothing here risks the unlicensed tap the loop's own gate above exists to prevent. Gated on
+        # `tree_read_round < round_index`: without an intervening settle, nothing can have moved the
+        # screen since the last tree read already tested this exact evidence and found it false, so a
+        # fresh query here would only reproduce that same false at the cost of another full
+        # accessibility-tree fetch on the ordinary single-sheet call's own most common exit (BE-0418
+        # review finding).
+        if (
+            not note
+            and tree_read_round is not None
+            and tree_read_round < round_index
+            and tree_dismiss_shape is not None
+            and tree_dismiss_label is not None
+        ):
             _, final_tree_buttons, final_tree_signature = _read_tree(driver)
             if final_tree_signature == tree_dismiss_signature and tree_dismiss_shape <= set(
                 final_tree_buttons
