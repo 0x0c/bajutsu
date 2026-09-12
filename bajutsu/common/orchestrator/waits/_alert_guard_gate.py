@@ -11,6 +11,7 @@ from bajutsu.common.orchestrator.types import (
     AlertGuardConfig,
     Clock,
     alert_block_note,
+    identified_alert_rules,
     match_alert_rule,
     matching_alert_rule,
     uncleared_prompt_note,
@@ -195,17 +196,14 @@ class _AlertGuardGate:
                 #
                 # Every shape a rule identifies on this read, not only the one that raced: a
                 # second, *declared* prompt co-present with it is one the next probe answers, so
-                # naming it here would report an alert a rule does identify as unhandled. Credited
-                # on `matching_alert_rule`'s own terms (`types/_functions.py`), not a bare subset
-                # test: a shape whose labels are present but not *uniquely*, or one an excluded
-                # label rules out, is a prompt no later probe resolves either, so its buttons have
-                # to stay in `leftover` rather than being credited to a rule that never acts
-                # (BE-0418 review finding).
+                # naming it here would report an alert a rule does identify as unhandled. Shared
+                # with `matching_alert_rule` (`types/_functions.py`) via `identified_alert_rules`,
+                # rather than a hand-rolled copy of its accept test, so this can never credit a
+                # shape a probe itself would refuse -- or refuse one a probe would credit (BE-0418
+                # review finding).
                 identified = [
                     rule.identifying_labels
-                    for rule in self.guard.native_rules
-                    if not rule.excluded_labels & set(buttons)
-                    and all(buttons.count(label) == 1 for label in rule.identifying_labels)
+                    for rule in identified_alert_rules(self.guard.native_rules, buttons)
                 ]
                 # Removing one occurrence per credited label rather than subtracting the set union:
                 # equivalent here, since the credit test above admits a shape only when each of its

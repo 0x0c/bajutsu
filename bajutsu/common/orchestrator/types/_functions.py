@@ -124,6 +124,29 @@ def selector_names_button(sel: base.Selector, buttons: Sequence[str]) -> bool:
     return any(base.matches(_alert_button(label), sel) for label in buttons)
 
 
+def identified_alert_rules(
+    rules: Sequence[ResolvedAlertRule], buttons: Sequence[str]
+) -> list[ResolvedAlertRule]:
+    """Every rule whose shape is uniquely identified on `buttons`: no excluded label present, and
+    each identifying label present exactly once.
+
+    The shared accept test behind `matching_alert_rule` below (its first element), so a caller
+    crediting a whole read against every rule that could act on it — the mid-wait gate's own race
+    branch, subtracting every declared prompt's own labels from a leftover (`waits/_alert_guard_gate.py`,
+    BE-0418) — cannot drift from what a probe itself would actually resolve. A hand-rolled copy of
+    this predicate elsewhere would credit, or refuse, a shape this function disagrees with the
+    moment either changes, and the caller would find out only as a `wait` blocked by an alert
+    nothing clears, or one a rule does identify silently going unreported.
+    """
+    present = list(buttons)
+    return [
+        rule
+        for rule in rules
+        if not any(label in present for label in rule.excluded_labels)
+        and all(present.count(label) == 1 for label in rule.identifying_labels)
+    ]
+
+
 def matching_alert_rule(
     rules: Sequence[ResolvedAlertRule], buttons: Sequence[str]
 ) -> ResolvedAlertRule | None:
@@ -135,13 +158,8 @@ def matching_alert_rule(
     alert SpringBoard currently holds and changes whenever a *different* alert joins or leaves the
     surface, while the rule that answers one already-dismissed alert does not.
     """
-    present = list(buttons)
-    for rule in rules:
-        if any(label in present for label in rule.excluded_labels):
-            continue
-        if all(present.count(label) == 1 for label in rule.identifying_labels):
-            return rule
-    return None
+    identified = identified_alert_rules(rules, buttons)
+    return identified[0] if identified else None
 
 
 def match_alert_rule(rules: Sequence[ResolvedAlertRule], buttons: Sequence[str]) -> str | None:

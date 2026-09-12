@@ -845,7 +845,19 @@ Android; on iOS it rests on the fast suite's bookkeeping proof alone.
   left to XCUITest's own default handler, unchanged (BE-0399) — nothing here can stop that tap —
   but since BE-0406 a governing policy records the buttons it declined before doing so, and the
   step or `expect` that met the interruption fails, naming them, rather than the run continuing as
-  if nothing had answered on the scenario's behalf. On by default, `false` disables it per scenario
+  if nothing had answered on the scenario's behalf. On by default, `false` disables it per scenario.
+  The mid-wait gate's own reach changed alongside the one-shot call above (BE-0418). Its
+  `probed_absent` narrowed from `state == "absent"` alone to `state == "absent" and not buttons`:
+  that state now also answers the time-of-check/time-of-use race — a matched rule's own tap racing
+  away over a *non-empty* read — so a poll catching that race no longer licenses the in-tree dismiss
+  the way a genuinely empty enumeration does, and a declared app-owned sheet stacked behind the race
+  goes uncleared for that poll's own `poll_interval` rather than being tapped immediately. The same
+  poll stopped clearing `blocked_note` unconditionally on that race too, and can now report its own
+  note naming whichever buttons no declared rule accounts for on the read — a note this path never
+  produced on a bare `"absent"` answer before. And `_dismiss_from_tree` resolves over the same
+  widest-first `tree_dedup_rules` the one-shot dismiss already used, rather than plain declaration
+  order, so two nested in-tree shapes tap the wider one first regardless of how a scenario declared
+  them — which button a `savePassword`-style policy presses during a `wait` can change accordingly
 - DSL `iosTipKitHandling` (BE-0389), an opt-in guard for a blocking Apple TipKit tip: TipKit's
   presentation marks the content it covers accessibility-hidden rather than merely occluding it, so a
   blocked tap can fail as `ElementNotFound`, not only `ElementNotTappable`. The XCUITest backend alone
