@@ -1,14 +1,14 @@
-**English** · [日本語](BE-XXXX-xcuitest-crash-report-scenario-artifact-ja.md)
+**English** · [日本語](BE-0421-xcuitest-crash-report-scenario-artifact-ja.md)
 
-# BE-XXXX — Copy the iOS runner's crash report into the failed scenario's run directory
+# BE-0421 — Copy the iOS runner's crash report into the failed scenario's run directory
 
 <!-- BE-METADATA -->
 | Field | Value |
 |---|---|
-| Proposal | [BE-XXXX](BE-XXXX-xcuitest-crash-report-scenario-artifact.md) |
+| Proposal | [BE-0421](BE-0421-xcuitest-crash-report-scenario-artifact.md) |
 | Author | [@0x0c](https://github.com/0x0c) |
 | Status | **Proposal** |
-| Tracking issue | [Search](https://github.com/bajutsu-e2e/bajutsu/issues?q=is%3Aissue+label%3Aroadmap-tracking+in%3Atitle+"BE-XXXX") |
+| Tracking issue | [Search](https://github.com/bajutsu-e2e/bajutsu/issues?q=is%3Aissue+label%3Aroadmap-tracking+in%3Atitle+"BE-0421") |
 | Topic | Platform support |
 | Related | [BE-0361](../BE-0361-ios-ci-simulator-diagnostics/BE-0361-ios-ci-simulator-diagnostics.md), [BE-0319](../BE-0319-xcuitest-cold-spawn-resilience/BE-0319-xcuitest-cold-spawn-resilience.md), [BE-0415](../BE-0415-driver-call-trace-per-scenario/BE-0415-driver-call-trace-per-scenario.md) |
 <!-- /BE-METADATA -->
