@@ -336,12 +336,17 @@ class AlertGuardConfig:
         can notice it. `"unhandled"` means an alert is up but no rule identifies it, so nothing here
         can clear it.
 
-        The third member carries the buttons this query actually read, empty unless an alert was
-        seen. `"unhandled"` is the state that needs them: BE-0402 left that alert on screen, so the
-        labels are all a blocked step or wait has to name what stopped it, and they would otherwise
-        be discarded here. Returned rather than re-queried at that moment, since a second
-        cross-process query costs another round trip on the runner's single main thread and reopens
-        the time-of-check/time-of-use window the dismiss-race branches below exist to close.
+        The third member carries the buttons this query actually read. `"unhandled"` is the state
+        that needs them: BE-0402 left that alert on screen, so the labels are all a blocked step or
+        wait has to name what stopped it, and they would otherwise be discarded here. Returned
+        rather than re-queried at that moment, since a second cross-process query costs another
+        round trip on the runner's single main thread and reopens the time-of-check/time-of-use
+        window the dismiss-race branches below exist to close. `"absent"` carries them too, and
+        they are not always empty there: the genuine empty enumeration below returns `[]`, but the
+        time-of-check/time-of-use race that answers `"absent"` after tapping a *non-empty* read
+        carries that original read forward — `__call__` (BE-0418) needs the distinction to tell "the
+        surface has nothing on it" from "the one alert this round tried to tap raced away, which
+        says nothing about the rest of the surface" (BE-0418 review finding).
 
         Args:
             reserved: A waiting `handleSystemAlert` step's own selector, when one is running
@@ -403,8 +408,11 @@ class AlertGuardConfig:
         except base.ElementNotFound:
             # A time-of-check/time-of-use race: the alert vanished between the presence query and the
             # tap. It is no longer blocking, so treat it as absent rather than failing the step on a
-            # benign, self-resolved race — a genuine channel error still propagates.
-            return "absent", None, []
+            # benign, self-resolved race — a genuine channel error still propagates. Carries the
+            # non-empty read forward rather than discarding it like the genuine empty enumeration
+            # above: this only proves the one alert this round tried to tap is gone, not that the
+            # rest of the surface is (BE-0418 review finding).
+            return "absent", None, list(buttons)
         except base.AmbiguousSelector:
             # The other half of that race, and *not* the same answer: the alert is still up, now
             # offering the label twice. Reporting "absent" would say no system alert is showing,
@@ -602,8 +610,7 @@ class AlertGuardConfig:
                 dismissed_native |= {rule.identifying_labels}
                 # A fresh tap, of any shape, is what `_bound_exhaustion_note` checks on the final
                 # round: whatever an earlier shape's own fade was doing says nothing about this one.
-                native_dismiss_shape = rule.identifying_labels
-                native_dismiss_label = rule.tap_label
+                native_dismiss_shape, native_dismiss_label = rule.identifying_labels, rule.tap_label
                 cleared = True
                 if stuck_tree_label is None:
                     # Not an unconditional clear: `buttons` is the whole SpringBoard enumeration, so
@@ -655,13 +662,18 @@ class AlertGuardConfig:
                 # answers an interrupting out-of-process alert before synthesizing any interaction)
                 # and the case where an app-owned prompt is the remaining explanation for the block.
                 #
-                # A deterministic empty read also retracts every shape `dismissed_native` is still
+                # A genuinely empty read also retracts every shape `dismissed_native` is still
                 # holding: that record exists only to keep a still-fading alert from a second real
-                # tap, and this round's own probe just proved the surface holds nothing at all —
+                # tap, and an empty enumeration just proved the surface holds nothing at all —
                 # fading or otherwise. Carrying it forward past this point would decline a *later*
                 # genuine re-raise of the same shape as though it were the earlier occurrence's own
-                # stale fade, tapping nothing (BE-0418 review finding).
-                dismissed_native = frozenset()
+                # stale fade, tapping nothing (BE-0418 review finding). Gated on `buttons` itself,
+                # not merely on `state == "absent"`: the time-of-check/time-of-use race below also
+                # answers "absent" after tapping a *non-empty* read, and that only proves the one
+                # alert this round tried to tap is gone, not that the rest of the surface — an
+                # earlier round's own still-fading dismissal included — is (BE-0418 review finding).
+                if not buttons:
+                    dismissed_native = frozenset()
                 tree_result, tree_buttons, tree_read_signature = self.dismiss_from_tree_once(
                     driver, exclude=dismissed_tree_shapes
                 )

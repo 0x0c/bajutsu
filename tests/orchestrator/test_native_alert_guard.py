@@ -271,6 +271,10 @@ def test_probe_native_unhandled_when_no_candidate_resolves() -> None:
 def test_probe_native_treats_a_dismiss_race_as_absent() -> None:
     # TOCTOU: the alert vanishes between the presence query and the tap, so handle_system_alert
     # raises ElementNotFound. That is a benign self-resolved race — reported as absent, not a failure.
+    # Carries the original non-empty read forward rather than discarding it like a genuine empty
+    # enumeration would: this race only proves the one alert the round tried to tap is gone, not
+    # that the rest of the surface is (BE-0418 review finding) — `__call__` needs the distinction to
+    # avoid retracting an unrelated, still-fading dismissal's own dedup record on this race alone.
     class _RaceDriver(FakeDriver):
         def handle_system_alert(self, sel: base.Selector, timeout: float) -> None:
             raise base.ElementNotFound("the alert vanished before the tap")
@@ -278,7 +282,7 @@ def test_probe_native_treats_a_dismiss_race_as_absent() -> None:
     driver = _RaceDriver([])
     driver.system_alert_buttons = [_button("Allow")]
     guard = AlertGuardConfig(rules=[guard_rule("Allow")])
-    assert guard.probe_native(driver) == ("absent", None, [])
+    assert guard.probe_native(driver) == ("absent", None, ["Allow"])
 
 
 # --- AlertGuardConfig.__call__ (native only since BE-0402) ------------------------------------------
@@ -1944,6 +1948,64 @@ def test_the_end_of_step_guard_retaps_a_native_alert_that_genuinely_re_raises_af
     assert guard.blocked_note == ""
 
 
+def test_the_end_of_step_guard_does_not_retap_a_fading_alert_after_a_toctou_race_clears_a_second() -> (
+    None
+):
+    # The other half of the fix above: `dismissed_native`'s retraction must fire only on a
+    # genuinely empty read, not on every `"absent"` answer. `probe_native` also reports `"absent"`
+    # after a *non-empty* read, when the alert it tried to tap that round raced away between the
+    # query and the tap — that only proves the one alert this round tried is gone, not that the
+    # rest of the surface (an earlier round's own still-fading dismissal included) is (BE-0418
+    # review finding). Round 0 dismisses `notifications`; its fade outlasts `settle`, and a second,
+    # disjoint alert joins it; round 1 tries the second alert, which races away before the tap
+    # lands; round 2 must still decline `notifications`' own lingering fade rather than tapping the
+    # device a second real time.
+    handled = 0
+
+    def react(d: FakeDriver, kind: str, _arg: object) -> None:
+        nonlocal handled
+        if kind != "handle_system_alert":
+            return
+        handled += 1
+        if handled == 2:
+            raise base.ElementNotFound("the second alert vanished between query and tap")
+
+    driver = _fake_with_alert(["Allow", "Don't Allow"], react=react)
+    driver.screen = [_button("Not Now")]
+    notifications = ResolvedAlertRule(
+        identifying_labels=frozenset({"Allow", "Don't Allow"}), tap_label="Allow"
+    )
+    second = ResolvedAlertRule(identifying_labels=frozenset({"OK", "Cancel"}), tap_label="OK")
+    tree_rule = ResolvedAlertRule(
+        identifying_labels=frozenset({"Not Now"}), tap_label="Not Now", native=False, in_tree=True
+    )
+    settle_calls = 0
+
+    def settle() -> None:
+        nonlocal settle_calls
+        settle_calls += 1
+        if settle_calls == 1:
+            # notifications' own fade outlasts this settle, and a second, disjoint alert joins it.
+            driver.system_alert_buttons = [
+                _button("Allow"),
+                _button("Don't Allow"),
+                _button("OK"),
+                _button("Cancel"),
+            ]
+        elif settle_calls == 2:
+            # The second alert genuinely resolves on its own; only notifications' fade remains.
+            driver.system_alert_buttons = [_button("Allow"), _button("Don't Allow")]
+
+    guard = AlertGuardConfig(rules=[notifications, second, tree_rule])
+    alerts: list[AlertEvent] = []
+    cleared = guard(driver, alerts, settle=settle)
+    assert cleared
+    # No duplicate "Allow": the TOCTOU-race "absent" must not have retracted notifications' own
+    # dismissed-shape record.
+    assert alerts == [AlertEvent(label="Allow"), AlertEvent(label="Not Now")]
+    assert sum(1 for action in driver.actions if action[0] == "handle_system_alert") == 2
+
+
 def test_the_end_of_step_guard_reports_a_native_alert_uncleared_after_a_leading_tree_round() -> (
     None
 ):
@@ -2959,7 +3021,8 @@ def test_probe_native_reports_an_ambiguous_alert_as_unhandled_not_absent() -> No
 
 def test_probe_native_still_reports_a_vanished_alert_as_absent() -> None:
     # The other half of the same race keeps its answer: the alert really did go away between the
-    # presence query and the tap, so nothing is blocking and the in-tree path may proceed.
+    # presence query and the tap, so nothing is blocking and the in-tree path may proceed. The
+    # original, non-empty read still comes back alongside "absent" (BE-0418 review finding).
     class _VanishedOnTap(FakeDriver):
         def handle_system_alert(self, sel: base.Selector, timeout: float) -> None:
             raise base.ElementNotFound("the alert vanished")
@@ -2967,4 +3030,4 @@ def test_probe_native_still_reports_a_vanished_alert_as_absent() -> None:
     driver = _VanishedOnTap([])
     driver.system_alert_buttons = [_button("Don't Allow"), _button("Allow")]
     guard = AlertGuardConfig(rules=[guard_rule("Don't Allow")])
-    assert guard.probe_native(driver) == ("absent", None, [])
+    assert guard.probe_native(driver) == ("absent", None, ["Don't Allow", "Allow"])

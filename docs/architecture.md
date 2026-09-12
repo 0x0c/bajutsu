@@ -771,7 +771,8 @@ Android; on iOS it rests on the fast suite's bookkeeping proof alone.
   rule identifies settles and tries again too, rather than ending the call outright, but only when
   continuing could still change what a later round reads. That
   holds once this call has already dismissed a native alert, or once a native rule's own shape is
-  already present in the read, though not uniquely. Two rules can share a tapped label
+  already present in the read — though not uniquely, and with none of that rule's own excluded
+  labels present. Two rules can share a tapped label
   (`notifications` and `tracking` both grant `"Allow"`), so a round reading one's still-fading
   buttons alongside the other's now-live ones fails the per-label uniqueness check for either. That
   collision can be this call's own first round, before any native alert has been dismissed, since
