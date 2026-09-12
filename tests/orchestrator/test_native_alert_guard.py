@@ -2124,6 +2124,54 @@ def test_the_end_of_step_guard_never_taps_the_tree_while_a_native_alert_races() 
     assert "Weird Button" in guard.blocked_note
 
 
+def test_the_end_of_step_guard_keeps_a_stuck_tree_diagnosis_through_a_racing_native_round() -> None:
+    # The race branch above used to overwrite `note` unconditionally, unlike every other branch in
+    # this loop -- so a still-open `NotTappable` diagnosis from an earlier round could be silently
+    # erased the moment a *different* round's own native probe raced away (BE-0418 review finding).
+    # Round 0's tree tap is blocked by a scrim (`NotTappable`); round 1 (and the final round 2)
+    # each match the native rule but race away (`ElementNotFound`), leaving a non-empty read that
+    # skips the tree entirely -- the stuck diagnosis must survive both, not vanish under either.
+    class _StuckThenNativeRaces(FakeDriver):
+        def __init__(self) -> None:
+            super().__init__([_button("Not Now")])  # never removed: the scrim never lifts
+            self.tap_calls = 0
+
+        def tap(self, sel: base.Selector) -> None:
+            self.tap_calls += 1
+            if self.tap_calls == 1:
+                raise base.ElementNotTappable("the scrim has not lifted yet")
+            super().tap(sel)
+
+        def handle_system_alert(self, sel: base.Selector, timeout: float) -> None:
+            raise base.ElementNotFound("the prompt raced away")
+
+    driver = _StuckThenNativeRaces()
+    settle_calls = 0
+
+    def settle() -> None:
+        nonlocal settle_calls
+        settle_calls += 1
+        if settle_calls == 1:
+            # Round 0's own NotTappable diagnosis settles; a live alert appears for round 1's own
+            # native probe to race away on.
+            driver.system_alert_buttons = [_button("Allow"), _button("Don't Allow")]
+
+    tree_rule = ResolvedAlertRule(
+        identifying_labels=frozenset({"Not Now"}), tap_label="Not Now", native=False, in_tree=True
+    )
+    native_rule = ResolvedAlertRule(
+        identifying_labels=frozenset({"Allow", "Don't Allow"}),
+        tap_label="Allow",
+        native=True,
+        in_tree=False,
+    )
+    guard = AlertGuardConfig(rules=[tree_rule, native_rule])
+    alerts: list[AlertEvent] = []
+    cleared = guard(driver, alerts, settle=settle)
+    assert not cleared and alerts == []
+    assert guard.blocked_note == uncleared_prompt_note("Not Now")
+
+
 def test_the_end_of_step_guard_names_a_leftover_native_alert_on_a_lingering_tree_round() -> None:
     # The third branch sharing the same flawed premise as the two fixes above: the lingering-fade
     # branch's own exhaustion-note computation used to discard the native leftover unconditionally,

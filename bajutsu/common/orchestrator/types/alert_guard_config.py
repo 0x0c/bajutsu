@@ -874,12 +874,16 @@ class AlertGuardConfig:
                 # A non-empty read here is the time-of-check/time-of-use race, not a genuinely
                 # clear surface, so the tree is left alone entirely this round rather than tapped
                 # under a live SpringBoard alert (BE-0399, BE-0418 review finding). Whatever this
-                # round did not already answer is reported. Always worth another round, unlike
-                # `"unhandled"` below: the raced rule's own shape is in `buttons` by construction —
-                # `probe_native` only reaches this race after `matching_alert_rule` already matched
-                # it, which itself never returns a rule ruled out by its own `excluded_labels` — so
-                # `_native_round_worth_another_try` can never end the call here.
-                note = _leftover_note(buttons, leftover_dismissed_native, "")
+                # round did not already answer is reported — unless a tree diagnosis is still open,
+                # in which case it is left as an earlier round's read left it, the same deference
+                # every sibling branch in this loop gives it (BE-0418 review finding). Always worth
+                # another round, unlike `"unhandled"` below: the raced rule's own shape is in
+                # `buttons` by construction — `probe_native` only reaches this race after
+                # `matching_alert_rule` already matched it, which itself never returns a rule ruled
+                # out by its own `excluded_labels` — so `_native_round_worth_another_try` can never
+                # end the call here.
+                if stuck_tree_label is None:
+                    note = _leftover_note(buttons, leftover_dismissed_native, "")
                 settle()
                 continue
             if state == "unhandled":
