@@ -2006,6 +2006,79 @@ def test_the_end_of_step_guard_does_not_retap_a_fading_alert_after_a_toctou_race
     assert sum(1 for action in driver.actions if action[0] == "handle_system_alert") == 2
 
 
+def test_the_end_of_step_guard_names_an_unhandled_button_after_a_toctou_race() -> None:
+    # The tree-absent branch's own terminal note-clear used to treat every `"absent"` round as
+    # proof the SpringBoard surface was empty, but a time-of-check/time-of-use race also answers
+    # `"absent"` after a *non-empty* read (BE-0418 review finding): only the alert this round tried
+    # to tap raced away, not the rest of the surface. Clearing the note there drops a co-present,
+    # unhandled button the bare `element not found` BE-0402 exists to prevent naming.
+    class _RacesAwayOnTap(FakeDriver):
+        def handle_system_alert(self, sel: base.Selector, timeout: float) -> None:
+            raise base.ElementNotFound("the prompt raced away")
+
+    driver = _RacesAwayOnTap([])
+    driver.system_alert_buttons = [_button("OK"), _button("Cancel"), _button("Weird Button")]
+    guard = AlertGuardConfig(
+        rules=[
+            ResolvedAlertRule(
+                identifying_labels=frozenset({"OK", "Cancel"}),
+                tap_label="OK",
+                native=True,
+                in_tree=False,
+            )
+        ]
+    )
+    cleared, alerts = _call(driver, guard)
+    assert not cleared and alerts == []
+    assert "Weird Button" in guard.blocked_note
+
+
+def test_the_end_of_step_guard_names_a_leftover_native_alert_when_a_stuck_tap_finally_lands() -> (
+    None
+):
+    # The sibling of the fix above, in the branch that clears a stuck tree diagnosis once its own
+    # shape finally lands: that clear used to be unconditional, on the same flawed premise that
+    # `"absent"` always means the whole native surface is clear. A co-present native alert that
+    # raced away the very same round must still be named, not silently dropped by the clear.
+    class _StuckThenLands(FakeDriver):
+        def __init__(self) -> None:
+            super().__init__([_button("Stuck")])
+            self.tree_tap_calls = 0
+
+        def tap(self, sel: base.Selector) -> None:
+            self.tree_tap_calls += 1
+            if self.tree_tap_calls == 1:
+                raise base.ElementNotTappable("the scrim has not lifted yet")
+            super().tap(sel)
+
+        def handle_system_alert(self, sel: base.Selector, timeout: float) -> None:
+            raise base.ElementNotFound("the prompt raced away")
+
+    driver = _StuckThenLands()
+    driver.system_alert_buttons = [_button("OK"), _button("Cancel"), _button("Weird Button")]
+    stuck_rule = ResolvedAlertRule(
+        identifying_labels=frozenset({"Stuck"}), tap_label="Stuck", native=False, in_tree=True
+    )
+    native_rule = ResolvedAlertRule(
+        identifying_labels=frozenset({"OK", "Cancel"}), tap_label="OK", native=True, in_tree=False
+    )
+    settle_calls = 0
+
+    def settle() -> None:
+        nonlocal settle_calls
+        settle_calls += 1
+        if settle_calls == 2:  # right after round 1's own successful "Stuck" dismissal
+            driver.screen = []
+
+    guard = AlertGuardConfig(rules=[stuck_rule, native_rule])
+    alerts: list[AlertEvent] = []
+    cleared = guard(driver, alerts, settle=settle)
+    assert cleared and alerts == [AlertEvent(label="Stuck")]
+    # The stuck tap finally landed, but the same round's native probe raced away leaving "Weird
+    # Button" unaccounted for -- clearing the stuck diagnosis must not silently drop it.
+    assert "Weird Button" in guard.blocked_note
+
+
 def test_the_end_of_step_guard_reports_a_native_alert_uncleared_after_a_leading_tree_round() -> (
     None
 ):

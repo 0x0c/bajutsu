@@ -170,6 +170,20 @@ def _leftover_after_answered(
     return leftover
 
 
+def _leftover_note(
+    buttons: Sequence[str], dismissed: frozenset[frozenset[str]], fallback: str
+) -> str:
+    """`alert_block_note` over `_leftover_after_answered`, or *fallback* when nothing is left over.
+
+    The one computation `AlertGuardConfig.__call__` (BE-0418) repeats at every round kind that can
+    end the call with a native leftover still live: a co-present alert this call has not already
+    answered always takes precedence over whatever diagnosis *fallback* would otherwise report,
+    since something else is demonstrably still up regardless of what that other diagnosis found.
+    """
+    leftover = _leftover_after_answered(buttons, dismissed)
+    return alert_block_note(leftover) if leftover else fallback
+
+
 def _bound_exhaustion_note(
     *,
     dismiss_shape: frozenset[str] | None,
@@ -621,8 +635,7 @@ class AlertGuardConfig:
                     # dropped when this round happens to be the one that exhausts the bound — a
                     # later round re-probing fresh buttons would otherwise self-correct, but there is
                     # no later round on the last one (BE-0418 review finding).
-                    leftover = _leftover_after_answered(buttons, dismissed_native)
-                    note = alert_block_note(leftover) if leftover else ""
+                    note = _leftover_note(buttons, dismissed_native, "")
                 settle()
                 continue
             if state == "already_dismissed":
@@ -653,8 +666,7 @@ class AlertGuardConfig:
                     # "unhandled" branch below both make too, for the identical reason. A leftover
                     # takes precedence over the exhaustion note: something else is demonstrably
                     # still up regardless of whether this round's own tap ever landed.
-                    leftover = _leftover_after_answered(buttons, dismissed_native)
-                    note = alert_block_note(leftover) if leftover else exhaustion_note
+                    note = _leftover_note(buttons, dismissed_native, exhaustion_note)
                 settle()
                 continue
             if state == "absent":
@@ -697,16 +709,20 @@ class AlertGuardConfig:
                     # are still somewhere in it (BE-0418 review finding).
                     tree_dismiss_signature = tree_read_signature
                     cleared = True
-                    # No stuck diagnosis means whatever `note` holds is stale regardless — a native
-                    # leftover note this round's own "absent" probe already disproves, say — so it
-                    # clears unconditionally. One matching *this shape* clears too: the prompt it was
-                    # stuck on finally landed. One with a *different shape* survives, even sharing
-                    # the stuck one's own tap label (`savePassword`'s three shapes all tap "Not Now"
-                    # under `choice: deny`): this round dismissed a genuinely different in-tree
-                    # prompt, which says nothing about whether the stuck one is still stuck (BE-0418
-                    # review finding).
+                    # No stuck diagnosis means whatever `note` holds is stale regardless. One
+                    # matching *this shape* clears too: the prompt it was stuck on finally landed.
+                    # One with a *different shape* survives, even sharing the stuck one's own tap
+                    # label (`savePassword`'s three shapes all tap "Not Now" under `choice: deny`):
+                    # this round dismissed a genuinely different in-tree prompt, which says nothing
+                    # about whether the stuck one is still stuck (BE-0418 review finding).
                     if stuck_tree_shape is None or rule.identifying_labels == stuck_tree_shape:
-                        note = ""
+                        # Gated on this round's own native read, not merely on `state == "absent"`:
+                        # the time-of-check/time-of-use race also answers "absent" after a
+                        # *non-empty* read, and that only proves the one alert this round tried to
+                        # tap is gone — anything else SpringBoard still enumerates is as unhandled as
+                        # a fresh `"unhandled"` round would find it, not disproven by this round's
+                        # own tree dismissal (BE-0418 review finding).
+                        note = _leftover_note(buttons, dismissed_native, "")
                         stuck_tree_label = stuck_tree_shape = None
                     settle()
                     continue
@@ -768,11 +784,13 @@ class AlertGuardConfig:
                 # unless the signature comparison above is what ruled the lingering-fade branch out,
                 # in which case the tree genuinely changed since the tap and there is nothing left to
                 # diagnose (the labels the `any()` above found belong to whatever the tap actually
-                # revealed, not to the shape that was tapped). A native one is not: this round's probe
-                # answered "absent", a deterministic no-SpringBoard-alert fact, so an
-                # `already_dismissed` round's leftover note would otherwise name an alert this call
-                # has since watched go away.
-                note = ""
+                # revealed, not to the shape that was tapped). Gated on this round's own native read,
+                # not merely on `state == "absent"`: the time-of-check/time-of-use race also answers
+                # "absent" after a *non-empty* read, and that only proves the one alert this round
+                # tried to tap is gone — anything else SpringBoard still enumerates is as unhandled
+                # as a fresh `"unhandled"` round would find it, and dropping it is the bare `element
+                # not found` BE-0402 exists to prevent (BE-0418 review finding).
+                note = _leftover_note(buttons, dismissed_native, "")
                 break
             if state == "unhandled":
                 # An alert is up that no rule identifies — but `buttons` is the whole SpringBoard
@@ -797,8 +815,7 @@ class AlertGuardConfig:
                         buttons=buttons,
                         round_index=round_index,
                     )
-                    leftover = _leftover_after_answered(buttons, dismissed_native)
-                    note = alert_block_note(leftover) if leftover else exhaustion_note
+                    note = _leftover_note(buttons, dismissed_native, exhaustion_note)
                 if not dismissed_native and not any(
                     rule.identifying_labels <= set(buttons)
                     and not rule.excluded_labels & set(buttons)

@@ -241,7 +241,7 @@ Log:
   `AlertGuardConfig.__call__` loops up to `_GUARD_CALL_MAX_ROUNDS` (3), appending every dismissed
   `AlertEvent` into a caller-supplied list and returning whether anything cleared;
   `dismiss_from_tree_once` gained a `NotTappable` outcome, an `exclude` parameter, and a `(result,
-  buttons)` return for the round-bounded landing-race retry; both call sites
+  buttons, signature)` return for the round-bounded landing-race retry; both call sites
   (`loop/_step_runner.py`, `loop/_functions.py`) moved to the new `(driver, alerts, *, settle) ->
   bool` contract, gating their note-append on the note alone rather than on whether the call
   cleared anything. `docs/architecture.md` and its Japanese mirror describe the new multi-round

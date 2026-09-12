@@ -252,7 +252,7 @@ docstring には、シートの登場アニメーションが終わるまでボ�
   `AlertGuardConfig.__call__` は `_GUARD_CALL_MAX_ROUNDS`（3）まで内部でループし、解消した 
   `AlertEvent` を呼び出し側が渡すリストへ追記し、1 件以上片付けたかどうかを真偽値で返します。
   `dismiss_from_tree_once` には `NotTappable` という帰結、`exclude` 引数、そして 
-  `(result, buttons)` という返り値を追加し、着地レースに対する有界の再試行を実装しました。2 か所の
+  `(result, buttons, signature)` という返り値を追加し、着地レースに対する有界の再試行を実装しました。2 か所の
   呼び出し元（`loop/_step_runner.py`、`loop/_functions.py`）はどちらも新しい 
   `(driver, alerts, *, settle) -> bool` という契約に移行し、注記の追記条件を、呼び出しが何かを片付
   けたかどうかではなく注記そのものの有無だけに揃えました。`docs/architecture.md` とその日本語版には、
