@@ -16,8 +16,9 @@
 
 `bajutsu repl` opens a manual command shell against a running target. An operator launches the
 app once, then types one command at a time. `tree` reads the current screen's element tree.
-`tap <id>` acts on one of its elements. Each result is read before the next command is chosen. The
-shell sits beside `record` (goal-directed AI authoring) and `crawl` (autonomous exploration) as a
+`tap <id>` acts on one of its elements. The operator reads each result before choosing the next
+command. The shell sits beside `record` (goal-directed AI authoring) and `crawl` (autonomous
+exploration) as a
 third way to reach a target through the same
 [`Driver`](../../docs/glossary.md#driver-backend-actuator-platform) interface those two commands
 already use. Unlike `record` and `crawl`, `repl` asks no large language model (LLM) anything and
@@ -29,13 +30,17 @@ XCUITest, adb, and Playwright gain the shell for free with no per-backend code.
 
 Finding out which [selector](../../docs/glossary.md#scenario-authoring) will resolve to which
 element costs more than the question deserves today. An operator can read the tree by eye in
-Xcode's Accessibility Inspector, or in a browser's devtools. That reading is backend-specific.
+Xcode's Accessibility Inspector or in a browser's devtools. That reading is backend-specific.
 It also skips the normalized `id` / `label` / `traits` fields a scenario step actually matches
-against. The alternative inside Bajutsu is `record` or `crawl`. Both drive the app through an AI
-call, and both produce output shaped for their own artifact — a scenario, a screen map — rather
-than one query answered right away. None of the three gives a direct, backend-agnostic answer to
-one question: what does the current screen look like, and what happens when one of its ids is
-tapped.
+against. Inside Bajutsu, `record` and `crawl` both drive the app through an AI call, and both
+produce output shaped for their own artifact — a scenario, a screen map — rather than one query
+answered right away. The `serve` web UI's Author view comes closer: its `/api/capture/start` and
+`/api/capture/resolve` endpoints boot a live driver and resolve a selector against its tree with no
+AI call ([BE-0262](../../roadmaps/BE-0262-serve-author-live-step-picker/BE-0262-serve-author-live-step-picker.md)).
+That picker still runs inside a browser tab, built for choosing one step to add to a scenario, not
+for typing an id at a terminal and acting on it directly. None of these gives a direct,
+backend-agnostic answer from a command line to one question: what does the current screen look
+like, and what happens when one of its ids is tapped.
 
 `repl` answers that question directly. `tree` prints the current element tree. `tap <id>` acts on
 one of its elements. A second `tree` shows what changed, with no AI round trip, no scenario file,
@@ -49,42 +54,57 @@ seconds, in place of a run-and-read-the-report cycle.
 
 ## Detailed design
 
-`bajutsu repl --target <name> [--udid <id>] [--backend <list>] [--erase/--no-erase] [--config
-<path>]` launches the app. It reuses the `launch_driver` helper `record` and `crawl` already call
-(`bajutsu/common/runner/launch.py`). Target resolution, device selection, and backend selection
-therefore behave the same as for those two commands. On launch, `repl` prints the resolved
-backend and target, then a `bajutsu>` prompt.
+`bajutsu repl --target <name> [--udid <id>] [--backend <list>] [--erase/--no-erase]
+[--headed/--no-headed] [--browser <engine>] [--config <path>]` launches the app. Target
+resolution and backend selection reuse the same shared CLI helpers `record` already calls —
+`_load_effective_with_source` and `_select_actuator_or_exit`
+(`bajutsu/cli/_shared.py`) — and device bring-up reuses `launch_driver`
+(`bajutsu/common/runner/launch.py`), the same combination `record` and `crawl` use to resolve a
+`udid` (skipped for the `playwright` actuator) and boot the device before handing off a driver.
+`--headed`/`--no-headed` and `--browser` are web-only, reusing `record`'s own `_with_headed` /
+`_resolve_browser` helpers, and matter for this shell in particular: a headless browser leaves an
+operator with no screen to watch change. On launch, `repl` prints the resolved backend and target,
+then a `bajutsu>` prompt.
 
 The v1 command set stays small and id-first:
 
 | Command | Behavior |
 |---|---|
-| `tree [--json]` | `driver.query()`, rendered as a table of `id` / `label` / `traits` / `value` / `frame` (or as JSON) |
+| `tree [--json]` | `driver.settled_query()` when the driver implements `SettledReadProvider` (adb), else `driver.query()` — rendered as a table of `id` / `label` / `traits` / `value` / `frame` (or as JSON) |
 | `find <substring>` | the same tree, filtered to rows whose `id` or `label` contains `<substring>` |
 | `tap <id>` | `driver.tap({"id": "<id>"})` |
 | `type <id> <text>` | tap `<id>` to focus it, then `driver.type_text("<text>")` |
 | `back` | `driver.back()` |
 | `screenshot [path]` | `driver.screenshot(path)`, auto-named when `path` is omitted |
 | `help` | list the commands above |
-| `exit` / `quit` | leave the shell; the app keeps running rather than getting torn down |
+| `exit` / `quit` | leave the shell; a device-backed app (xcuitest / adb) keeps running, while the web backend's browser is closed through `driver.close()` because the repl process owns it |
 
-Every command that reads or resolves against the tree reuses the settled-read path `run` already
-relies on. The read-lag barrier
-([BE-0332](../../roadmaps/BE-0332-read-lag-barrier/BE-0332-read-lag-barrier.md)) keeps a `tree`
-issued right after a `tap` from reading a stale, pre-actuation snapshot. `resolve_unique`'s
-existing zero-or-many-matches contract fails a command right away with the same
-`ElementNotFound` / `AmbiguousSelector` message `run` would raise. Neither path guesses which
-element the operator meant (prime directive 2 — determinism first).
+Every command that reads or resolves against the tree asks for an actuation-grade read the same
+way `run`'s own handlers do: through `SettledReadProvider.settled_query()`
+(`bajutsu/common/drivers/base/settled_read_provider.py`) where a driver implements it, or a plain
+`query()` where a driver's own reads are already good enough to actuate from. The read-lag barrier
+([BE-0332](../../roadmaps/BE-0332-read-lag-barrier/BE-0332-read-lag-barrier.md)) is what makes
+`settled_query()` safe on adb: it keeps a `tree` issued right after a `tap` from reading a stale,
+pre-actuation snapshot. `resolve_unique`'s existing zero-or-many-matches contract fails a command
+right away with the same `ElementNotFound` / `AmbiguousSelector` message `run` would raise. Neither
+path guesses which element the operator meant (prime directive 2 — determinism first). `tap` calls
+`driver.tap()` directly rather than `run`'s own `_tap_with_recovery`
+(`bajutsu/common/orchestrator/actions/handlers/gestures.py`), so a target another element covers
+raises `ElementNotTappable` in `repl` where `run` would first retry a bounded scroll and succeed —
+a deliberate v1 gap (see *Alternatives considered*), not a bug to route around silently.
 
 `tap` and `type` address an element by `id` alone. That is narrower than the full
-[selector](../../docs/glossary.md#scenario-authoring) syntax `run` accepts, on purpose: it keeps
-this first version small enough to review, and it matches how the shell gets used. `tree` already
-shows every element's `label` and `traits`, so an operator reads the row and types its id. An
-element with no `id` still appears in `tree`, but `repl` cannot act on it in v1. Closing that gap
-is `crawl`'s vision fallback's job, and `repl` does not attempt it: adding vision would put an AI
-call back into a tool built to avoid one. Extending `tap` and `type` to the rest of the selector
-syntax (`label`, `labelMatches`, `index`) is a natural follow-up, scoped separately, once the
-shell itself has shipped.
+[selector](../../docs/glossary.md#scenario-authoring) syntax `run` accepts (`id`, `idMatches`,
+`label`, `labelMatches`, `traits`, `value`, `within`, `index`), on purpose: it keeps this first
+version small enough to review, and it matches how the shell gets used. `tree` already shows every
+element's `label` and `traits`, so an operator reads the row and types its id. An element with no
+`id` can still be addressed by `label` or `traits` in a full selector, but `repl`'s id-only v1
+cannot reach it. A control genuinely absent from the tree — most often an individual tab in a
+no-id app's tab bar — is a separate problem `record`'s vision fallback exists to close
+(`docs/recording.md`), and `repl` does not attempt it: adding vision would put an AI call back into
+a tool built to avoid one. Extending `tap` and `type` to the rest of `Selector`'s fields
+(`idMatches`, `label`, `labelMatches`, `traits`, `value`, `within`, `index`) is a natural follow-up,
+scoped separately, once the shell itself has shipped.
 
 Gestures (`swipe`, `scroll`, `pinch`, `rotate`) and platform-specific actions (`set_picker_value`,
 `select_option`) stay out of v1. `tap`, `type_text`, `back`, and `screenshot` cover what an
@@ -95,10 +115,18 @@ of them at once would widen this item past a single reviewable change.
 ## Alternatives considered
 
 - **Read the tree with a platform-native tool** (Xcode's Accessibility Inspector, browser
-  devtools). Rejected: each tool is backend-specific, which works against keeping the tool
-  [app-agnostic](../../docs/glossary.md#driver-backend-actuator-platform) (prime directive 3).
-  None of them shows the normalized `id` / `label` / `traits` fields a Bajutsu selector matches
-  against, so an id read there is not guaranteed to be the id `run` would resolve.
+  devtools). Rejected: each tool is backend-specific, so the answer it gives does not come through
+  the one backend-agnostic [`Driver`](../../docs/glossary.md#driver-backend-actuator-platform)
+  seam the rest of Bajutsu reads the tree with. None of them shows the normalized `id` / `label` /
+  `traits` fields a Bajutsu selector matches against, so an id read there is not guaranteed to be
+  the id `run` would resolve.
+- **Use `serve`'s Author live step picker instead of a new command.** Rejected for this item:
+  `/api/capture/start` / `/api/capture/resolve`
+  ([BE-0262](../../roadmaps/BE-0262-serve-author-live-step-picker/BE-0262-serve-author-live-step-picker.md))
+  already boot a live, AI-free driver and resolve a selector against its tree, but through a
+  browser picker built for choosing one step to add to a scenario. That leaves no path for typing
+  an id at a terminal and acting on it directly, with no browser tab and no editor open — the
+  narrower need this item exists for.
 - **Add a "manual mode" flag to `record` instead of a new command.** Rejected: `record`'s loop is
   built around `ClaudeAgent` proposing actions from a screenshot, and it always ends by writing a
   scenario. Bolting a human-typed command path onto that loop would tangle an AI-driven path and a
@@ -118,19 +146,24 @@ of them at once would widen this item past a single reviewable change.
 > *Detailed design* (one box per unit of work); the log records what changed and when
 > (oldest first), linking the PRs.
 
-- [ ] `bajutsu repl` command scaffold: `launch_driver` reuse, the `bajutsu>` prompt loop, `help` /
-  `exit` / `quit`.
-- [ ] `tree` / `tree --json` / `find <substring>`, reusing the settled-read / read-lag-barrier
-  query path.
-- [ ] `tap <id>` / `type <id> <text>`, surfacing `ElementNotFound` / `AmbiguousSelector` the same
-  way `run` does.
+- [ ] `bajutsu repl` command scaffold: `_load_effective_with_source` / `_select_actuator_or_exit` /
+  `launch_driver` reuse, `--headed`/`--no-headed`/`--browser`, the `bajutsu>` prompt loop, `help` /
+  `exit` / `quit` (including the web-only `driver.close()` on exit).
+- [ ] `tree` / `tree --json` / `find <substring>`, reusing `settled_query()` / `query()` and the
+  read-lag-barrier path.
+- [ ] `tap <id>` / `type <id> <text>`, surfacing `ElementNotFound` / `AmbiguousSelector` /
+  `ElementNotTappable` the same way `run` does.
 - [ ] `back` / `screenshot [path]`.
-- [ ] `docs/cli.md` and `docs/ja/cli.md` reference sections.
+- [ ] `docs/cli.md` and `docs/ja/cli.md` reference sections, plus the CLI inventories `repl` makes
+  stale — the CLI-verbs table in `docs/glossary.md` (and `docs/ja/glossary.md`) and the command
+  lists in `docs/architecture.md` ([BE-0113](../../roadmaps/BE-0113-design-doc-realignment/BE-0113-design-doc-realignment.md)).
 
 ## References
 
 - [`Driver`](../../docs/glossary.md#driver-backend-actuator-platform) protocol —
   `bajutsu/common/drivers/base/driver.py`
 - [`Selector`](../../docs/glossary.md#scenario-authoring) — `bajutsu/common/scenario/models/selector.py`
+- `SettledReadProvider` — `bajutsu/common/drivers/base/settled_read_provider.py`
 - `record` and `crawl` — the two existing Tier 1 authoring paths `repl` sits beside (`docs/cli.md`)
 - [BE-0332 — read-lag barrier](../../roadmaps/BE-0332-read-lag-barrier/BE-0332-read-lag-barrier.md)
+- [BE-0262 — live step-picking and target-scoped runs in the Author editor](../../roadmaps/BE-0262-serve-author-live-step-picker/BE-0262-serve-author-live-step-picker.md)
