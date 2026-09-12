@@ -654,6 +654,14 @@ class AlertGuardConfig:
                 # No *SpringBoard* alert, which is both the licence to tap an app element (XCUITest
                 # answers an interrupting out-of-process alert before synthesizing any interaction)
                 # and the case where an app-owned prompt is the remaining explanation for the block.
+                #
+                # A deterministic empty read also retracts every shape `dismissed_native` is still
+                # holding: that record exists only to keep a still-fading alert from a second real
+                # tap, and this round's own probe just proved the surface holds nothing at all —
+                # fading or otherwise. Carrying it forward past this point would decline a *later*
+                # genuine re-raise of the same shape as though it were the earlier occurrence's own
+                # stale fade, tapping nothing (BE-0418 review finding).
+                dismissed_native = frozenset()
                 tree_result, tree_buttons, tree_read_signature = self.dismiss_from_tree_once(
                     driver, exclude=dismissed_tree_shapes
                 )
@@ -687,8 +695,7 @@ class AlertGuardConfig:
                     # review finding).
                     if stuck_tree_shape is None or rule.identifying_labels == stuck_tree_shape:
                         note = ""
-                        stuck_tree_label = None
-                        stuck_tree_shape = None
+                        stuck_tree_label = stuck_tree_shape = None
                     settle()
                     continue
                 if isinstance(tree_result, NotTappable):

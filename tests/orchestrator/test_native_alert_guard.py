@@ -1902,6 +1902,48 @@ def test_the_end_of_step_guard_never_retaps_a_native_alert_it_already_dismissed(
     assert settle_calls == 3
 
 
+def test_the_end_of_step_guard_retaps_a_native_alert_that_genuinely_re_raises_after_absent() -> (
+    None
+):
+    # `dismissed_native` exists only to keep a still-fading alert from a second real tap — but an
+    # `"absent"` round is a deterministic proof the surface holds nothing at all, fading or
+    # otherwise. Carrying the record past that round declines a *later*, genuine re-raise of the
+    # same shape as though it were the earlier occurrence's own stale fade, tapping nothing
+    # (BE-0418 review finding). Round 0 dismisses "Allow"; round 1 reads "absent" and clears an
+    # in-tree sheet instead; round 2's app re-raises the identical "Allow" prompt, which must be
+    # tapped again rather than declined.
+    def react(d: FakeDriver, kind: str, _arg: object) -> None:
+        if kind == "handle_system_alert":
+            d.system_alert_buttons = []  # the tapped alert genuinely clears every time
+
+    driver = _fake_with_alert(["Allow"], react=react)
+    driver.screen = [_button("Not Now")]
+    settle_calls = 0
+
+    def settle() -> None:
+        nonlocal settle_calls
+        settle_calls += 1
+        if settle_calls == 2:  # right after round 1's in-tree dismiss settles
+            driver.system_alert_buttons = [_button("Allow")]  # the app re-raises the same prompt
+
+    guard = AlertGuardConfig(
+        rules=[
+            guard_rule("Allow", native=True, in_tree=False),
+            guard_rule("Not Now", native=False, in_tree=True),
+        ]
+    )
+    alerts: list[AlertEvent] = []
+    cleared = guard(driver, alerts, settle=settle)
+    assert cleared
+    assert alerts == [
+        AlertEvent(label="Allow"),
+        AlertEvent(label="Not Now"),
+        AlertEvent(label="Allow"),
+    ]  # the re-raised "Allow" tapped a second time, not declined as the first occurrence's fade
+    assert sum(1 for action in driver.actions if action[0] == "handle_system_alert") == 2
+    assert guard.blocked_note == ""
+
+
 def test_the_end_of_step_guard_reports_a_native_alert_uncleared_after_a_leading_tree_round() -> (
     None
 ):

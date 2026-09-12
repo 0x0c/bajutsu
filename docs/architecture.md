@@ -765,8 +765,11 @@ Android; on iOS it rests on the fast suite's bookkeeping proof alone.
   animating. A round that finds nothing left to act on ends the call — unless what it found was a
   shape this call already cleared, still lingering, in which case it settles and gives a sheet
   stacked behind that fade another round rather than ending the call on a lingering fade this loop
-  exists to see past. An alert no rule identifies settles and tries again too, rather than ending
-  the call outright, but only when continuing could still change what a later round reads. That
+  exists to see past — the same holds when an earlier round's own in-tree tap is still stuck behind
+  a scrim that has not yet lifted: an ambiguous read that matches nothing is not itself proof the
+  scrim lifted, so the round settles and retries rather than ending the call there. An alert no
+  rule identifies settles and tries again too, rather than ending the call outright, but only when
+  continuing could still change what a later round reads. That
   holds once this call has already dismissed a native alert, or once a native rule's own shape is
   already present in the read, though not uniquely. Two rules can share a tapped label
   (`notifications` and `tracking` both grant `"Allow"`), so a round reading one's still-fading
@@ -810,10 +813,13 @@ Android; on iOS it rests on the fast suite's bookkeeping proof alone.
   the surface that this call has not already answered, its own earlier fades included. The evidence
   is the call's own last read still showing a live, policy-named alert — not a streak across every
   round since the tap, which a round of any other kind in between would break. An in-tree sheet the
-  call tapped carries it too, once the bound is spent with the sheet still enumerable — `exclude`
-  already keeps this call from tapping it again, so nothing later would otherwise report a sheet
-  that accepted the tap without actually closing. The tree note survives a later round that finds
-  nothing to match, or one that goes on to dismiss an unrelated alert on either surface — native or
+  call tapped carries it too, once the bound is spent with the sheet still enumerable and the rest
+  of the tree unchanged since the tap — an app screen the closing sheet revealed can carry the very
+  same button labels, so tree identity, not those labels alone, is what tells a sheet that never
+  closed from one that did. `exclude` already keeps this call from tapping it again, so nothing
+  later would otherwise report a sheet that accepted the tap without actually closing. The tree
+  note survives a later round that finds nothing to match, or one that goes on to dismiss an
+  unrelated alert on either surface — native or
   in-tree — rather than either round erasing a real, still-open diagnosis. A native leftover note is
   not so durable, and for two different reasons depending on what that later round did: dismissing
   an unrelated native alert recomputes the note fresh against that round's own buttons rather than
