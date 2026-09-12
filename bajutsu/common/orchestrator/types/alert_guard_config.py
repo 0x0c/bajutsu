@@ -184,6 +184,25 @@ def _leftover_note(
     return alert_block_note(leftover) if leftover else fallback
 
 
+def _read_tree(
+    driver: base.Driver,
+) -> tuple[list[base.Element], list[str], tuple[tuple[str | None, str | None], ...]]:
+    """A fresh read of *driver*'s current tree: its elements, the identifier-less labelled buttons
+    among them, and that read's own `tree_signature`.
+
+    Factored out of `dismiss_from_tree_once` so `AlertGuardConfig.__call__`'s own final tree check
+    (BE-0418 review finding) can take an equally fresh read without duplicating the filter or
+    re-deriving a stale signature from whatever round last happened to touch the tree.
+    """
+    elements = driver.query()
+    buttons = [
+        el["label"]
+        for el in elements
+        if el["label"] and not el["identifier"] and base.Trait.BUTTON in el["traits"]
+    ]
+    return elements, buttons, tree_signature(elements)
+
+
 def _bound_exhaustion_note(
     *,
     dismiss_shape: frozenset[str] | None,
@@ -490,13 +509,7 @@ class AlertGuardConfig:
         rules = self.tree_dedup_rules
         if not rules:
             return None, [], ()
-        elements = driver.query()
-        signature = tree_signature(elements)
-        buttons = [
-            el["label"]
-            for el in elements
-            if el["label"] and not el["identifier"] and base.Trait.BUTTON in el["traits"]
-        ]
+        elements, buttons, signature = _read_tree(driver)
         rule = _resolve_alert_rule(rules, buttons, exclude)
         if rule is None:
             return None, buttons, signature
@@ -574,8 +587,7 @@ class AlertGuardConfig:
         round goes on to dismiss an unrelated SpringBoard alert, rather than that unrelated success
         silently erasing a diagnosis the tree round still stands by.
         """
-        cleared = False
-        note = ""
+        cleared, note = False, ""
         # The tap label and shape of a tree round that could not land, naming and identifying which
         # stuck diagnosis is still open — not a bare bool: a later round tapping a *different*
         # in-tree prompt must not clear a still-open diagnosis for one that never became tappable
@@ -609,6 +621,13 @@ class AlertGuardConfig:
         # once the sheet actually closed can carry the identical label. Comparing full tree identity
         # rather than just this shape's labels catches that case (BE-0418 review finding).
         tree_dismiss_signature: tuple[tuple[str | None, str | None], ...] | None = None
+        # The tree read from whichever round last found nothing new to tap — an excluded shape
+        # still lingering, an ambiguous read, or genuinely nothing at all — for the post-loop check
+        # below to compare `tree_dismiss_signature` against, since a call whose final round takes a
+        # different path entirely (a native alert dismissed on the last round, say) leaves no round
+        # of its own to run that comparison inline (BE-0418 review finding).
+        post_tap_tree_buttons: list[str] = []
+        post_tap_tree_signature: tuple[tuple[str | None, str | None], ...] | None = None
         for round_index in range(_GUARD_CALL_MAX_ROUNDS):
             state, event, buttons = self.probe_native(driver, dismissed=dismissed_native)
             if state == "dismissed":
@@ -686,6 +705,21 @@ class AlertGuardConfig:
                 # earlier round's own still-fading dismissal included — is (BE-0418 review finding).
                 if not buttons:
                     dismissed_native = frozenset()
+                # The one alert this round's own probe just proved gone (the race above) is not in
+                # `dismissed_native` either — nothing was actually dismissed — so a leftover
+                # computed against `dismissed_native` alone still lets that alert's own labels
+                # survive into it, reporting an alert a rule *did* identify as unhandled (BE-0418
+                # review finding). Re-resolving over the same `buttons`/`dismissed_native`
+                # `probe_native` itself just matched against learns which rule, if any, raced away —
+                # the same way other branches re-resolve to learn what was actually tapped.
+                raced_native_rule = _resolve_alert_rule(
+                    self.native_rules, buttons, dismissed_native
+                )
+                leftover_dismissed_native = (
+                    dismissed_native | {raced_native_rule.identifying_labels}
+                    if raced_native_rule is not None
+                    else dismissed_native
+                )
                 tree_result, tree_buttons, tree_read_signature = self.dismiss_from_tree_once(
                     driver, exclude=dismissed_tree_shapes
                 )
@@ -706,8 +740,7 @@ class AlertGuardConfig:
                     # This round's own pre-tap read, so a later round's exhaustion check can tell
                     # whether the screen has changed since — not merely whether this shape's labels
                     # are still somewhere in it (BE-0418 review finding).
-                    tree_dismiss_signature = tree_read_signature
-                    cleared = True
+                    tree_dismiss_signature, cleared = tree_read_signature, True
                     # No stuck diagnosis means whatever `note` holds is stale regardless. One
                     # matching *this shape* clears too: the prompt it was stuck on finally landed.
                     # One with a *different shape* survives, even sharing the stuck one's own tap
@@ -721,18 +754,20 @@ class AlertGuardConfig:
                         # tap is gone — anything else SpringBoard still enumerates is as unhandled as
                         # a fresh `"unhandled"` round would find it, not disproven by this round's
                         # own tree dismissal (BE-0418 review finding).
-                        note = _leftover_note(buttons, dismissed_native, "")
+                        note = _leftover_note(buttons, leftover_dismissed_native, "")
                         stuck_tree_label = stuck_tree_shape = None
                     settle()
                     continue
                 if isinstance(tree_result, NotTappable):
                     note = uncleared_prompt_note(tree_result.label)
-                    stuck_tree_label = tree_result.label
-                    stuck_tree_shape = tree_result.shape
+                    stuck_tree_label, stuck_tree_shape = tree_result.label, tree_result.shape
                     settle()
                     continue
-                # Nothing not-yet-excluded matched. A shape this call already cleared, still
-                # enumerable among this round's own tree read, is the in-tree twin of
+                # Nothing not-yet-excluded matched, so this round's own read is exactly the
+                # evidence the post-loop check needs if no later round touches the tree again.
+                post_tap_tree_buttons, post_tap_tree_signature = tree_buttons, tree_read_signature
+                # A shape this call already cleared, still enumerable among this round's own tree
+                # read, is the in-tree twin of
                 # `probe_native`'s "already_dismissed": the sheet's own fade outlasted `settle`, so
                 # settle again and give a sheet stacked underneath it another round to be
                 # presented, rather than ending the call on a lingering fade this loop exists to
@@ -765,7 +800,7 @@ class AlertGuardConfig:
                         round_index=round_index,
                     )
                     if stuck_tree_label is None:
-                        note = _leftover_note(buttons, dismissed_native, exhaustion_note)
+                        note = _leftover_note(buttons, leftover_dismissed_native, exhaustion_note)
                     settle()
                     continue
                 # An open `NotTappable` diagnosis is itself something this call still has to act
@@ -793,7 +828,7 @@ class AlertGuardConfig:
                 # tried to tap is gone — anything else SpringBoard still enumerates is as unhandled
                 # as a fresh `"unhandled"` round would find it, and dropping it is the bare `element
                 # not found` BE-0402 exists to prevent (BE-0418 review finding).
-                note = _leftover_note(buttons, dismissed_native, "")
+                note = _leftover_note(buttons, leftover_dismissed_native, "")
                 break
             if state == "unhandled":
                 # An alert is up that no rule identifies — but `buttons` is the whole SpringBoard
@@ -819,10 +854,14 @@ class AlertGuardConfig:
                         round_index=round_index,
                     )
                     note = _leftover_note(buttons, dismissed_native, exhaustion_note)
-                if not dismissed_native and not any(
-                    rule.identifying_labels <= set(buttons)
-                    and not rule.excluded_labels & set(buttons)
-                    for rule in self.native_rules
+                if (
+                    stuck_tree_label is None
+                    and not dismissed_native
+                    and not any(
+                        rule.identifying_labels <= set(buttons)
+                        and not rule.excluded_labels & set(buttons)
+                        for rule in self.native_rules
+                    )
                 ):
                     # Settling and giving the fade another round, rather than ending the call, only
                     # pays off in the two cases this branch exists for: a fade this call itself
@@ -840,7 +879,10 @@ class AlertGuardConfig:
                     # the alert gone on its own, which would erase the very diagnosis this round
                     # just made, the bare `element not found` BE-0402 exists to prevent. Breaking
                     # here instead keeps that diagnosis and costs nothing this call could still
-                    # change.
+                    # change — unless an open `NotTappable` diagnosis is the one still in flight, in
+                    # which case this round's own note computation above was already skipped, so
+                    # there is nothing of this round's own to lose, and a round remains for Unit 2's
+                    # landing-race retry to meet the scrim lifting (BE-0418 review finding).
                     break
                 settle()
                 continue
@@ -851,5 +893,24 @@ class AlertGuardConfig:
             # follow a round that already found something concerning.
             note = ""
             break
+        # The lingering-fade branch inside `"absent"` above is the only place that can report a
+        # tapped tree shape still covering the screen, so a call whose *final* round takes any
+        # other path — a native alert dismissed on the very last round, say — never runs it, even
+        # though the evidence that branch would have used survives right here to check: the tree
+        # twin of the native diagnosis's own reach across both `already_dismissed` and `"unhandled"`.
+        # Not a fresh query, though — nothing settles between the loop ending and here, so an
+        # immediate re-read only shows what the last round that touched the tree already showed,
+        # which reads a tap that landed *this* round identically to one that never closed at all.
+        # `post_tap_tree_buttons`/`post_tap_tree_signature` instead carry forward the read from
+        # whichever *earlier* round last found nothing new to tap — the same evidence the branch
+        # above already trusted enough to end or continue the call on (BE-0418 review finding).
+        if (
+            not note
+            and tree_dismiss_shape is not None
+            and tree_dismiss_label is not None
+            and post_tap_tree_signature == tree_dismiss_signature
+            and tree_dismiss_shape <= set(post_tap_tree_buttons)
+        ):
+            note = uncleared_prompt_note(tree_dismiss_label)
         self.blocked_note = note
         return cleared
