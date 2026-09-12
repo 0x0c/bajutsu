@@ -1007,6 +1007,73 @@ def test_wait_guard_keeps_an_unhandled_note_when_a_matched_alert_races() -> None
     assert "Weird Button" in gate.blocked_note
 
 
+def test_wait_guard_reports_a_co_present_alert_no_rule_identifies_on_a_race() -> None:
+    # Preserving an existing note is not the same as producing one (BE-0418 review finding): the
+    # `raced` branch above stops this poll from clearing or overwriting `blocked_note`, but the very
+    # first poll has no earlier note to preserve. A co-present button no rule identifies, enumerated
+    # by the very same read as the rule that raced away, must still be reported -- mirroring
+    # `AlertGuardConfig.__call__`'s own race branch, which subtracts only the raced rule's own
+    # labels from the read rather than the whole surface.
+    from bajutsu.common.orchestrator.types import ResolvedAlertRule
+    from bajutsu.common.orchestrator.waits import _AlertGuardGate
+
+    class _RacesAway(FakeDriver):
+        def handle_system_alert(self, sel: base.Selector, timeout: float) -> None:
+            raise base.ElementNotFound("the prompt raced away")
+
+    driver = _RacesAway([])
+    driver.system_alert_buttons = [
+        el(None, "Allow", ["button"]),
+        el(None, "Don't Allow", ["button"]),
+        el(None, "Weird Button", ["button"]),
+    ]
+    guard = AlertGuardConfig(
+        rules=[
+            ResolvedAlertRule(
+                identifying_labels=frozenset({"Allow", "Don't Allow"}),
+                tap_label="Allow",
+                native=True,
+                in_tree=False,
+            )
+        ]
+    )
+    gate = _AlertGuardGate(driver=driver, clock=_LogicalClock(), guard=guard, alerts=[])
+    gate.observe([])
+    assert "Weird Button" in gate.blocked_note
+    assert "Allow" not in gate.blocked_note and "Don't Allow" not in gate.blocked_note
+
+
+def test_wait_guard_reports_nothing_when_a_race_leaves_no_leftover() -> None:
+    # The other half of the fresh-diagnosis fix above: a race whose own read holds nothing beyond
+    # the raced rule's own shape has no leftover to report, so this poll must not manufacture a note
+    # out of the very buttons it just subtracted.
+    from bajutsu.common.orchestrator.types import ResolvedAlertRule
+    from bajutsu.common.orchestrator.waits import _AlertGuardGate
+
+    class _RacesAway(FakeDriver):
+        def handle_system_alert(self, sel: base.Selector, timeout: float) -> None:
+            raise base.ElementNotFound("the prompt raced away")
+
+    driver = _RacesAway([])
+    driver.system_alert_buttons = [
+        el(None, "Allow", ["button"]),
+        el(None, "Don't Allow", ["button"]),
+    ]
+    guard = AlertGuardConfig(
+        rules=[
+            ResolvedAlertRule(
+                identifying_labels=frozenset({"Allow", "Don't Allow"}),
+                tap_label="Allow",
+                native=True,
+                in_tree=False,
+            )
+        ]
+    )
+    gate = _AlertGuardGate(driver=driver, clock=_LogicalClock(), guard=guard, alerts=[])
+    gate.observe([])
+    assert gate.blocked_note == ""
+
+
 def test_wait_guard_reports_a_persistent_collapse_it_cannot_clear() -> None:
     """BE-0402: on a backend with no native path, a persistently collapsed screen is not something
     the guard will act on — it neither guesses nor calls a model. What it does instead is refuse to

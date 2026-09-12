@@ -12,6 +12,7 @@ from bajutsu.common.orchestrator.types import (
     Clock,
     alert_block_note,
     match_alert_rule,
+    matching_alert_rule,
     uncleared_prompt_note,
 )
 
@@ -179,6 +180,22 @@ class _AlertGuardGate:
                 # fall into it would replace the note this branch's own clear-guard preserved with the
                 # proxy's hedged one — or erase it outright, since the app tree an out-of-process
                 # SpringBoard alert covers still `shows_app_ui` (BE-0418 review finding).
+                #
+                # Preserving an existing note is not the same as producing one: a co-present button
+                # no rule identifies, enumerated by this very read alongside the raced rule's own
+                # shape, would otherwise go unreported for a whole `poll_interval` -- mirrors
+                # `AlertGuardConfig.__call__`'s own race branch, which subtracts only the raced
+                # rule's own labels from the read rather than the whole surface (BE-0418 review
+                # finding).
+                raced_rule = matching_alert_rule(self.guard.native_rules, buttons)
+                leftover = [
+                    label
+                    for label in buttons
+                    if raced_rule is None or label not in raced_rule.identifying_labels
+                ]
+                if leftover:
+                    self._native_unhandled = True
+                    self.blocked_note = alert_block_note(leftover)
                 self._collapsed_polls = 0
                 return
             # Only a genuinely empty "absent" falls through to the in-tree dismiss below; "reserved"
