@@ -187,12 +187,17 @@ class _AlertGuardGate:
                 #
                 # Every shape a rule identifies on this read, not only the one that raced: a
                 # second, *declared* prompt co-present with it is one the next probe answers, so
-                # naming it here would report an alert a rule does identify as unhandled.
+                # naming it here would report an alert a rule does identify as unhandled. Credited
+                # on `matching_alert_rule`'s own terms (`types/_functions.py`), not a bare subset
+                # test: a shape whose labels are present but not *uniquely*, or one an excluded
+                # label rules out, is a prompt no later probe resolves either, so its buttons have
+                # to stay in `leftover` rather than being credited to a rule that never acts
+                # (BE-0418 review finding).
                 identified = [
                     rule.identifying_labels
                     for rule in self.guard.native_rules
-                    if rule.identifying_labels <= set(buttons)
-                    and not rule.excluded_labels & set(buttons)
+                    if not rule.excluded_labels & set(buttons)
+                    and all(buttons.count(label) == 1 for label in rule.identifying_labels)
                 ]
                 # Subtracted with multiplicity, not as a set, and skipping a rule an excluded label
                 # rules out -- the same two reasons `_leftover_after_answered` gives on the one-shot
@@ -204,7 +209,12 @@ class _AlertGuardGate:
                             leftover.remove(label)
                 if leftover:
                     self._native_unhandled = True
-                    self.blocked_note = alert_block_note(leftover)
+                    if not self._tree_gave_up:
+                        # The same exception the clear-guard above and the `elif` below both make:
+                        # an in-tree give-up names a prompt a rule *did* identify and a tap failed
+                        # to clear, and the hedged "unhandled" note would tell the author the
+                        # opposite (`uncleared_prompt_note`'s own docstring, BE-0418 review finding).
+                        self.blocked_note = alert_block_note(leftover)
                 elif self._native_unhandled and not self._tree_gave_up:
                     # Nothing but the raced rule's own shape is on the surface, and this read is the
                     # whole SpringBoard enumeration -- so an earlier probe's "unhandled" note names a

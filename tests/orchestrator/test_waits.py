@@ -1263,6 +1263,82 @@ def test_wait_guard_clears_a_stale_unhandled_note_when_a_leftover_free_race_disp
     assert gate.blocked_note == ""
 
 
+def test_wait_guard_keeps_an_in_tree_give_up_note_through_a_race_with_a_leftover() -> None:
+    # `_tree_gave_up` is the exception the clear-guard above and the sibling `elif` below both make
+    # (BE-0418 review finding): an in-tree give-up names a prompt a rule *did* identify and a tap
+    # failed to clear, so a *different*, co-present alert racing away must not replace that note
+    # with the hedged "unhandled" form just because this branch also found a genuine leftover.
+    from bajutsu.common.orchestrator.types import ResolvedAlertRule, uncleared_prompt_note
+    from bajutsu.common.orchestrator.waits import _AlertGuardGate
+
+    class _RacesAway(FakeDriver):
+        def handle_system_alert(self, sel: base.Selector, timeout: float) -> None:
+            raise base.ElementNotFound("the prompt raced away")
+
+    driver = _RacesAway([])
+    driver.system_alert_buttons = [
+        el(None, "Allow", ["button"]),
+        el(None, "Don't Allow", ["button"]),
+        el(None, "Weird Button", ["button"]),
+    ]
+    guard = AlertGuardConfig(
+        rules=[
+            ResolvedAlertRule(
+                identifying_labels=frozenset({"Allow", "Don't Allow"}), tap_label="Allow"
+            )
+        ]
+    )
+    gate = _AlertGuardGate(driver=driver, clock=_LogicalClock(), guard=guard, alerts=[])
+    gate._tree_gave_up = True
+    gate.blocked_note = uncleared_prompt_note("Not Now")
+    gate.observe([])
+    assert gate.blocked_note == uncleared_prompt_note("Not Now")
+
+
+def test_wait_guard_does_not_credit_a_rule_matching_alert_rule_would_refuse() -> None:
+    # The leftover computation above must match `matching_alert_rule`'s own terms exactly, not a
+    # bare subset test (BE-0418 review finding): a shape whose labels are present but not
+    # *uniquely* is a prompt no later probe resolves either (the per-label uniqueness collision
+    # `AlertGuardConfig.__call__`'s own "unhandled" branch documents for the built-in `notifications`
+    # / `tracking` pair), so its buttons must stay in the leftover rather than being credited away.
+    # Stubbed via `probe_native`, the same isolation this file's other race tests already use, since
+    # a real read reaching this exact collision would answer "unhandled" before ever racing.
+    from bajutsu.common.orchestrator.types import (
+        AlertEvent,
+        NativeAlertState,
+        ResolvedAlertRule,
+        alert_block_note,
+    )
+    from bajutsu.common.orchestrator.waits import _AlertGuardGate
+
+    class _RacesOnPasteAlongsideACollidingNotifications(AlertGuardConfig):
+        def probe_native(
+            self,
+            driver: base.Driver,
+            reserved: base.Selector | None = None,
+            *,
+            dismissed: frozenset[frozenset[str]] = frozenset(),
+        ) -> tuple[NativeAlertState, AlertEvent | None, list[str]]:
+            return "absent", None, ["Allow", "Don't Allow", "Allow", "Don't Allow", "Allow Paste"]
+
+    guard = _RacesOnPasteAlongsideACollidingNotifications(
+        rules=[
+            ResolvedAlertRule(
+                identifying_labels=frozenset({"Allow", "Don't Allow"}), tap_label="Allow"
+            ),
+            ResolvedAlertRule(
+                identifying_labels=frozenset({"Allow Paste"}), tap_label="Allow Paste"
+            ),
+        ]
+    )
+    driver = FakeDriver([])
+    gate = _AlertGuardGate(driver=driver, clock=_LogicalClock(), guard=guard, alerts=[])
+    gate.observe([])
+    # "Allow"/"Don't Allow" collide (each appears twice) and stay in the leftover uncredited;
+    # "Allow Paste" is uniquely identified and correctly excluded from it.
+    assert gate.blocked_note == alert_block_note(["Allow", "Don't Allow", "Allow", "Don't Allow"])
+
+
 def test_wait_guard_reports_a_persistent_collapse_it_cannot_clear() -> None:
     """BE-0402: on a backend with no native path, a persistently collapsed screen is not something
     the guard will act on — it neither guesses nor calls a model. What it does instead is refuse to
