@@ -251,8 +251,9 @@ def _native_round_worth_another_try(
     native_rules: Sequence[ResolvedAlertRule],
 ) -> bool:
     """Whether a native round that resolved nothing new might still read differently on a later
-    round (BE-0418) — shared by the `"unhandled"` branch and the time-of-check/time-of-use race
-    branch of `"absent"`, which face the identical question over the identical read.
+    round (BE-0418) — asked by the `"unhandled"` branch alone. The time-of-check/time-of-use race
+    branch of `"absent"` faces the same read but never needs to ask: the raced rule's own shape is
+    in `buttons` by construction, so this would always answer `True` there (see that branch).
 
     Settling and giving the surface another round, rather than ending the call, only pays off in
     two cases: a fade this call itself created (`dismissed_native` non-empty), or a live

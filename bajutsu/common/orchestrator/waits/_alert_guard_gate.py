@@ -167,8 +167,9 @@ class _AlertGuardGate:
                 self._collapsed_polls = 0
                 self.blocked_note = alert_block_note(buttons)
                 return
-            # "absent" falls through to the in-tree dismiss and the collapsed-tree proxy below;
-            # "reserved" falls through too, but its own latch stops it short of the proxy.
+            # A genuinely empty "absent" falls through to the in-tree dismiss below; every "absent"
+            # (the race included) falls through to the collapsed-tree proxy. "reserved" falls
+            # through too, but its own latch stops it short of the proxy.
         if self.guard.tree_rules and probed_absent:
             # Only once the scenario holds a rule for a prompt this path can actually reach: an
             # author who declared one has named the alert they expect, which is what makes the fast
