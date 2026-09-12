@@ -66,7 +66,6 @@ design/architecture, security, the silent-failures/type-design/test-coverage len
 bug classes, test quality, and the two prose lenses. The prose lenses' own scope is the contract's,
 not a path filter: the Japanese lens covers any Japanese the diff adds or edits, including Japanese
 in a code comment, and the English lens covers `docs/*.md` and roadmap `BE-NNNN-<slug>.md` prose.
-Only the `(non-blocking, prose)` *marker* in step 5 is restricted to `docs/` and `roadmaps/` files.
 Read every changed file in full before finishing; a shallow first pass that leaves the rest for
 "next time" is the dribble the contract explicitly forbids, and there may be no next time.
 
@@ -98,9 +97,9 @@ floor comes back as one of:
   review comment — never a top-level summary (a fresh summary on every run leaves stale,
   contradictory overviews across a PR's several passes). Follow the contract's exact format: prefix
   every comment `🤖 **Claude Code** — `, then a [Conventional Comments](https://conventionalcomments.org/) label
-  (`issue` / `suggestion` / `question`) and the `(non-blocking)` decoration — `(non-blocking, prose)`
-  instead, on the two prose lenses' findings, and only in a `docs/` or `roadmaps/` file — and attach
-  a GitHub `suggestion` block wherever the fix is mechanical enough to express as replacement lines.
+  (`issue` / `suggestion` / `question`) and the `(non-blocking)` decoration — every finding carries
+  it, prose-lens findings included — and attach a GitHub `suggestion` block wherever the fix is
+  mechanical enough to express as replacement lines.
   Post via `gh api repos/{owner}/{repo}/pulls/<PR>/comments` with `-f path=…`, `-F line=…`,
   `-f side=RIGHT`, `-f commit_id=…`, `-f body=…` — `line` goes through `-F`, which serializes it as
   a JSON number; `-f` would send `"42"` and the endpoint rejects the call with a 422. Fetch
