@@ -96,6 +96,7 @@ from bajutsu.common.scenario.models import (
     WaitRequest,
     Web,
 )
+from bajutsu.common.scenario.raw_source import RawScenario, scenario_sources
 from bajutsu.common.scenario.select import select_scenarios
 from bajutsu.common.scenario.serialize import (
     dump_block,
@@ -162,6 +163,7 @@ __all__ = [
     "Preconditions",
     "Push",
     "RandomValue",
+    "RawScenario",
     "Redact",
     "Relaunch",
     "RequestMatch",
@@ -215,6 +217,7 @@ __all__ = [
     "read_csv",
     "redact_totp_secrets",
     "scenario_dict",
+    "scenario_sources",
     "select_scenarios",
     "system_alert_label",
     "system_alert_shapes",

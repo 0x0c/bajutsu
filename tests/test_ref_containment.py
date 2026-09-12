@@ -190,5 +190,5 @@ def test_run_expand_file_in_root_component_loads(tmp_path: Path) -> None:
         capture=[],
         redact=Redact(),
     )
-    scenarios, _desc = _expand_file(scenario, eff, root=root)
+    scenarios, _desc, _plan_sources = _expand_file(scenario, eff, root=root)
     assert scenarios[0].steps[0].tap.id == "login"  # type: ignore[union-attr]

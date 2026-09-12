@@ -7,6 +7,8 @@ live in bajutsu/templates/).
 from __future__ import annotations
 
 import functools
+from collections.abc import Mapping
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -19,18 +21,68 @@ from bajutsu.common.report.ctrf import ctrf_json
 from bajutsu.common.report.format import _fmt_duration
 from bajutsu.common.report.manifest import _matrix, _run_backend, junit_xml, manifest_dict
 from bajutsu.common.report.panels import _scenario_data
-from bajutsu.common.scenario import Scenario, dump_scenarios, scenario_dict
+from bajutsu.common.scenario import Scenario, declared_name, dump_scenarios, scenario_dict
+
+
+@dataclass(frozen=True)
+class ScenarioPlanSource:
+    """Where one scenario's report plan should be read from.
+
+    Recovered from its on-disk file before setup/component expansion can rewrite its `steps`.
+    `text` is the scenario's own verbatim YAML (comments intact) — None when `run/cli.py` could
+    not recover it (e.g. it fed the run some other way), in which case the report falls back to a
+    structured re-dump with no comments, exactly as it always has. `step_lines` is each of the
+    scenario's `steps` items' original 1-based line number in that file; empty once the caller's
+    own expansion changed the step list's shape, since a wrong line is worse than none.
+    """
+
+    file_name: str
+    text: str | None
+    step_lines: list[int]
 
 
 def scenario_render_inputs(
     scenarios: list[Scenario],
+    plan_sources: Mapping[str, ScenarioPlanSource] | None = None,
 ) -> tuple[list[dict[str, Any]], list[str]]:
     """The renderer's per-scenario plan inputs, aligned with the scenarios.
 
-    Returns `definitions` (structured) and `sources` (raw YAML). Shared by the run pipeline
-    (initial bake) and the offline re-render (BE-0068), so both feed the renderer identical inputs.
+    Returns `definitions` (structured) and `sources` (raw YAML) — a scenario's own verbatim text
+    (comments intact) when `plan_sources` recovers one for it, else the structured re-dump this
+    always fell back to. Shared by the run pipeline (initial bake) and the offline re-render
+    (BE-0068); an offline re-render passes no `plan_sources` (the original file's text was never
+    persisted), so it keeps re-dumping exactly as before.
     """
-    return [scenario_dict(s) for s in scenarios], [dump_scenarios([s]) for s in scenarios]
+    plan_sources = plan_sources or {}
+
+    def source(s: Scenario) -> str:
+        plan = plan_sources.get(declared_name(s.name))
+        return plan.text if (plan is not None and plan.text is not None) else dump_scenarios([s])
+
+    return [scenario_dict(s) for s in scenarios], [source(s) for s in scenarios]
+
+
+def scenario_source_meta(
+    scenarios: list[Scenario],
+    plan_sources: Mapping[str, ScenarioPlanSource] | None = None,
+) -> tuple[list[str | None], list[list[int] | None]]:
+    """Each scenario's originating file name and its steps' original line numbers.
+
+    Aligned with `scenarios` (and so with `scenario_render_inputs`'s `sources`). Both are absent
+    for a scenario `plan_sources` has nothing for; `step_lines` is also absent when the scenario's
+    raw text itself was unavailable or its own line numbers were dropped as unreliable.
+    """
+    plan_sources = plan_sources or {}
+    files: list[str | None] = []
+    lines: list[list[int] | None] = []
+    for s in scenarios:
+        plan = plan_sources.get(declared_name(s.name))
+        files.append(plan.file_name if plan is not None else None)
+        if plan is not None and plan.text is not None and plan.step_lines:
+            lines.append(plan.step_lines)
+        else:
+            lines.append(None)
+    return files, lines
 
 
 _TEMPLATE_DIR = Path(__file__).resolve().parent.parent.parent / "templates"
@@ -73,13 +125,18 @@ def html_report(
     sources: list[str] | None = None,
     source_name: str | None = None,
     description: str | None = None,
+    source_files: list[str | None] | None = None,
+    step_lines: list[list[int] | None] | None = None,
 ) -> str:
     """A self-contained interactive HTML report (inline CSS + JS, no external assets).
 
     When `run_dir` is given the captured logs/traces are embedded inline (so the report
     works opened directly from disk); otherwise only the structure renders.
     `definitions` (structured) and `sources` (raw YAML), both aligned with `results`,
-    drive the merged Result tab and its Rich/YAML toggle.
+    drive the merged Result tab and its Rich/YAML toggle. `source_files` names each scenario's
+    own originating file (shown beside its name); `step_lines` gives each scenario's steps'
+    original line numbers in that file (shown beside each executed step), when `scenario_source_meta`
+    could recover them — both are omitted wherever their entry is None.
     """
     passed = sum(1 for r in results if r.ok)
 
@@ -91,7 +148,14 @@ def html_report(
         return seq[i % len(seq)] if seq else None
 
     scenarios = [
-        _scenario_data(r, run_dir, _plan(definitions, i), _plan(sources, i))
+        _scenario_data(
+            r,
+            run_dir,
+            _plan(definitions, i),
+            _plan(sources, i),
+            _plan(source_files, i),
+            _plan(step_lines, i),
+        )
         for i, r in enumerate(results)
     ]
     devices = dict.fromkeys(r.device for r in results if r.device)  # ordered-unique device count
@@ -136,6 +200,8 @@ def write_html_and_junit(
     description: str | None = None,
     provenance: dict[str, object] | None = None,
     writer: RunArtifactWriter | None = None,
+    source_files: list[str | None] | None = None,
+    step_lines: list[list[int] | None] | None = None,
 ) -> None:
     """Write (or rewrite) report.html + junit.xml + ctrf.json under run_dir, leaving manifest.json untouched.
 
@@ -143,14 +209,25 @@ def write_html_and_junit(
     offline re-render (BE-0068) calls it alone to refresh a finished run from its stored model.
     `provenance` (the manifest's run-identity stamp) only feeds the CTRF export's tool/environment
     fields; None omits them. `run_dir` is read (the report embeds the run's captured logs inline);
-    every write goes through `writer`.
+    every write goes through `writer`. `source_files` / `step_lines` are `html_report`'s own —
+    see there.
     """
     sink = _sink(run_dir, writer)
     sink.write_text("junit.xml", junit_xml(results))
     sink.write_json("ctrf.json", ctrf_json(run_id, results, provenance=provenance))
     sink.write_text(
         "report.html",
-        html_report(run_id, results, run_dir, definitions, sources, source_name, description),
+        html_report(
+            run_id,
+            results,
+            run_dir,
+            definitions,
+            sources,
+            source_name,
+            description,
+            source_files,
+            step_lines,
+        ),
     )
 
 
@@ -166,13 +243,16 @@ def write_report(
     writer: RunArtifactWriter | None = None,
     target: str | None = None,
     label: str | None = None,
+    source_files: list[str | None] | None = None,
+    step_lines: list[list[int] | None] | None = None,
 ) -> Path:
     """Write manifest.json (the versioned render model), junit.xml, and report.html under run_dir.
 
     `definitions` / `sources`, aligned with `results`, feed the report's merged Result tab and its
     Rich/YAML toggle. `provenance` is the run-identity stamp (BE-0049). `writer` is the run's sink.
     `target` / `label` are the target the run ran and its history label, stamped into the
-    manifest (BE-0404 units 2 and 3).
+    manifest (BE-0404 units 2 and 3). `source_files` / `step_lines` are `html_report`'s own —
+    see there.
 
     Returns:
         The manifest.json path.
@@ -190,6 +270,16 @@ def write_report(
         ),
     )
     write_html_and_junit(
-        run_dir, run_id, results, definitions, sources, source_name, description, provenance, sink
+        run_dir,
+        run_id,
+        results,
+        definitions,
+        sources,
+        source_name,
+        description,
+        provenance,
+        sink,
+        source_files,
+        step_lines,
     )
     return manifest_path
