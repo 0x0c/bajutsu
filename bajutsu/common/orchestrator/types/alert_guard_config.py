@@ -644,8 +644,11 @@ class AlertGuardConfig:
                 dismissed_native |= {rule.identifying_labels}
                 # A fresh tap, of any shape, is what `_bound_exhaustion_note` checks on the final
                 # round: whatever an earlier shape's own fade was doing says nothing about this one.
-                native_dismiss_shape, native_dismiss_label = rule.identifying_labels, rule.tap_label
-                cleared = True
+                native_dismiss_shape, native_dismiss_label, cleared = (
+                    rule.identifying_labels,
+                    rule.tap_label,
+                    True,
+                )
                 if stuck_tree_label is None:
                     # Not an unconditional clear: `buttons` is the whole SpringBoard enumeration, so
                     # a co-present alert no rule identifies can sit right alongside the one this
@@ -772,6 +775,17 @@ class AlertGuardConfig:
                 # Nothing not-yet-excluded matched, so this round's own read is exactly the
                 # evidence the post-loop check needs if no later round touches the tree again.
                 post_tap_tree_buttons, post_tap_tree_signature = tree_buttons, tree_read_signature
+                # The tree twin of the native `if not buttons` retraction above, but keyed on a
+                # shape rather than the whole surface: a dismissed shape no longer enumerable
+                # anywhere in this read is gone, not fading, so keeping it in `exclude` could only
+                # ever wrongly block a *different*, not-yet-tapped rule whose own shape happens to
+                # nest inside it (BE-0418 review finding) — nothing here retypes a genuinely
+                # re-presented occurrence of the retracted shape itself, since that shape's own
+                # labels being present again is indistinguishable from a fade that never lifted; the
+                # same tree-identity gap the other two open threads on this line already cover.
+                dismissed_tree_shapes = frozenset(
+                    shape for shape in dismissed_tree_shapes if shape <= set(tree_buttons)
+                )
                 # A shape this call already cleared, still enumerable among this round's own tree
                 # read, is the in-tree twin of
                 # `probe_native`'s "already_dismissed": the sheet's own fade outlasted `settle`, so
