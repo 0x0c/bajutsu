@@ -588,8 +588,10 @@ class AlertGuardConfig:
 
         `settle` runs after every round that acted on a live alert or found one it could not yet
         resolve — one that dismissed something, one that found a button not yet tappable, one that
-        declined a still-fading alert it had already dismissed, and one that read a shared-label
-        collision no rule could uniquely match — the caller's own `settle_after_alert_dismiss` bound to its
+        declined a still-fading alert it had already dismissed, one that read a shared-label
+        collision no rule could uniquely match, one whose own tap raced away over a non-empty read
+        (BE-0399), and one whose tree read matched nothing while a `NotTappable` diagnosis was still
+        open — the caller's own `settle_after_alert_dismiss` bound to its
         `clock`/`transitions`/`cancelled`, including the round that exhausts the bound, so a
         caller reading the screen right after this call returns never reads one still
         mid-animation. `settle` is best-effort and bounded, though: a dismiss whose animation

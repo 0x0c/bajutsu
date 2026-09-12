@@ -759,8 +759,10 @@ Android; on iOS it rests on the fast suite's bookkeeping proof alone.
   a tap a still-animating scrim keeps from landing gets the same bounded retry the mid-wait gate
   already carries for that race. The settle above runs after every round that acted on a live alert
   or found one it could not yet resolve — one that dismissed something; one that found a button not
-  yet tappable; one that declined a still-fading alert this call had already dismissed; and one
-  that read a shared-label collision no rule could uniquely match — the round that exhausts the
+  yet tappable; one that declined a still-fading alert this call had already dismissed; one
+  that read a shared-label collision no rule could uniquely match; one whose own tap raced away
+  over a non-empty read; and one whose tree read matched nothing while an earlier round's own
+  in-tree tap was still stuck behind a scrim that had not yet lifted — the round that exhausts the
   bound included, so a caller reading the screen the instant the call returns never reads one still
   animating. A round that finds nothing left to act on ends the call — unless what it found was a
   shape this call already cleared, still lingering, in which case it settles and gives a sheet
