@@ -206,6 +206,51 @@ def _bound_exhaustion_note(
     return ""
 
 
+def _resolved_exhaustion_candidate(
+    rules: Sequence[ResolvedAlertRule],
+    buttons: Sequence[str],
+    dismissed: frozenset[frozenset[str]],
+    round_index: int,
+    fallback_shape: frozenset[str] | None,
+    fallback_label: str | None,
+) -> tuple[ResolvedAlertRule | None, str]:
+    """The rule this round's own read resolves, and the `_bound_exhaustion_note` it earns — the
+    `"unhandled"` branch of `__call__`'s own case (BE-0418 review finding): a round whose own read
+    matched a rule without ever *tapping* it (`AmbiguousSelector`) must not fall back to a
+    possibly-stale `fallback_shape`/`fallback_label` from an earlier round's own tap, which would go
+    silent on the final round precisely when this call never tapped anything at all. Returns the
+    rule itself alongside the note so the caller's own leftover credit does not resolve it twice —
+    `_raced_exhaustion_note` below is the same computation for a caller that only needs the note.
+    """
+    rule = _resolve_alert_rule(rules, buttons, dismissed)
+    shape, label = (
+        (rule.identifying_labels, rule.tap_label)
+        if rule is not None
+        else (fallback_shape, fallback_label)
+    )
+    return rule, _bound_exhaustion_note(
+        dismiss_shape=shape, dismiss_label=label, buttons=buttons, round_index=round_index
+    )
+
+
+def _raced_exhaustion_note(
+    rules: Sequence[ResolvedAlertRule],
+    buttons: Sequence[str],
+    dismissed: frozenset[frozenset[str]],
+    round_index: int,
+    fallback_shape: frozenset[str] | None,
+    fallback_label: str | None,
+) -> str:
+    """`_resolved_exhaustion_candidate`'s note alone, for the race branch of `__call__`, which has no
+    use for the rule itself: the raced rule's own shape is in `buttons` by construction (a rule
+    matched before the tap ever raced), so crediting it here is the twin of `"unhandled"`'s own
+    preference, without a second name for the same rule the leftover credit above already resolved.
+    """
+    return _resolved_exhaustion_candidate(
+        rules, buttons, dismissed, round_index, fallback_shape, fallback_label
+    )[1]
+
+
 def _native_round_worth_another_try(
     dismissed_native: frozenset[frozenset[str]],
     buttons: Sequence[str],
@@ -799,11 +844,18 @@ class AlertGuardConfig:
                     # block a *different*, not-yet-tapped rule whose own shape happens to nest
                     # inside it (BE-0418 review finding) — nothing here retaps a genuinely
                     # re-presented occurrence of the retracted shape itself, since that shape's own
-                    # labels being present again is indistinguishable from a fade that never lifted;
-                    # the same tree-identity gap the other two open threads on this line already
-                    # cover.
-                    dismissed_tree_shapes = frozenset(
-                        shape for shape in dismissed_tree_shapes if shape <= set(tree_buttons)
+                    # labels being present again is indistinguishable from a fade that never lifted.
+                    # Keyed on the tree actually having moved since the dismiss, not merely on
+                    # whether this read's own labels still overlap it: retracting unconditionally
+                    # only ever removes a shape the `any()` check below would already have excluded
+                    # itself, so it never actually changes this round's own outcome, only
+                    # `exclude`'s contents for a round that may never come (BE-0418 review finding).
+                    dismissed_tree_shapes = (
+                        dismissed_tree_shapes
+                        if tree_read_signature == tree_dismiss_signature
+                        else frozenset(
+                            shape for shape in dismissed_tree_shapes if shape <= set(tree_buttons)
+                        )
                     )
                     # A shape this call already cleared, still enumerable among this round's own
                     # tree read, is the in-tree twin of `probe_native`'s "already_dismissed": the
@@ -880,14 +932,19 @@ class AlertGuardConfig:
                 # out by its own `excluded_labels` — so `_native_round_worth_another_try` can never
                 # end the call here.
                 if stuck_tree_label is None:
+                    # Prefers the rule that raced *this* round over a possibly-stale
+                    # `native_dismiss_shape`, the same way "unhandled" below prefers its own
+                    # `resolved_rule` (BE-0418 review finding) — see `_raced_exhaustion_note`.
                     note = _leftover_note(
                         buttons,
                         leftover_dismissed_native,
-                        _bound_exhaustion_note(
-                            dismiss_shape=native_dismiss_shape,
-                            dismiss_label=native_dismiss_label,
-                            buttons=buttons,
-                            round_index=round_index,
+                        _raced_exhaustion_note(
+                            self.native_rules,
+                            buttons,
+                            dismissed_native,
+                            round_index,
+                            native_dismiss_shape,
+                            native_dismiss_label,
                         ),
                     )
                 settle()
@@ -922,27 +979,19 @@ class AlertGuardConfig:
                 # final round just because this call never *tapped* anything (BE-0418 review
                 # finding).
                 if stuck_tree_label is None:
-                    resolved_rule = _resolve_alert_rule(
-                        self.native_rules, buttons, dismissed_native
+                    resolved_rule, fallback = _resolved_exhaustion_candidate(
+                        self.native_rules,
+                        buttons,
+                        dismissed_native,
+                        round_index,
+                        native_dismiss_shape,
+                        native_dismiss_label,
                     )
                     note = _leftover_note(
                         buttons,
                         dismissed_native
                         | {rule.identifying_labels for rule in [resolved_rule] if rule is not None},
-                        _bound_exhaustion_note(
-                            dismiss_shape=(
-                                resolved_rule.identifying_labels
-                                if resolved_rule is not None
-                                else native_dismiss_shape
-                            ),
-                            dismiss_label=(
-                                resolved_rule.tap_label
-                                if resolved_rule is not None
-                                else native_dismiss_label
-                            ),
-                            buttons=buttons,
-                            round_index=round_index,
-                        ),
+                        fallback,
                     )
                 if stuck_tree_label is None and not _native_round_worth_another_try(
                     dismissed_native, buttons, self.native_rules

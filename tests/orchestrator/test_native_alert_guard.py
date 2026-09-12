@@ -2012,7 +2012,10 @@ def test_the_end_of_step_guard_does_not_blame_a_retracted_native_shape_after_a_l
     # that recorded the shape landed (BE-0418 review finding). Round 0 taps "notifications" cleanly;
     # round 1 reads "absent" and clears an in-tree sheet instead, retracting the record; round 2's
     # app genuinely re-raises the identical prompt, but *this* occurrence races away -- the call
-    # must not blame round 0's own, already-cleared shape for it.
+    # must not blame round 0's own, already-cleared shape for it. The race branch's own fallback
+    # resolves the rule fresh against this round's `buttons`/`dismissed_native` (BE-0418 review
+    # finding) rather than trusting a stale `native_dismiss_shape`, so it correctly names round 2's
+    # own re-raised occurrence -- not round 0's, and not silence either.
     class _SucceedsOnceThenRaces(FakeDriver):
         def __init__(self) -> None:
             super().__init__([_button("Not Now")])
@@ -2052,7 +2055,7 @@ def test_the_end_of_step_guard_does_not_blame_a_retracted_native_shape_after_a_l
     cleared = guard(driver, alerts, settle=settle)
     assert cleared
     assert alerts == [AlertEvent(label="Allow"), AlertEvent(label="Not Now")]
-    assert guard.blocked_note == ""
+    assert guard.blocked_note == uncleared_prompt_note("Allow")
 
 
 def test_the_end_of_step_guard_does_not_retap_a_fading_alert_after_a_toctou_race_clears_a_second() -> (
@@ -2157,7 +2160,12 @@ def test_the_end_of_step_guard_does_not_call_a_co_present_declared_prompt_unhand
     # identify it and the very next native probe would dismiss it (BE-0418 review finding). Mirrors
     # `test_wait_guard_does_not_call_a_co_present_declared_prompt_unhandled_on_a_race`
     # (`tests/orchestrator/test_waits.py`), the mid-wait gate's own fix for the identical shape.
-    # "notifications" races away; "paste" is a second, disjoint prompt fully present on this read.
+    # "notifications" races away on every round; "paste" is a second, disjoint prompt fully present
+    # on every read but never itself attempted. The leftover fix keeps "paste" out of the generic
+    # `alert_block_note` -- it must never be named as an alert nothing identifies -- but the call
+    # still never confirms "notifications" cleared in three rounds, so the bound-exhaustion fallback
+    # (BE-0418 review finding, separate from the leftover credit above) now names *that* rule rather
+    # than going silent.
     class _RacesAway(FakeDriver):
         def handle_system_alert(self, sel: base.Selector, timeout: float) -> None:
             raise base.ElementNotFound("the prompt raced away")
@@ -2187,7 +2195,8 @@ def test_the_end_of_step_guard_does_not_call_a_co_present_declared_prompt_unhand
     )
     cleared, alerts = _call(driver, guard)
     assert not cleared and alerts == []
-    assert guard.blocked_note == ""
+    assert guard.blocked_note == uncleared_prompt_note("Allow")
+    assert "Allow Paste" not in guard.blocked_note and "Don't Allow Paste" not in guard.blocked_note
 
 
 def test_the_end_of_step_guard_does_not_call_a_raced_ambiguous_alert_unhandled() -> None:
@@ -2483,14 +2492,16 @@ def test_the_end_of_step_guard_reports_an_unhandled_native_alert_uncleared_at_th
     assert guard.blocked_note == uncleared_prompt_note("Allow")
 
 
-def test_the_end_of_step_guard_names_a_tapped_native_alert_uncleared_after_a_final_race() -> None:
+def test_the_end_of_step_guard_names_the_rule_that_actually_races_on_a_final_race() -> None:
     # The race branch was the one native round kind that passed `""` instead of
     # `_bound_exhaustion_note`, unlike its `already_dismissed` and `"unhandled"` siblings over the
     # identical evidence (BE-0418 review finding) -- so a call whose *final* round is a race never
     # named a native alert it tapped and never saw clear. Round 0 taps "Allow"; its own fade
     # outlasts the settle, and "OK"/"Cancel" joins the surface; rounds 1 and 2 both race away on
-    # "OK" -- "Allow" is still fully present on the final read, tapped but never confirmed gone, and
-    # must be named rather than silently dropped.
+    # "OK". The fallback resolves the rule fresh against the final round's own `buttons` (BE-0418
+    # review finding) rather than trusting round 0's own `native_dismiss_shape`, so it names "OK" --
+    # the rule this round actually raced on and never confirmed cleared -- not "Allow", whose own
+    # tap the `alerts` list already confirms landed.
     class _TapsAllowThenRacesOnOK(FakeDriver):
         def handle_system_alert(self, sel: base.Selector, timeout: float) -> None:
             button = base.resolve_unique(self.system_alert_buttons, sel)
@@ -2527,7 +2538,7 @@ def test_the_end_of_step_guard_names_a_tapped_native_alert_uncleared_after_a_fin
     alerts: list[AlertEvent] = []
     cleared = guard(driver, alerts, settle=settle)
     assert cleared and alerts == [AlertEvent(label="Allow")]
-    assert guard.blocked_note == uncleared_prompt_note("Allow")
+    assert guard.blocked_note == uncleared_prompt_note("OK")
 
 
 def test_the_end_of_step_guard_still_names_a_co_present_alert_no_rule_identifies() -> None:

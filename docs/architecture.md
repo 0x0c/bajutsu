@@ -815,7 +815,14 @@ Android; on iOS it rests on the fast suite's bookkeeping proof alone.
   native alert the call did tap carries that same note once the bound is spent with nothing left on
   the surface that this call has not already answered, its own earlier fades included. The evidence
   is the call's own last read still showing a live, policy-named alert — not a streak across every
-  round since the tap, which a round of any other kind in between would break. An in-tree sheet the
+  round since the tap, which a round of any other kind in between would break. A round whose own
+  tap raced away instead of landing carries the identical note when the matched rule's shape is
+  still enumerable on the final round, even though this call never confirmed a tap landed at all —
+  resolved fresh against that round's own read rather than a stale record of an earlier, already-
+  tapped shape, so a call whose every round races the same alert away still names it instead of
+  falling silent, and one that raced away only after cleanly tapping a *different* alert names the
+  rule that actually raced, not the unrelated one it already tapped (BE-0418 review finding). An
+  in-tree sheet the
   call tapped carries it too, once the bound is spent with the sheet still enumerable and the rest
   of the tree unchanged since the tap — an app screen the closing sheet revealed can carry the very
   same button labels, so tree identity, not those labels alone, is what tells a sheet that never
