@@ -2097,6 +2097,35 @@ def test_the_end_of_step_guard_names_an_unhandled_button_after_a_toctou_race() -
     assert "OK" not in guard.blocked_note and "Cancel" not in guard.blocked_note
 
 
+def test_the_end_of_step_guard_does_not_call_a_raced_ambiguous_alert_unhandled() -> None:
+    # `probe_native` reaches "unhandled" two ways: a genuinely unidentified alert, and the other
+    # half of the TOCTOU race above -- a matched rule whose tap found the label twice
+    # (`AmbiguousSelector`). The "unhandled" branch's own note used to subtract only
+    # `dismissed_native`, so a raced-but-matched rule's own labels survived into the leftover and
+    # were named as an alert no rule identifies -- exactly what `uncleared_prompt_note`'s docstring
+    # says must not happen, since the rule did identify it and only the tap failed (BE-0418 review
+    # finding).
+    class _AmbiguousEveryRound(FakeDriver):
+        def handle_system_alert(self, sel: base.Selector, timeout: float) -> None:
+            raise base.AmbiguousSelector("the alert offers this label twice")
+
+    driver = _AmbiguousEveryRound([])
+    driver.system_alert_buttons = [_button("Allow"), _button("Don't Allow")]
+    guard = AlertGuardConfig(
+        rules=[
+            ResolvedAlertRule(
+                identifying_labels=frozenset({"Allow", "Don't Allow"}),
+                tap_label="Allow",
+                native=True,
+                in_tree=False,
+            )
+        ]
+    )
+    cleared, alerts = _call(driver, guard)
+    assert not cleared and alerts == []
+    assert guard.blocked_note == ""
+
+
 def test_the_end_of_step_guard_never_taps_the_tree_while_a_native_alert_races() -> None:
     # `"absent"` stopped meaning "the SpringBoard surface is clear" once the time-of-check/time-of-
     # use race started carrying its own non-empty read forward -- but the tree tap was still
@@ -2353,6 +2382,53 @@ def test_the_end_of_step_guard_reports_an_unhandled_native_alert_uncleared_at_th
     alerts: list[AlertEvent] = []
     cleared = guard(driver, alerts, settle=settle)
     assert cleared and alerts == [AlertEvent(label="Allow"), AlertEvent(label="Allow")]
+    assert guard.blocked_note == uncleared_prompt_note("Allow")
+
+
+def test_the_end_of_step_guard_names_a_tapped_native_alert_uncleared_after_a_final_race() -> None:
+    # The race branch was the one native round kind that passed `""` instead of
+    # `_bound_exhaustion_note`, unlike its `already_dismissed` and `"unhandled"` siblings over the
+    # identical evidence (BE-0418 review finding) -- so a call whose *final* round is a race never
+    # named a native alert it tapped and never saw clear. Round 0 taps "Allow"; its own fade
+    # outlasts the settle, and "OK"/"Cancel" joins the surface; rounds 1 and 2 both race away on
+    # "OK" -- "Allow" is still fully present on the final read, tapped but never confirmed gone, and
+    # must be named rather than silently dropped.
+    class _TapsAllowThenRacesOnOK(FakeDriver):
+        def handle_system_alert(self, sel: base.Selector, timeout: float) -> None:
+            button = base.resolve_unique(self.system_alert_buttons, sel)
+            if button["label"] == "OK":
+                raise base.ElementNotFound("the prompt raced away")
+            super().handle_system_alert(sel, timeout)
+
+    driver = _TapsAllowThenRacesOnOK([])
+    driver.system_alert_buttons = [_button("Allow"), _button("Don't Allow")]
+    settle_calls = 0
+
+    def settle() -> None:
+        nonlocal settle_calls
+        settle_calls += 1
+        if settle_calls == 1:
+            # "Allow"'s own fade outlasts this settle, and "OK"/"Cancel" joins the surface.
+            driver.system_alert_buttons = [
+                _button("Allow"),
+                _button("Don't Allow"),
+                _button("OK"),
+                _button("Cancel"),
+            ]
+
+    rule_a = ResolvedAlertRule(
+        identifying_labels=frozenset({"Allow", "Don't Allow"}),
+        tap_label="Allow",
+        native=True,
+        in_tree=False,
+    )
+    rule_b = ResolvedAlertRule(
+        identifying_labels=frozenset({"OK", "Cancel"}), tap_label="OK", native=True, in_tree=False
+    )
+    guard = AlertGuardConfig(rules=[rule_a, rule_b])
+    alerts: list[AlertEvent] = []
+    cleared = guard(driver, alerts, settle=settle)
+    assert cleared and alerts == [AlertEvent(label="Allow")]
     assert guard.blocked_note == uncleared_prompt_note("Allow")
 
 

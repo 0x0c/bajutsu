@@ -883,14 +883,27 @@ class AlertGuardConfig:
                 # under a live SpringBoard alert (BE-0399, BE-0418 review finding). Whatever this
                 # round did not already answer is reported — unless a tree diagnosis is still open,
                 # in which case it is left as an earlier round's read left it, the same deference
-                # every sibling branch in this loop gives it (BE-0418 review finding). Always worth
-                # another round, unlike `"unhandled"` below: the raced rule's own shape is in
-                # `buttons` by construction — `probe_native` only reaches this race after
+                # every sibling branch in this loop gives it (BE-0418 review finding). Falls back to
+                # `_bound_exhaustion_note`, exactly like `already_dismissed` and `"unhandled"` over
+                # the identical evidence: a call whose *final* round is a race must still be able to
+                # name a native alert this call tapped and never saw clear, not only a call whose
+                # final round happens to be one of those two other kinds (BE-0418 review finding).
+                # Always worth another round, unlike `"unhandled"` below: the raced rule's own shape
+                # is in `buttons` by construction — `probe_native` only reaches this race after
                 # `matching_alert_rule` already matched it, which itself never returns a rule ruled
                 # out by its own `excluded_labels` — so `_native_round_worth_another_try` can never
                 # end the call here.
                 if stuck_tree_label is None:
-                    note = _leftover_note(buttons, leftover_dismissed_native, "")
+                    note = _leftover_note(
+                        buttons,
+                        leftover_dismissed_native,
+                        _bound_exhaustion_note(
+                            dismiss_shape=native_dismiss_shape,
+                            dismiss_label=native_dismiss_label,
+                            buttons=buttons,
+                            round_index=round_index,
+                        ),
+                    )
                 settle()
                 continue
             if state == "unhandled":
@@ -909,10 +922,25 @@ class AlertGuardConfig:
                 # above is exactly that), and which of the two branches a torn-down alert's read
                 # lands in from one round to the next is not something the caller controls, so the
                 # diagnosis must not depend on it (review finding).
+                #
+                # `probe_native` reaches "unhandled" a second way, too: a matched rule whose tap
+                # found the label twice (`AmbiguousSelector`, "the other half of that race" per its
+                # own docstring) — not a genuinely unidentified alert. Folding that rule's own
+                # `identifying_labels` in here, the same way the race branch above resolves its own
+                # `leftover_dismissed_native`, keeps its labels from surviving into the leftover and
+                # being named as an alert no rule identifies, when the rule identified it and only
+                # the tap failed (BE-0418 review finding; see `uncleared_prompt_note`'s docstring).
                 if stuck_tree_label is None:
                     note = _leftover_note(
                         buttons,
-                        dismissed_native,
+                        dismissed_native
+                        | {
+                            rule.identifying_labels
+                            for rule in [
+                                _resolve_alert_rule(self.native_rules, buttons, dismissed_native)
+                            ]
+                            if rule is not None
+                        },
                         _bound_exhaustion_note(
                             dismiss_shape=native_dismiss_shape,
                             dismiss_label=native_dismiss_label,

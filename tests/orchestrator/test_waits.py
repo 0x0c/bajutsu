@@ -965,7 +965,13 @@ def test_wait_guard_keeps_an_unhandled_note_when_a_matched_alert_races() -> None
     # nothing about a *different* button the same read enumerated. Poll 1 finds only a button no
     # rule identifies ("Weird Button") and names it; poll 2's own matched rule ("OK"/"Cancel")
     # races away, but "Weird Button" is still right there in that very same read -- the note must
-    # survive, not be wiped by a race that never proved the surface clear.
+    # survive, not be wiped by a race that never proved the surface clear. Poll 2's own element list
+    # is a non-empty app tree, not `[]`: an empty list is the one input where the collapsed-tree
+    # proxy's own `shows_app_ui` is false *and* its debounce has not yet fired, so it is the one
+    # input that cannot expose the proxy silently erasing or overwriting the note on its own, past
+    # the earlier `raced` guard (BE-0418 review finding) -- a real device's app tree stays visible
+    # under an out-of-process SpringBoard alert (`shows_app_ui` is true), which is exactly what the
+    # native probe exists to see past.
     from bajutsu.common.orchestrator.types import AlertEvent, NativeAlertState
     from bajutsu.common.orchestrator.waits import _AlertGuardGate
 
@@ -991,7 +997,7 @@ def test_wait_guard_keeps_an_unhandled_note_when_a_matched_alert_races() -> None
     gate.observe([])
     assert "Weird Button" in gate.blocked_note
     clock.sleep(guard.poll_interval)
-    gate.observe([])
+    gate.observe([el("home", "Home", ["button"])])
     assert "Weird Button" in gate.blocked_note
 
 

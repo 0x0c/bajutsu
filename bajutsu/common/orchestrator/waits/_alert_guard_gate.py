@@ -167,9 +167,16 @@ class _AlertGuardGate:
                 self._collapsed_polls = 0
                 self.blocked_note = alert_block_note(buttons)
                 return
-            # A genuinely empty "absent" falls through to the in-tree dismiss below; every "absent"
-            # (the race included) falls through to the collapsed-tree proxy. "reserved" falls
-            # through too, but its own latch stops it short of the proxy.
+            if raced:
+                # The same deference "unhandled" gets, just above: a live, enumerated surface is not
+                # something the collapsed-tree proxy below can say more about, and letting this poll
+                # fall into it would replace the note this branch's own clear-guard preserved with the
+                # proxy's hedged one — or erase it outright, since the app tree an out-of-process
+                # SpringBoard alert covers still `shows_app_ui` (BE-0418 review finding).
+                self._collapsed_polls = 0
+                return
+            # Only a genuinely empty "absent" falls through to the in-tree dismiss below; "reserved"
+            # falls through to the collapsed-tree proxy, but its own latch stops it short of it.
         if self.guard.tree_rules and probed_absent:
             # Only once the scenario holds a rule for a prompt this path can actually reach: an
             # author who declared one has named the alert they expect, which is what makes the fast
