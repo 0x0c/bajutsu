@@ -69,45 +69,57 @@ BE-0030 のファイル型コンポーネントに、ファイルに閉じた兄
   そうであるかは、次の2つの項目で決めます）。両者は取り違えようがありません。シナリオファイル内の
   名前と、スイート内のファイル型コンポーネントは、新しいフィールドや命名規約を増やさずに同じ
   `use` ステップを共有できます。
-- **共有リゾルバによって、`bajutsu run` とファイル非依存ツールの挙動をそろえます。** シナリオ
-  ファイルを展開する経路は、今のところ2つあります。`trace --explain`、`audit`、`coverage`、
-  `impact`、serve が使う `load_expanded_scenarios`（`bajutsu/common/scenario/load_expanded.py`）と、
-  決定的な run ゲート用に独自の `resolve` クロージャを組み立てている `run/cli.py` の
-  `_expand_file` です。`bajutsu/common/scenario/` に新しく切り出す `component_resolver(local, root,
-  base)` を、ローカルな `components` マップ（ロード済み `ScenarioFile` 自身のもの、または空）に
-  束縛した `resolve` クロージャを組み立てる唯一の場所にします。両方の経路がこれを呼ぶため、インライ
-  ンの `components` ブロックは `run` を通しても、ファイル非依存の読み取り経路を通しても同じように
-  展開されます。2つの実装は、すでに食い違っています。壊れたコンポーネントファイルを、
-  `load_expanded_scenarios` は `invalid YAML in <file>` として報告します（BE-0150）。一方
+- **`ComponentResolver` オブジェクトによって、`bajutsu run` とファイル非依存ツールの挙動をそろえ
+  ます。** シナリオファイルを展開する経路は、今のところ2つあります。`trace --explain`、`audit`、
+  `coverage`、`impact`、serve が使う `load_expanded_scenarios`
+  （`bajutsu/common/scenario/load_expanded.py`）と、決定的な run ゲート用に独自の `resolve`
+  クロージャを組み立てている `run/cli.py` の `_expand_file` です。`load_expanded.py`
+  （ファイルシステムを扱わない設計の `expand.py` ではなく）に新しく切り出す `ComponentResolver` を、
+  ローカルな `components` マップと `root`、`base` ディレクトリに束縛した `resolve` 呼び出し可能
+  オブジェクトを組み立てる唯一の場所にします。裸の名前かパスかの判定と、自分自身のキャッシュを
+  持ち、`for_component_file()` という姉妹メソッドが、空のマップに束縛した新しい
+  `ComponentResolver` を返します。パス解決されたコンポーネント自身のステップを展開するためのもの
+  です。`expand_components` 自身の引数 `resolve: Callable[[str], Component]` は変更しません。
+  `ComponentResolver` のインスタンスが、そのまま条件を満たします。両方の経路がこれを組み立てて渡す
+  ため、インラインの `components` ブロックは `run` を通しても、ファイル非依存の読み取り経路を通し
+  ても同じように展開されます。2つの実装は、すでに食い違っています。壊れたコンポーネントファイル
+  を、`load_expanded_scenarios` は `invalid YAML in <file>` として報告します（BE-0150）。一方
   `run/cli.py` は、PyYAML の例外を `except (OSError, ValueError)` の外へ逃がし、トレースバックの
   まま見せます。共有リゾルバは正規化する側に寄せるため、`run` も同じ明確なエラーを返すようになります。
-- **コンポーネントファイルをまたぐと、有効なリゾルバそのものが切り替わります。フラグではありません。**
-  `component_resolver` は、`resolve` クロージャを1つのローカルマップに束縛します。そのファイル自身
-  の`components`（そのファイル自身のトップレベル、`before`／`after`／`interrupts`、あるいはファイル
-  内コンポーネントの置換後ステップを展開している間）か、空のマップ（パス解決されたコンポーネントの
-  置換後ステップを展開している間）かのどちらかです。`expand_components`
-  （`bajutsu/common/scenario/expand.py`）は、パス形式の `ref` が解決された瞬間に、空のマップに束縛
-  した*新しい* `component_resolver` を組み立て、呼び出し元のリゾルバではなく、そちらの下でその
-  コンポーネントのステップを展開します。そこで見つかる裸の名前は常に未定義です。プレーンな
-  `Component`（`params` と `steps`）は、空のマップリゾルバが参照できる `components` を宣言しない
-  からです。各リゾルバのインスタンスは自分自身のキャッシュを持つため、2つの異なる有効なリゾルバ
-  （2つの異なるコンポーネントファイルの中、あるいはシナリオファイルとコンポーネントファイルの間）。
-  の下で解決される同じ裸の名前が、1つの共有キャッシュを介して衝突することはありません。これは、
-  今日の `expand_components` が持つ単一のグローバルキャッシュが陥る失敗の形です。ファイル内コン
-  ポーネント自身のステップは、呼び出し元と同じリゾルバの下で展開されるため、ファイル内コンポーネ
-  ントは引き続き別のファイル内コンポーネントを `use` できます。パス形式の `ref` を通じたファイル型
-  コンポーネントの `use` も、リゾルバの切り替えの影響を受けません。ファイル型
-  のコンポーネント自身のステップはローカルマップを一切持たないため、裸の名前を `use` できません。
-- **setup プレリュードは、差し込む前に自分自身の `use` ステップを展開します。** `setup` 参照
-  （`Preconditions.setup`）も、シナリオファイルと同じ形をしたドキュメントを指します。`apply_setups`
-  （`bajutsu/common/scenario/expand.py`）は、それを `load_scenarios` 経由で読み込み、その最初の
-  シナリオの `steps` を取り出して、今日は未展開のまま、呼び出し元シナリオの前に差し込みます。プレ
-  リュードファイルが自分自身の `components` を宣言できるようになったら、`apply_setups` は、まず
-  プレリュードのステップに対して `expand_components` を実行します。プレリュード自身のマップに束縛
-  した `component_resolver` の下でです。展開し終えた結果を呼び出し元に差し込むのは、そのあとです。
-  未展開の `use` ステップが、プレリュードから、それを取り込むシナリオへ渡ることはありません。その
-  ため、共有プレリュードの裸の名前は常にプレリュード自身の `components` に対して解決され、たまたま
-  それを `setup` に指定したシナリオのマップに対してではありません。
+- **コンポーネントファイルをまたぐと、同じ再帰の中で姉妹リゾルバへ切り替わります。** `expand_components`
+  の内部再帰 `expand(steps, stack)`（`bajutsu/common/scenario/expand.py`）は、解決したコンポーネント
+  の置換後ステップへ、すでに同じ呼び出しの中で再帰しています。パス形式の `ref` が解決された瞬間、
+  その再帰呼び出しには `resolve` の代わりに `resolve.for_component_file()` を渡します。これは
+  `expand` 自身の `stack` と `max_depth` の管理の中でのことであり、新しく `expand_components` を
+  呼び直すのではありません。呼び直すと、両方ともリセットされてしまい、本物のコンポーネント循環が
+  `expand_components` がすでに出している明確なエラーの代わりに `RecursionError` になってしまいま
+  す。空のマップの姉妹リゾルバの下で解決される裸の名前は常に未定義です。プレーンな `Component`
+  （`params` と `steps`）は、それが参照できる `components` を宣言しないからです。各
+  `ComponentResolver` のインスタンスは自分自身のキャッシュを持ちます。これは、今日の
+  `expand_components` が呼び出しごとに1つだけ持つキャッシュを、リゾルバごとに分けたものです。その
+  ため、2つの異なるリゾルバ（2つの異なるコンポーネントファイルの中、あるいはシナリオファイルと
+  コンポーネントファイルの間）の下で解決される同じ裸の名前が衝突することはありません。ファイル内
+  コンポーネント自身のステップは、呼び出し元と*同じ*リゾルバの下で展開されるため、ファイル内
+  コンポーネントは引き続き別のファイル内コンポーネントを `use` できます。パス形式の `ref` を通じた
+  ファイル型コンポーネントの `use` も、この切り替えの影響を受けません。ファイル型のコンポーネント
+  自身のステップはローカルマップを一切持たないため、裸の名前を `use` できません。
+- **setup プレリュードは、差し込む前に、呼び出し側で自分自身の `use` ステップを展開します。**
+  `setup` 参照（`Preconditions.setup`）も、シナリオファイルと同じ形をしたドキュメントを指します。
+  `apply_setups`（`bajutsu/common/scenario/expand.py`）自体は変更しません。呼び出し元から渡された
+  `resolve: Callable[[str], list[Step]]` を受け取り、その戻り値のステップを、呼び出し元シナリオの
+  前に差し込むだけです。変わるのは `run/cli.py` 自身の `resolve` クロージャのほうです。
+  `apply_setups` を呼ぶのはこれだけです。`load_expanded_scenarios` は setup を一切適用しないため、
+  ファイル非依存の読み取り経路は、この項目の有無にかかわらず、シナリオの `setup` をもともと無視
+  します。そのクロージャは、プレリュードのステップを未展開のまま返す代わりに、プレリュードの
+  `ScenarioFile` を読み込み、プレリュード自身の `components` マップとプレリュード自身のディレクト
+  リ、同じスイートの `root` に束縛した `ComponentResolver` を組み立て、プレリュード自身のステップ
+  に対して、その下で `expand_components` を実行し、結果を返します。未展開の `use` ステップが、
+  プレリュードから、それを取り込むシナリオへ渡ることはありません。そのため、共有プレリュードの
+  裸の名前は常にプレリュード自身の `components` に対して解決され、たまたまそれを `setup` に指定
+  したシナリオのマップに対してではありません。プレリュード自身のパス形式の `ref` は、引き続き
+  プレリュード自身のディレクトリに対して解決され、BE-0174 の封じ込めの内側にとどまります。他の
+  どの場所のパス形式の `ref` とも同じです。今日、このリポジトリのシナリオにもプレリュードにも
+  そのような `ref` は1つもないため、既存のスイートで見た目が変わるものはありません。
 - **新しいパス封じ込めの対象は増えません。** ファイル内のコンポーネントは、ローダがすでに読んだ
   シナリオファイルの一部として1回だけ解析されます。名前の解決が2つ目のファイルを開くことはない
   ため、BE-0174 の封じ込めチェックが新たに守るべき対象はここにはありません。
@@ -178,8 +190,8 @@ BE-0174 が閉じたパス封じ込めの論点も呼び戻します。実ファ
 新しい構文を足す必要はなく、このリポジトリのシナリオはすべて変更なく動作し続けます。1つだけ意味が
 変わる `ref` の形があります。`.yaml` / `.yml` の拡張子を持たず `/` も含まない、コンポーネント
 ファイルを指す裸の ref です。そのような ref は、ファイルとして解決される代わりに、未定義のコンポーネントと
-して大きな声で失敗するようになります。これは意図した、リスクの低いトレードオフです。このリポジト
-リの外にあるスイートなら、なおそのような ref を書きうるためです。
+して大きな声で失敗するようになります。これは意図したトレードオフです。このリポジトリのシナリオに
+そのような ref は1つもないためリスクは低く、書きうるのはこのリポジトリの外にあるスイートだけです。
 
 ## 進捗
 
@@ -188,16 +200,19 @@ BE-0174 が閉じたパス封じ込めの論点も呼び戻します。実ファ
 > ともに記録します。
 
 - [ ] `ScenarioFile` に `components: dict[str, Component]` を追加する
-- [ ] `bajutsu/common/scenario/` に `component_resolver(local, root, base)` を切り出し、ローカルな
-      `components` マップ（裸の名前の解決先）に束縛した `resolve` クロージャを組み立て（パス形式
-      なら既存のファイル解決）、`load_expanded_scenarios` と `run/cli.py` の `_expand_file` の両方を
-      これ経由にする
-- [ ] `expand_components` で、パス解決されたコンポーネントのステップを、呼び出し元のリゾルバでは
-      なく、空のマップに束縛した*新しい* `component_resolver` の下で展開する。裸の名前はそこでは
-      常に未定義として失敗し、各リゾルバのキャッシュは互いに独立したままになる
-- [ ] `apply_setups` を更新し、setup プレリュード自身の `use` ステップを、プレリュード自身の
-      `components` マップに束縛した `component_resolver` の下で展開してから、その結果を呼び出し元
-      シナリオへ差し込む
+- [ ] `load_expanded.py` に `ComponentResolver` を追加する。ローカルな `components` マップ、
+      `root`、`base` ディレクトリに束縛した `resolve` 呼び出し可能オブジェクトを組み立て（裸の名前
+      なら束縛したローカルマップ、パス形式なら既存のファイル解決）、自分自身のキャッシュを持ち、
+      空のマップに束縛した姉妹オブジェクトのための `for_component_file()` を公開する。
+      `load_expanded_scenarios` と `run/cli.py` の `_expand_file` の両方をこれ経由にする
+- [ ] `expand_components` の `expand(steps, stack)` 再帰の中で、パス形式の `ref` が解決された瞬間に
+      再帰呼び出しへ `resolve` の代わりに `resolve.for_component_file()` を渡す。新しく
+      `expand_components` を呼び直すのではなく、同じ `stack`／`max_depth` の管理の中で行い、その
+      コンポーネントのステップの中の裸の名前を常に未定義として失敗させる
+- [ ] `run/cli.py` の setup `resolve` クロージャを更新し、プレリュードの `ScenarioFile` を読み込み、
+      プレリュード自身の `components` マップとプレリュード自身のディレクトリに束縛した
+      `ComponentResolver` を組み立て、プレリュード自身のステップに対してその下で
+      `expand_components` を実行し、展開済みの結果を `apply_setups`（こちらは変更不要）へ返す
 - [ ] 高速スイートでカバーする。
       - ファイル内だけのコンポーネントが、手で複製した場合と同じステップ列へ展開されること。
       - ファイル内のコンポーネントとファイル型コンポーネントが、1つのシナリオの中で共存できること。
@@ -212,15 +227,20 @@ BE-0174 が閉じたパス封じ込めの論点も呼び戻します。実ファ
         1回展開していても、結果は変わらないこと。
       - setup プレリュード自身の裸の `use` が、プレリュード自身の `components` に対して解決される
         こと。呼び出し元シナリオファイルのマップに同名のエントリがあっても影響されないこと。
-- [ ] `docs/scenarios.md`（§Components）と `docs/dsl-grammar.md`（§2 の `ScenarioFile` 定義と
-      §6.2）、および両者の `docs/ja/` 側の鏡を更新する
+      - `bajutsu run` 経由で壊れたコンポーネントファイルを読んだときのエラーが、
+        `load_expanded_scenarios` がすでに出しているものと同じ `invalid YAML in <file>` になる
+        こと（BE-0150）。
+- [ ] `docs/scenarios.md`（§Components）と `docs/dsl-grammar.md`（§2 の `ScenarioFile` 定義／§6.2／
+      §6.4／§6.5）、および両者の `docs/ja/` 側の鏡を更新する。§6.5 のパイプライン注記
+      「`apply_setups` …（プレリュード自身がコンポーネントを `use` できるように）」は、この項目が
+      変える順序を述べています
 
 ## 参考
 
 `bajutsu/common/scenario/models/scenario/component.py`、`bajutsu/common/scenario/expand.py`
-（`expand_components`、`apply_setups`）、`bajutsu/common/scenario/load_expanded.py`、
-`bajutsu/run/cli.py`（`_expand_file`）。コンポーネントのモデルと、この項目が1つのリゾルバへ統合する
-展開経路です。
+（`expand_components`、`apply_setups`）、`bajutsu/common/scenario/load_expanded.py`
+（`ComponentResolver` の置き場所）、`bajutsu/run/cli.py`（`_expand_file`、その setup `resolve`
+クロージャ）。コンポーネントのモデルと、この項目が1つのリゾルバへ統合する展開経路です。
 
 [BE-0030 — パラメータ化シェアドステップ](../BE-0030-parameterized-shared-steps/BE-0030-parameterized-shared-steps-ja.md)。
 この項目がファイルに閉じた形で追加する、ファイル型コンポーネントの原型です。
