@@ -2271,3 +2271,134 @@ def test_trace_driver_write_failure_is_warned_about_not_raised(
     results = run_all(_eff(), [scenario], _lease, run_dir=run_dir, trace_driver=True)
     assert results[0].ok, results[0].failure
     assert not (run_dir / results[0].sid / "driver_trace.json").exists()
+
+
+# --- the failed scenario's own copy of the backend's crash evidence (BE-0421) --- #
+#
+# A scenario whose crash-recovery retries all exhausted used to report only that the backend died. The
+# environment behind the crashed lease holds the runner's captured output and, on a genuine process
+# fault, the host crash report; the pipeline copies both into that scenario's evidence directory and
+# points the failure string at them. It asks exactly once, where the retry loop has given up.
+
+_CRASH_EVIDENCE = [("runner.log", b"the runner's last words\n"), ("xcodebuild.ips", b'{"pid":1}')]
+
+
+def _crash_evidence_lease(*, crashes: int) -> Callable[[Effective, Scenario], Lease]:
+    """A lease factory whose first `crashes` attempts crash, each carrying the same crash evidence."""
+    state = {"n": 0}
+
+    def lease(eff: Effective, scenario: Scenario) -> Lease:
+        state["n"] += 1
+        return Lease(
+            driver=_crashing_driver() if state["n"] <= crashes else _fake_driver(),
+            sink=NullSink(),
+            relaunch=None,
+            control=None,
+            collector=None,
+            release=lambda: None,
+            crash_artifacts=lambda: list(_CRASH_EVIDENCE),
+        )
+
+    return lease
+
+
+def test_a_crash_exhausted_scenario_keeps_the_backends_own_crash_evidence(tmp_path: Path) -> None:
+    # The observable outcome BE-0421 exists for: the evidence lands beside the screenshots and element
+    # trees the same run already produced, and the failure string names the directory, so a contributor
+    # reading why the scenario failed never has to already know it is there.
+    run_dir = tmp_path / "runs" / "run1"
+    scenarios = [Scenario.model_validate({"name": "a", "steps": [{"tap": {"id": "ok"}}]})]
+    results = run_all(
+        _eff(), scenarios, _crash_evidence_lease(crashes=2), crash_retries=1, run_dir=run_dir
+    )
+    directory = run_dir / "00-a" / "crash-diagnostics"
+    assert (directory / "runner.log").read_text(encoding="utf-8") == "the runner's last words\n"
+    assert (directory / "xcodebuild.ips").exists()
+    assert str(directory) in (results[0].failure or "")
+
+
+def test_a_recovered_scenario_keeps_no_crash_evidence(tmp_path: Path) -> None:
+    # A scenario that recovers within its retry budget passes, and a passing scenario needs no crash
+    # report — copying after each attempt would leave it carrying evidence for a failure its own final
+    # result no longer reports.
+    run_dir = tmp_path / "runs" / "run1"
+    scenarios = [Scenario.model_validate({"name": "a", "steps": [{"tap": {"id": "ok"}}]})]
+    results = run_all(
+        _eff(), scenarios, _crash_evidence_lease(crashes=1), crash_retries=1, run_dir=run_dir
+    )
+    assert results[0].ok
+    assert not (run_dir / "00-a" / "crash-diagnostics").exists()
+
+
+def test_a_backend_that_captures_nothing_leaves_the_failure_untouched(tmp_path: Path) -> None:
+    # Android, the web backend, and the fake one all return `[]`, so the write step is an empty
+    # iteration and the failure string says exactly what it said before this feature existed.
+    run_dir = tmp_path / "runs" / "run1"
+    scenarios = [Scenario.model_validate({"name": "a", "steps": [{"tap": {"id": "ok"}}]})]
+
+    def lease(eff: Effective, scenario: Scenario) -> Lease:
+        return Lease(
+            driver=_crashing_driver(),
+            sink=NullSink(),
+            relaunch=None,
+            control=None,
+            collector=None,
+            release=lambda: None,
+        )
+
+    results = run_all(_eff(), scenarios, lease, crash_retries=0, run_dir=run_dir)
+    assert not (run_dir / "00-a" / "crash-diagnostics").exists()
+    failure = results[0].failure or ""
+    assert "crashed mid-run" in failure and "crash-diagnostics" not in failure
+
+
+def test_a_failed_crash_evidence_write_does_not_displace_the_scenarios_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    # A diagnostic artifact must never turn an already-decided failure into a different, unrelated one:
+    # a full disk or a permissions error is warned about, and the scenario still fails for the crash it
+    # actually failed for.
+    from bajutsu.common.evidence.sink import RunArtifactWriter
+
+    def refuse(self: RunArtifactWriter, name: str, text: str) -> Path:
+        raise OSError("no space left on device (test)")
+
+    monkeypatch.setattr(RunArtifactWriter, "write_text", refuse)
+    run_dir = tmp_path / "runs" / "run1"
+    scenarios = [Scenario.model_validate({"name": "a", "steps": [{"tap": {"id": "ok"}}]})]
+    with caplog.at_level("WARNING"):
+        results = run_all(
+            _eff(), scenarios, _crash_evidence_lease(crashes=1), crash_retries=0, run_dir=run_dir
+        )
+    failure = results[0].failure or ""
+    assert "crashed mid-run" in failure and "crash-diagnostics" not in failure
+    assert "writing the crash artifact runner.log failed" in caplog.text
+
+
+def test_a_lease_time_crash_keeps_the_earlier_attempts_crash_evidence(tmp_path: Path) -> None:
+    # `lz` is reset to None at the top of every attempt, so a loop whose last attempt crashed during
+    # bring-up — before there was a lease to hold — would otherwise drop the evidence an earlier
+    # attempt's environment is still holding for the very crash this scenario failed for.
+    run_dir = tmp_path / "runs" / "run1"
+    state = {"n": 0}
+
+    def lease(eff: Effective, scenario: Scenario) -> Lease:
+        state["n"] += 1
+        if state["n"] > 1:
+            raise base.BackendCrashError("runner crashed during the readiness gate (test)")
+        return Lease(
+            driver=_crashing_driver(),
+            sink=NullSink(),
+            relaunch=None,
+            control=None,
+            collector=None,
+            release=lambda: None,
+            crash_artifacts=lambda: list(_CRASH_EVIDENCE),
+        )
+
+    scenarios = [Scenario.model_validate({"name": "a", "steps": [{"tap": {"id": "ok"}}]})]
+    results = run_all(_eff(), scenarios, lease, crash_retries=1, run_dir=run_dir)
+    assert not results[0].ok
+    directory = run_dir / "00-a" / "crash-diagnostics"
+    assert (directory / "runner.log").exists()
+    assert str(directory) in (results[0].failure or "")
