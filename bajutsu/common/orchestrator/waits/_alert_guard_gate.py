@@ -140,7 +140,13 @@ class _AlertGuardGate:
             # synthesizing any interaction (BE-0399) — the same gate `AlertGuardConfig.__call__`
             # applies with its own `if not buttons` before reaching `dismiss_from_tree_once`.
             probed_absent = state == "absent" and not buttons
-            self._native_unhandled = state == "unhandled"
+            # A raced `"absent"` over a non-empty read is no more evidence the *other* buttons that
+            # read enumerated went away than it is licence to tap the tree, so it must not drop this
+            # latch either: once this goes False the collapsed-tree proxy below erases the note on
+            # the very next `_POLL` tick, long before the next native probe is due (BE-0418).
+            self._native_unhandled = state == "unhandled" or (
+                state == "absent" and bool(buttons) and self._native_unhandled
+            )
             self._native_reserved = state == "reserved"
             # A race-`"absent"` over a non-empty read is no more evidence the surface is clear than
             # it is licence to tap the tree, so it must not erase a note either (BE-0418): the one

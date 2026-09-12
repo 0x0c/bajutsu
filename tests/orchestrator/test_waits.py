@@ -971,7 +971,11 @@ def test_wait_guard_keeps_an_unhandled_note_when_a_matched_alert_races() -> None
     # input that cannot expose the proxy silently erasing or overwriting the note on its own, past
     # the earlier `raced` guard (BE-0418 review finding) -- a real device's app tree stays visible
     # under an out-of-process SpringBoard alert (`shows_app_ui` is true), which is exactly what the
-    # native probe exists to see past.
+    # native probe exists to see past. Poll 3 -- no `clock.sleep` before it, so `poll_interval`
+    # has not elapsed and the native probe does not run again -- pins the same guarantee one tick
+    # further out: `_native_unhandled` is the only thing standing between this tick and the proxy
+    # until the next native probe is due, so a race must not drop that latch either, only the
+    # explicit clear a few lines above it (BE-0418 review finding).
     from bajutsu.common.orchestrator.types import AlertEvent, NativeAlertState
     from bajutsu.common.orchestrator.waits import _AlertGuardGate
 
@@ -998,6 +1002,8 @@ def test_wait_guard_keeps_an_unhandled_note_when_a_matched_alert_races() -> None
     assert "Weird Button" in gate.blocked_note
     clock.sleep(guard.poll_interval)
     gate.observe([el("home", "Home", ["button"])])
+    assert "Weird Button" in gate.blocked_note
+    gate.observe([el("home", "Home", ["button"])])  # same poll_interval window: no native re-probe
     assert "Weird Button" in gate.blocked_note
 
 
