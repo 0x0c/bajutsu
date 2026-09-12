@@ -756,7 +756,7 @@ Android; on iOS it rests on the fast suite's bookkeeping proof alone.
   bound simply proceeds — it never decides a verdict. Since BE-0418 each one-shot call itself
   loops, up to three rounds, rather than stopping at its first dismissal: a SpringBoard-owned alert
   queued in front of an app-owned sheet no longer ends the call before the sheet is even read, and
-  a tap that lands on a scrim still mid-animation gets the same bounded retry the mid-wait gate
+  a tap a still-animating scrim keeps from landing gets the same bounded retry the mid-wait gate
   already carries for that race. The settle above runs after every round that acted on a live alert
   or found one it could not yet resolve — one that dismissed something; one that found a button not
   yet tappable; one that declined a still-fading alert this call had already dismissed; and one
@@ -805,14 +805,15 @@ Android; on iOS it rests on the fast suite's bookkeeping proof alone.
   this call already dismissed, and the decline alone does not mean the rest of the surface is
   clear. A button that never becomes reachable within the bound carries its own note, distinct from
   the one an alert no rule identifies carries, rather than reading as a bare missing element. A
-  native alert the call did tap carries that same note once it is still the only thing on the
-  surface as the bound is spent: the call's own last read still showing a live, policy-named alert
-  is the evidence the tap never landed — not a streak across every round since it, which a round of
-  any other kind in between would break. An in-tree sheet the call tapped carries it too, once the
-  bound is spent with the sheet still enumerable — `exclude` already keeps this call from tapping
-  it again, so nothing later would otherwise report a sheet that accepted the tap without actually
-  closing. The tree note survives a later round that finds nothing to match, or one that goes on to
-  dismiss an unrelated alert on either surface —
+  native alert the call did tap carries that same note once the bound is spent with nothing left on
+  the surface that this call has not already answered — its own earlier fades included: the call's
+  own last read still showing a live, policy-named alert is the evidence the tap never landed — not
+  a streak across every round since it, which a round of any other kind in between would break. An
+  in-tree sheet the call tapped carries it too, once the bound is spent with the sheet still
+  enumerable — `exclude` already keeps this call from tapping it again, so nothing later would
+  otherwise report a sheet that accepted the tap without actually closing. The tree note survives a
+  later round that finds nothing to match, or one that goes on to dismiss an unrelated alert on
+  either surface —
   native or in-tree — rather than either round erasing a real, still-open diagnosis. A native leftover note does not survive that same kind of later round,
   though: once its own probe proves the surface absent, that is a deterministic fact the diagnosis
   cannot outlive. XCUITest itself intervenes on an alert that interrupts an in-flight interaction

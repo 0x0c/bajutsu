@@ -10,6 +10,7 @@ from bajutsu.common.orchestrator.types import (
     AlertEvent,
     AlertGuardConfig,
     Clock,
+    _widest_first,
     alert_block_note,
     match_alert_rule,
     uncleared_prompt_note,
@@ -273,7 +274,13 @@ class _AlertGuardGate:
             for el in elements
             if el["label"] and not el["identifier"] and base.Trait.BUTTON in el["traits"]
         ]
-        label = match_alert_rule(self.guard.tree_rules, buttons)
+        # Widest shape first, over a copy — the same ordering `dismiss_from_tree_once` applies to
+        # its own match (BE-0418 review finding): the two are declared twins, and picking through
+        # two different orderings would let which button a scenario gets depend on whether a `wait`
+        # happened to be running when the sheet appeared. `_widest_first`'s own stable sort still
+        # keeps `tree_rules` itself in declaration order for BE-0177 precedence, since neither
+        # consumer reorders the shared property, only a copy of what it reads.
+        label = match_alert_rule(_widest_first(self.guard.tree_rules), buttons)
         if label is None:
             # The tree stopped matching: the showing ended, so its recorded event stands as the real
             # dismissal it was — only the reference is dropped, so a later give-up cannot withdraw it.

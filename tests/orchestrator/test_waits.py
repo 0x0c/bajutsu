@@ -900,6 +900,32 @@ def test_wait_guard_asserts_probe_native_never_reports_already_dismissed() -> No
         gate.observe([])
 
 
+def test_wait_guard_matches_in_tree_shapes_the_same_way_dismiss_from_tree_once_does() -> None:
+    # The mid-wait gate's own `_dismiss_from_tree` and the one-shot `dismiss_from_tree_once` are
+    # declared twins over the same screen (BE-0418 review finding): both must resolve two
+    # differently-shaped in-tree rules the same way, or which button a scenario gets would depend
+    # on whether a `wait` happened to be running when the sheet appeared. `narrow` is declared
+    # first -- the plain, declaration-order match dismiss_from_tree_once no longer makes -- but
+    # `wide`'s own shape is also fully present, so widest-first still picks `wide` here too.
+    from bajutsu.common.orchestrator.types import AlertEvent, ResolvedAlertRule
+    from bajutsu.common.orchestrator.waits import _AlertGuardGate
+
+    narrow = ResolvedAlertRule(
+        identifying_labels=frozenset({"Save"}), tap_label="Save", native=False, in_tree=True
+    )
+    wide = ResolvedAlertRule(
+        identifying_labels=frozenset({"Save", "Not Now"}),
+        tap_label="Not Now",
+        native=False,
+        in_tree=True,
+    )
+    guard = AlertGuardConfig(rules=[narrow, wide])
+    driver = FakeDriver([el(None, "Save", ["button"]), el(None, "Not Now", ["button"])])
+    gate = _AlertGuardGate(driver=driver, clock=_LogicalClock(), guard=guard, alerts=[])
+    gate.observe(driver.query())
+    assert gate.alerts == [AlertEvent(label="Not Now")]
+
+
 def test_wait_guard_reports_a_persistent_collapse_it_cannot_clear() -> None:
     """BE-0402: on a backend with no native path, a persistently collapsed screen is not something
     the guard will act on — it neither guesses nor calls a model. What it does instead is refuse to

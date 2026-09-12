@@ -31,6 +31,7 @@ from .alert_guard_config import (
     NativeAlertState,
     NotTappable,
 )
+from .alert_guard_config import _widest_first as _widest_first
 from .clock import Clock
 from .device_control import DeviceControl
 from .drained_interruption_events import DrainedInterruptionEvents

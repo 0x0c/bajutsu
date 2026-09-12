@@ -57,8 +57,10 @@ def _widest_first(rules: Iterable[ResolvedAlertRule]) -> list[ResolvedAlertRule]
     survive that exclusion and re-tap depends on which shape `matching_alert_rule` — itself
     first-match-in-list-order — happens to try first. Ordering by size before every dedup-path
     lookup removes that dependency on the catalogue's own declaration order, without reordering
-    `tree_rules` itself: that property also serves `_AlertGuardGate`'s own `match_alert_rule` call,
-    which needs the declared order preserved unconditionally, not just for same-shape rules.
+    `tree_rules` itself: `_AlertGuardGate._dismiss_from_tree` (`waits/_alert_guard_gate.py`) and
+    `dismiss_from_tree_once` below both sort a *copy* of that property to match through, so it stays
+    the shared, declaration-ordered base both stable-sort from, rather than something either
+    consumer's own call reorders in place.
     """
     return sorted(rules, key=lambda rule: len(rule.identifying_labels), reverse=True)
 
@@ -223,12 +225,15 @@ class AlertGuardConfig:
         SpringBoard, and an application screen happening to show identifier-less "Allow" and
         "Don't Allow" buttons would be tapped (BE-0406).
 
-        In declaration order — deliberately, unlike `native_rules` below: `_AlertGuardGate`
-        (`waits/_alert_guard_gate.py`) reads this same property for its own `match_alert_rule` call,
-        first-match-in-list-order, so BE-0177's scenario-before-target precedence has to survive
-        here unconditionally, not merely for same-shape rules. `_widest_first` below reorders a
-        *copy* for the one-shot dedup path that needs it, rather than reordering this property
-        itself and silently changing which button the mid-wait gate answers with.
+        In declaration order — deliberately, unlike `native_rules` below: BE-0177's
+        scenario-before-target precedence has to survive here unconditionally, not merely for
+        same-shape rules, and `_widest_first` is a stable sort that only preserves precedence
+        *among* same-shape rules. Both `_AlertGuardGate._dismiss_from_tree`
+        (`waits/_alert_guard_gate.py`) and `dismiss_from_tree_once` below apply `_widest_first` to a
+        *copy* of what they read from this property, rather than reordering the property itself —
+        the two are declared twins over the same screen, and matching through the same ordering is
+        what keeps them from resolving a shape two different rules could both claim differently
+        depending on which one happens to be running (BE-0418 review finding).
         """
         return [rule for rule in self.rules if rule.in_tree]
 
