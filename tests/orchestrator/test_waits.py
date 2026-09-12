@@ -958,6 +958,43 @@ def test_wait_guard_never_taps_the_tree_while_a_native_alert_races() -> None:
     assert not any(action[0] == "tap" for action in driver.actions)
 
 
+def test_wait_guard_keeps_an_unhandled_note_when_a_matched_alert_races() -> None:
+    # Twin of the `AlertGuardConfig.__call__` TOCTOU fix, for this poll's own note-clear
+    # (BE-0418 review finding): `"absent"` carries two meanings here too -- a genuinely empty
+    # enumeration, and a matched rule's own tap racing away over a *non-empty* read that says
+    # nothing about a *different* button the same read enumerated. Poll 1 finds only a button no
+    # rule identifies ("Weird Button") and names it; poll 2's own matched rule ("OK"/"Cancel")
+    # races away, but "Weird Button" is still right there in that very same read -- the note must
+    # survive, not be wiped by a race that never proved the surface clear.
+    from bajutsu.common.orchestrator.types import AlertEvent, NativeAlertState
+    from bajutsu.common.orchestrator.waits import _AlertGuardGate
+
+    class _MatchedAlertRacesPastAnUnhandledOne(AlertGuardConfig):
+        polls: int = 0
+
+        def probe_native(
+            self,
+            driver: base.Driver,
+            reserved: base.Selector | None = None,
+            *,
+            dismissed: frozenset[frozenset[str]] = frozenset(),
+        ) -> tuple[NativeAlertState, AlertEvent | None, list[str]]:
+            self.polls += 1
+            if self.polls == 1:
+                return "unhandled", None, ["Weird Button"]
+            return "absent", None, ["OK", "Cancel", "Weird Button"]
+
+    guard = _MatchedAlertRacesPastAnUnhandledOne()
+    driver = FakeDriver([])
+    clock = _LogicalClock()
+    gate = _AlertGuardGate(driver=driver, clock=clock, guard=guard, alerts=[])
+    gate.observe([])
+    assert "Weird Button" in gate.blocked_note
+    clock.sleep(guard.poll_interval)
+    gate.observe([])
+    assert "Weird Button" in gate.blocked_note
+
+
 def test_wait_guard_reports_a_persistent_collapse_it_cannot_clear() -> None:
     """BE-0402: on a backend with no native path, a persistently collapsed screen is not something
     the guard will act on — it neither guesses nor calls a model. What it does instead is refuse to

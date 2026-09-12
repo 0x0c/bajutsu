@@ -142,7 +142,12 @@ class _AlertGuardGate:
             probed_absent = state == "absent" and not buttons
             self._native_unhandled = state == "unhandled"
             self._native_reserved = state == "reserved"
-            if state != "unhandled" and not self._tree_gave_up:
+            # A race-`"absent"` over a non-empty read is no more evidence the surface is clear than
+            # it is licence to tap the tree, so it must not erase a note either (BE-0418): the one
+            # alert this round tried to tap raced away, which says nothing about a *different*
+            # button the same read enumerated, e.g. one an earlier round already named "unhandled".
+            raced = state == "absent" and bool(buttons)
+            if state != "unhandled" and not raced and not self._tree_gave_up:
                 # Nothing the native query names is blocking, so any note it left is stale. The proxy
                 # below may still set its hedged one for a surface the query cannot enumerate. An
                 # in-tree give-up standing is the exception: `springboard.alerts` never saw that
