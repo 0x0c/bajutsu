@@ -199,9 +199,11 @@ class _AlertGuardGate:
                     if not rule.excluded_labels & set(buttons)
                     and all(buttons.count(label) == 1 for label in rule.identifying_labels)
                 ]
-                # Subtracted with multiplicity, not as a set, and skipping a rule an excluded label
-                # rules out -- the same two reasons `_leftover_after_answered` gives on the one-shot
-                # path, over the same whole-surface enumeration (BE-0418 review finding).
+                # Removing one occurrence per credited label rather than subtracting the set union:
+                # equivalent here, since the credit test above admits a shape only when each of its
+                # labels appears exactly once, so this stays defensive rather than load-bearing. It
+                # is `_leftover_after_answered` on the one-shot path that genuinely needs the
+                # multiplicity -- its `dismissed` shapes carry no such per-read check (BE-0418).
                 leftover = list(buttons)
                 for shape in identified:
                     for label in shape:
