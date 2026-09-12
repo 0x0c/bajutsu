@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from bajutsu.common.drivers import base
-from bajutsu.common.drivers.elements import shows_app_ui
+from bajutsu.common.drivers.elements import shows_app_ui, tree_signature
 from bajutsu.common.orchestrator.types import (
     AlertEvent,
     AlertGuardConfig,
@@ -299,9 +299,7 @@ class _AlertGuardGate:
             assert self._tree_tapped_at is not None  # set with `_tree_dismiss_pending`, never apart
             if self.clock.now() - self._tree_tapped_at < _TREE_RETAP_DELAY:
                 return None
-            from ._functions import _tree_signature
-
-            if _tree_signature(elements) != self._tree_signature:
+            if tree_signature(elements) != self._tree_signature:
                 # The screen moved, so the tap *did* land. This label still matching is then a
                 # different element — most likely an app-authored button of the same name the sheet
                 # was covering — and re-tapping it would actuate the app, not a prompt. Decline for
@@ -394,9 +392,7 @@ class _AlertGuardGate:
         first_tap = label != self._tree_dismiss_pending
         self._tree_dismiss_pending = label
         self._tree_tapped_at = self.clock.now()
-        from ._functions import _tree_signature
-
-        self._tree_signature = _tree_signature(elements)
+        self._tree_signature = tree_signature(elements)
         self._tree_taps += 1
         self._tree_not_tappable_label = None
         self._tree_not_tappable_since = None

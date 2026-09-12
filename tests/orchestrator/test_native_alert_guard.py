@@ -2302,6 +2302,57 @@ def test_the_end_of_step_guard_never_retaps_a_label_it_already_cleared_from_the_
     assert sum(1 for action in driver.actions if action[0] == "tap") == 1
 
 
+def test_the_end_of_step_guard_does_not_report_a_revealed_app_screen_as_a_lingering_tree_prompt() -> (
+    None
+):
+    # The other half of the test above, and the one a bare label-containment check cannot tell
+    # apart from it: `savePassword`'s 26.5 shape names only ordinary UI vocabulary ("Save",
+    # "Not Now"), so once the sheet genuinely closes, an underlying app screen (an edit form, say)
+    # whose own ordinary buttons happen to carry those same two labels reads back identically to
+    # the sheet's own labels lingering past `settle`. The old check ("this shape's labels are still
+    # somewhere in the tree") could not distinguish the two and wrongly reported a give-up note for
+    # a prompt that actually cleared on round 0 (review finding) — comparing the whole tree's own
+    # identity against the pre-tap read, the way `_AlertGuardGate._dismiss_from_tree` already does
+    # for the mid-wait path, is what tells them apart.
+    class _RevealsAFormWithTheSameButtonLabels(FakeDriver):
+        def __init__(self) -> None:
+            super().__init__([_button("Save"), _button("Not Now")])
+
+        def tap(self, sel: base.Selector) -> None:
+            super().tap(sel)
+            # The sheet closes, revealing a form whose own "Save"/"Not Now" buttons are a distinct
+            # element from the sheet's own — modeled here by an extra, identified field alongside
+            # them, changing the tree's own identity even though the two button labels read back
+            # unchanged.
+            self.screen = [
+                _button("Save"),
+                _button("Not Now"),
+                {
+                    "identifier": "email_field",
+                    "label": None,
+                    "traits": [],
+                    "value": None,
+                    "frame": (0, 0, 10, 10),
+                    "nativeZ": None,
+                },
+            ]
+
+    driver = _RevealsAFormWithTheSameButtonLabels()
+    sheet = ResolvedAlertRule(
+        identifying_labels=frozenset({"Save", "Not Now"}),
+        tap_label="Not Now",
+        native=False,
+        in_tree=True,
+    )
+    guard = AlertGuardConfig(rules=[sheet])
+    cleared, alerts = _call(driver, guard)
+    assert cleared and alerts == [AlertEvent(label="Not Now")]
+    # The sheet genuinely cleared on round 0 — unlike the test above, where the same labels really
+    # are the sheet's own fade outlasting the bound, nothing here is left to report.
+    assert guard.blocked_note == ""
+    assert sum(1 for action in driver.actions if action[0] == "tap") == 1
+
+
 def test_dismiss_from_tree_once_does_not_promote_a_shadowed_choice_for_the_same_alert() -> None:
     # Two rules can share one alert's shape (`identifying_labels`) under different `tap_label`s —
     # a scenario's `choice` overriding a target's for the same prompt (BE-0177). Filtering the
@@ -2512,7 +2563,7 @@ def test_dismiss_from_tree_once_declines_an_excluded_shape() -> None:
     # again without a second, possibly-different query.
     driver = FakeDriver([_button("Not Now")])
     guard = AlertGuardConfig(rules=[guard_rule("Not Now")])
-    result, buttons = guard.dismiss_from_tree_once(
+    result, buttons, _signature = guard.dismiss_from_tree_once(
         driver, exclude=frozenset({frozenset({"Not Now"})})
     )
     assert result is None
@@ -2536,7 +2587,7 @@ def test_dismiss_from_tree_once_keeps_declaration_order_for_a_non_nested_pair() 
     )
     driver = FakeDriver([_button("X"), _button("Y"), _button("Z")])
     guard = AlertGuardConfig(rules=[scenario, target])
-    result, _buttons = guard.dismiss_from_tree_once(driver)
+    result, _buttons, _signature = guard.dismiss_from_tree_once(driver)
     assert result == AlertEvent(label="X")
 
 

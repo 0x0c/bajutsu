@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from typing import Literal
 
 from bajutsu.common.drivers import base
+from bajutsu.common.drivers.elements import tree_signature
 
 from ._functions import (
     alert_block_note,
@@ -416,7 +417,9 @@ class AlertGuardConfig:
 
     def dismiss_from_tree_once(
         self, driver: base.Driver, *, exclude: frozenset[frozenset[str]] = frozenset()
-    ) -> tuple[AlertEvent | NotTappable | None, list[str]]:
+    ) -> tuple[
+        AlertEvent | NotTappable | None, list[str], tuple[tuple[str | None, str | None], ...]
+    ]:
         """Tap a scenario-named dismiss button visible in the driver's own tree, once.
 
         The one-shot twin of `_AlertGuardGate._dismiss_from_tree` (waits.py), for the end-of-step and
@@ -456,12 +459,17 @@ class AlertGuardConfig:
         round-bounded loop retries — or None when nothing not-yet-excluded matched, the match was
         ambiguous, or the tap lost a race with the prompt closing itself; alongside it, the buttons
         this round's own tree read found, so a caller can resolve the same match again to learn
-        which shape a returned `AlertEvent` belongs to.
+        which shape a returned `AlertEvent` belongs to; and this same read's `tree_signature`
+        (`bajutsu.common.drivers.elements`), returned on every path rather than only a successful tap,
+        so the caller can tell a later round's merely-still-enumerable shape from a genuinely
+        unchanged screen (BE-0418 review finding) the same way `_AlertGuardGate._dismiss_from_tree`
+        already does for the mid-wait path.
         """
         rules = self.tree_dedup_rules
         if not rules:
-            return None, []
+            return None, [], ()
         elements = driver.query()
+        signature = tree_signature(elements)
         buttons = [
             el["label"]
             for el in elements
@@ -469,7 +477,7 @@ class AlertGuardConfig:
         ]
         rule = _resolve_alert_rule(rules, buttons, exclude)
         if rule is None:
-            return None, buttons
+            return None, buttons, signature
         label = rule.tap_label
         # The same uniqueness pre-check the mid-wait path applies: a bare `{"label": label}` selector
         # ignores traits, so an identified app button of the same name would make the tap ambiguous.
@@ -477,21 +485,21 @@ class AlertGuardConfig:
             sum(1 for el in elements if el["label"] == label and base.Trait.BUTTON in el["traits"])
             != 1
         ):
-            return None, buttons
+            return None, buttons, signature
         try:
             driver.tap({"label": label, "traits": [base.Trait.BUTTON]})
         except (base.ElementNotFound, base.AmbiguousSelector):
             # The prompt closed itself, or another button of that name appeared. Both benign here:
             # this is one opportunistic attempt on a step that has already failed, and the step's own
             # outcome still decides the verdict.
-            return None, buttons
+            return None, buttons, signature
         except base.ElementNotTappable:
             # Visible but not yet reachable — a scrim the sheet draws over its own button before
             # finishing its presentation animation. Not a reason to give up: the caller's own
             # round-bounded loop retries the same tap, mirroring the mid-wait path's own retry for
             # this exception (BE-0418).
-            return NotTappable(label=label, shape=rule.identifying_labels), buttons
-        return AlertEvent(label=label), buttons
+            return NotTappable(label=label, shape=rule.identifying_labels), buttons, signature
+        return AlertEvent(label=label), buttons, signature
 
     def __call__(
         self,
@@ -572,6 +580,13 @@ class AlertGuardConfig:
         # it again — with nothing naming it.
         tree_dismiss_shape: frozenset[str] | None = None
         tree_dismiss_label: str | None = None
+        # The tree read `dismiss_from_tree_once` took the round it last tapped fresh — the same
+        # signature `_AlertGuardGate._dismiss_from_tree` already compares a later poll's own read
+        # against (`waits/_alert_guard_gate.py`). A later round's shape still being enumerable in
+        # `tree_buttons` is not by itself evidence the tap never landed: an app-owned button revealed
+        # once the sheet actually closed can carry the identical label. Comparing full tree identity
+        # rather than just this shape's labels catches that case (BE-0418 review finding).
+        tree_dismiss_signature: tuple[tuple[str | None, str | None], ...] | None = None
         for round_index in range(_GUARD_CALL_MAX_ROUNDS):
             state, event, buttons = self.probe_native(driver, dismissed=dismissed_native)
             if state == "dismissed":
@@ -639,7 +654,7 @@ class AlertGuardConfig:
                 # No *SpringBoard* alert, which is both the licence to tap an app element (XCUITest
                 # answers an interrupting out-of-process alert before synthesizing any interaction)
                 # and the case where an app-owned prompt is the remaining explanation for the block.
-                tree_result, tree_buttons = self.dismiss_from_tree_once(
+                tree_result, tree_buttons, tree_read_signature = self.dismiss_from_tree_once(
                     driver, exclude=dismissed_tree_shapes
                 )
                 if isinstance(tree_result, AlertEvent):
@@ -657,6 +672,10 @@ class AlertGuardConfig:
                     # round (mirrors the native branch above).
                     tree_dismiss_shape = rule.identifying_labels
                     tree_dismiss_label = rule.tap_label
+                    # This round's own pre-tap read, so a later round's exhaustion check can tell
+                    # whether the screen has changed since — not merely whether this shape's labels
+                    # are still somewhere in it (BE-0418 review finding).
+                    tree_dismiss_signature = tree_read_signature
                     cleared = True
                     # No stuck diagnosis means whatever `note` holds is stale regardless — a native
                     # leftover note this round's own "absent" probe already disproves, say — so it
@@ -683,8 +702,18 @@ class AlertGuardConfig:
                 # `probe_native`'s "already_dismissed": the sheet's own fade outlasted `settle`, so
                 # settle again and give a sheet stacked underneath it another round to be
                 # presented, rather than ending the call on a lingering fade this loop exists to
-                # see past.
-                if any(shape <= set(tree_buttons) for shape in dismissed_tree_shapes):
+                # see past. But that inference only holds while the surrounding tree is otherwise
+                # unchanged since the tap: a shape's labels being enumerable ANYWHERE in the tree
+                # (`tree_buttons`, not one sheet's own set) matches just as well when the sheet
+                # genuinely closed and revealed an app screen whose own ordinary buttons happen to
+                # carry the same labels (`savePassword`'s 26.5 shape, "Save" / "Not Now", is exactly
+                # this — the mid-wait gate's `_dismiss_from_tree` already guards the identical
+                # ambiguity with its own `tree_signature` comparison, BE-0418 review finding).
+                if (
+                    tree_dismiss_signature is not None
+                    and tree_read_signature == tree_dismiss_signature
+                    and any(shape <= set(tree_buttons) for shape in dismissed_tree_shapes)
+                ):
                     # The tree twin of the native diagnosis above (BE-0418 review finding):
                     # `dismiss_from_tree_once` reported a tap as landed, but a sheet that accepts a
                     # tap without closing (a validation error re-presenting it, say) leaves this
@@ -706,10 +735,14 @@ class AlertGuardConfig:
                     continue
                 # Otherwise this round's tree read may simply have caught a still-animating screen
                 # mid-transition rather than a genuinely clear one, so a tree diagnosis is left as
-                # an earlier round's read left it rather than erased on this round's own account.
-                # A native one is not: this round's probe answered "absent", a deterministic
-                # no-SpringBoard-alert fact, so an `already_dismissed` round's leftover note would
-                # otherwise name an alert this call has since watched go away.
+                # an earlier round's read left it rather than erased on this round's own account —
+                # unless the signature comparison above is what ruled the lingering-fade branch out,
+                # in which case the tree genuinely changed since the tap and there is nothing left to
+                # diagnose (the labels the `any()` above found belong to whatever the tap actually
+                # revealed, not to the shape that was tapped). A native one is not: this round's probe
+                # answered "absent", a deterministic no-SpringBoard-alert fact, so an
+                # `already_dismissed` round's leftover note would otherwise name an alert this call
+                # has since watched go away.
                 if stuck_tree_label is None:
                     note = ""
                 break

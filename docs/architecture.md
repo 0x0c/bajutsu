@@ -814,12 +814,14 @@ Android; on iOS it rests on the fast suite's bookkeeping proof alone.
   already keeps this call from tapping it again, so nothing later would otherwise report a sheet
   that accepted the tap without actually closing. The tree note survives a later round that finds
   nothing to match, or one that goes on to dismiss an unrelated alert on either surface — native or
-  in-tree — rather than either round erasing a real, still-open diagnosis. A native leftover note
-  does not survive that same kind of later round, though: once its own probe proves the surface
-  absent, that is a deterministic fact the diagnosis
-  cannot outlive. XCUITest itself intervenes on an alert that interrupts an in-flight interaction
-  *before* this guard ever polls, and left alone answers with the alert's own default button —
-  silently overriding a scenario's policy with nothing in the report. The runner therefore installs
+  in-tree — rather than either round erasing a real, still-open diagnosis. A native leftover note is
+  not so durable, and for two different reasons depending on what that later round did: dismissing
+  an unrelated native alert recomputes the note fresh against that round's own buttons rather than
+  preserving whatever it held before, while a round whose own probe proves the surface absent clears
+  it outright — a deterministic fact the diagnosis cannot outlive. XCUITest itself intervenes on an
+  alert that interrupts an in-flight interaction *before* this guard ever polls, and left alone
+  answers with the alert's own default button — silently overriding a scenario's policy with
+  nothing in the report. The runner therefore installs
   an interruption monitor that presses the same rule-named button the reactive guard would, and
   records what it pressed as an ordinary `AlertEvent`; the orchestrator resolves each rule's labels
   and pushes them, alongside whether the guard governs the scenario at all, once per scenario over

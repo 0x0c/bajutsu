@@ -31,3 +31,21 @@ def shows_app_ui(elements: list[base.Element]) -> bool:
         (el.get("identifier") or el.get("label")) and "application" not in (el.get("traits") or [])
         for el in elements
     )
+
+
+def tree_signature(elements: list[base.Element]) -> tuple[tuple[str | None, str | None], ...]:
+    """A cheap identity for one poll's screen, used to tell a tap that did nothing from one that did.
+
+    A label still matching a poll's own tree after a tap is not by itself evidence that whatever it
+    named is still up: an app-authored button carrying the same label, revealed once a covering
+    sheet closed, matches just as well, and treating the two as the same element re-taps the app
+    under test rather than the sheet (`_AlertGuardGate._dismiss_from_tree`,
+    `waits/_alert_guard_gate.py`) or misdiagnoses a genuinely cleared sheet as one whose tap never
+    landed (`AlertGuardConfig.__call__`'s own tree bound-exhaustion check, BE-0418 review finding).
+
+    A tap the app never acted on leaves the screen byte-identical; a tap that dismissed a sheet does
+    not. Comparing this signature is what makes "the tap did not land" a measured claim rather than
+    an assumption. Labels and identifiers rather than frames, so an animation settling a few pixels
+    does not read as a changed screen.
+    """
+    return tuple((el["label"], el["identifier"]) for el in elements)
