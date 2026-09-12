@@ -23,7 +23,8 @@
 は大規模言語モデル(LLM)に何も尋ねず、シナリオも書き出しません。`repl`は、`query()`と、各
 [バックエンド](../../docs/ja/glossary.md#driver-backend-actuator-platform)がすでに実装している
 操作メソッドを呼び出すだけの、薄いループにすぎません。そのため、XCUITest・adb・Playwrightは、
-バックエンド固有のコードなしにこのシェルを手に入れます。
+読み取りと操作についてはバックエンド固有のコードなしにこのシェルを手に入れます(終了時の経路だけ
+は、Web専用の分岐を1つ持ちます。詳細設計を参照)。
 
 ## 動機
 
@@ -31,13 +32,16 @@
 今日、その問い自体の重さに見合わないコストがかかります。操作者は、Xcode の Accessibility
 Inspector やブラウザの開発者ツールで、ツリーを目で読むことができます。しかし、その読み取りは
 バックエンド固有の手段に頼ります。しかも、シナリオのステップが実際に照合する、正規化
-された`id`・`label`・`traits`フィールドは表示されません。Bajutsu内では、`record`と`crawl`のどちら
-もAI呼び出しを介してアプリを操作し、シナリオや画面マップという、それぞれ固有の成果物向けに整形
-された出力を作ります。`serve`のWeb UIが持つAuthorビューは、これより近いところまで来ています。
-`/api/capture/start`と`/api/capture/resolve`([BE-0262](../../roadmaps/BE-0262-serve-author-live-step-picker/BE-0262-serve-author-live-step-picker-ja.md))
-は、ライブなドライバを起動し、AI呼び出しなしにセレクタをそのツリーに対して解決します。ただし、
+された`id`・`label`・`traits`フィールドは表示されません。`bajutsu doctor`はすでにコマンドライン
+からライブな画面を読みますが、それが評価するのはidの網羅率やnamespace外のidといった規約であり、
+ドライバは1回だけ確かめて畳んでしまいます。ツリーを一覧として読ませることも、idを操作することも
+しません。Bajutsu内では、`record`と`crawl`のどちらもAI呼び出しを介してアプリを操作し、シナリオや
+画面マップという、それぞれ固有の成果物向けに整形された出力を作ります。`serve`のWeb UIが持つ
+Authorビューは、これより近いところまで来ています。`/api/capture/start`と`/api/capture/resolve`
+([BE-0262](../../roadmaps/BE-0262-serve-author-live-step-picker/BE-0262-serve-author-live-step-picker-ja.md))
+は、ライブなドライバを起動し、AI呼び出しなしに画面上のクリックをセレクタへ解決します。ただし、
 この選択肢はブラウザのタブの中で動くピッカーであり、シナリオに足す1ステップを選ぶために作られて
-いて、端末でidを打ってその場で操作する経路ではありません。現在の画面はどう見えていて、その中の
+いて、打ったidが解決するかどうかには答えません。現在の画面はどう見えていて、その中の
 1つのidを操作すると何が起きるか。この直接的でバックエンドに依存しない問いへ、コマンドラインから
 答える手段は、どれも用意されていません。
 
@@ -60,10 +64,10 @@ Inspector やブラウザの開発者ツールで、ツリーを目で読むこ�
 します。デバイスの起動は、`record`と`crawl`が使っているのと同じ`launch_driver`
 (`bajutsu/common/runner/launch.py`)を再利用し、`udid`の解決(`playwright`アクチュエータでは省略)
 とデバイスの起動を済ませてからドライバを渡します。`--headed`/`--no-headed`と`--browser`はWebバック
-エンド専用で、`record`自身の`_with_headed`・`_resolve_browser`ヘルパーを再利用します。この2つは、
-このシェルにとって特に重要です。headlessなブラウザのままでは、操作者が変化を確かめる画面その
-ものがありません。起動すると、`repl`は解決したバックエンドとターゲットを表示し、続けて
-`bajutsu>`というプロンプトを出します。
+エンド専用で、`record`・`crawl`・`run`が共有する`_with_headed`・`_resolve_browser`ヘルパー
+(`bajutsu/cli/_shared.py`)を再利用します。この2つは、このシェルにとって特に重要です。headlessな
+ブラウザのままでは、操作者が変化を確かめる画面そのものがありません。起動すると、`repl`は解決した
+バックエンドとターゲットを表示し、続けて`bajutsu>`というプロンプトを出します。
 
 v1のコマンドは、id中心の小さな集合にとどめます。
 
@@ -76,7 +80,7 @@ v1のコマンドは、id中心の小さな集合にとどめます。
 | `back` | `driver.back()`を呼びます |
 | `screenshot [path]` | `driver.screenshot(path)`を呼びます。`path`省略時は自動で名前を付けます |
 | `help` | 上記のコマンド一覧を表示します |
-| `exit` / `quit` | シェルを終了します。デバイス側のアプリ(xcuitest・adb)はそのまま起動状態を保ちますが、Webバックエンドのブラウザは、repl自身がそのプロセスを所有しているため、`driver.close()`で終了します |
+| `exit` / `quit` | シェルを終了します。デバイス側のアプリ(xcuitest・adb)はそのまま起動状態を保ちますが、Webバックエンドのブラウザは、repl自身がそのプロセスを所有しているため、Webのライフサイクルフック(`cast(base.BackendLifecycle, driver).close()`。`WebEnvironment.teardown`が呼ぶのと同じ呼び出しで、`Driver`自体は`close()`を宣言していません)で終了します |
 
 ツリーを読む操作、あるいはツリーに対して解決するすべてのコマンドは、`run`の各ハンドラと同じ
 やり方で、アクチュエーション用の読み取りを求めます。ドライバが実装していれば
@@ -91,7 +95,7 @@ v1のコマンドは、id中心の小さな集合にとどめます。
 (`bajutsu/common/orchestrator/actions/handlers/gestures.py`)を経由せず、`driver.tap()`を直接
 呼びます。そのため、別の要素に覆われたターゲットに対しては、`run`ならまず範囲を区切った
 スクロールを試みて成功するところを、`repl`では`ElementNotTappable`を送出します。これは意図した
-v1の割り切りであり(検討した代替案を参照)、こっそり回避すべき不具合ではありません。
+v1の割り切りであり、こっそり回避すべき不具合ではありません(検討した代替案を参照)。
 
 `tap`と`type`は、要素を`id`だけで指定します。これは、`run`が受け付ける完全な
 [セレクタ](../../docs/ja/glossary.md#シナリオのオーサリング)構文(`id`・`idMatches`・`label`・
@@ -113,6 +117,13 @@ v1ではそこまで届きません。ツリーに要素そのものが現れな
 素直に追加できます。すべてを一度に追加すると、この項目は、1回でレビューできる変更の範囲を
 超えてしまいます。
 
+`repl`は、`record/`・`crawl/`と並ぶ、独立した最上位パッケージ`bajutsu/repl/`に置きます
+(`docs/architecture.md`のモジュール一覧に行を1つ追加するので、`make lint-module-map`は通り
+続けます)。コマンド解析、`tree`・`find`の表示、`ElementNotFound`・`AmbiguousSelector`・
+`ElementNotTappable`の各経路には、`run`の各ハンドラと同じように`FakeDriver`を使った高速スイート
+のテストを付けます。そのため、新しいモジュールは最初のPRから
+`coverage-floors.json`のファイル単位のフロアを満たし、あとから追いかける必要がありません。
+
 ## 検討した代替案
 
 - **プラットフォーム固有のツール(Xcode の Accessibility Inspector、ブラウザの開発者ツール)で
@@ -124,10 +135,17 @@ v1ではそこまで届きません。ツリーに要素そのものが現れな
 - **新しいコマンドの代わりに、`serve`のAuthorライブステップピッカーを使う。** この項目では
   却下しました。`/api/capture/start`・`/api/capture/resolve`
   ([BE-0262](../../roadmaps/BE-0262-serve-author-live-step-picker/BE-0262-serve-author-live-step-picker-ja.md))
-  は、AI呼び出しなしにライブなドライバを起動し、セレクタをそのツリーに対して解決する機能を、
+  は、AI呼び出しなしにライブなドライバを起動し、画面上のクリックをセレクタへ解決する機能を、
   すでに提供しています。ただし、それはシナリオに足す1ステップを選ぶために作られたブラウザの
-  ピッカーを通してです。端末でidを打ってその場で操作する経路がなく、ブラウザのタブとエディタの
-  どちらも開かずに済ませたいという、この項目が動機とする、より狭い需要には答えません。
+  ピッカーを通してです。打ったidが解決するかどうかには答えず、端末でidを打ってその場で操作する
+  経路もありません。ブラウザのタブとエディタのどちらも開かずに済ませたいという、この項目が動機
+  とする、より狭い需要には答えません。
+- **`repl`の`tap`を、`run`の`_tap_with_recovery`経由にする。** v1では却下しました。
+  `base.raise_if_covered`が送出する`ElementNotTappable`を、覆っている要素の名前ごとそのまま
+  見せるほうが、セレクタを確かめている最中にはより役立つ答えになります。回復を望む操作者は、
+  明示的な`scroll`コマンドを打ってから、もう一度`tap`すればよいだけです。代償は、`repl`が
+  `run`なら回復する場面で失敗を報告することです。覆われたターゲットに対して、両者の答えが
+  食い違いうる、という点は、詳細設計で述べたとおりです。
 - **新しいコマンドの代わりに、`record`に「手動モード」フラグを足す。** 却下しました。`record`の
   ループは、スクリーンショットから操作を提案する`ClaudeAgent`を中心に組まれており、必ずシナリオ
   の書き出しで終わります。そこに人間が打つコマンドの経路を継ぎ足すと、AI駆動の経路と非AIの経路が
@@ -147,18 +165,22 @@ v1ではそこまで届きません。ツリーに要素そのものが現れな
 > 作業分解（作業の単位ごとに 1 つ）に対応し、ログには変更内容と時期（古い順）を PR へのリンクと
 > ともに記録します。
 
-- [ ] `bajutsu repl`コマンドの土台。`_load_effective_with_source`・`_select_actuator_or_exit`・
-  `launch_driver`の再利用、`--headed`・`--no-headed`・`--browser`、`bajutsu>`プロンプトのループ、
-  `help`・`exit`・`quit`(終了時のWeb限定`driver.close()`を含みます)。
+- [ ] 新しい`bajutsu/repl/`パッケージでの`bajutsu repl`コマンドの土台。
+  `_load_effective_with_source`・`_select_actuator_or_exit`・`launch_driver`の再利用、
+  `--headed`・`--no-headed`・`--browser`、`bajutsu>`プロンプトのループ、`help`・`exit`・`quit`
+  (終了時のWeb限定`cast(base.BackendLifecycle, driver).close()`を含みます)。
 - [ ] `tree`・`tree --json`・`find <substring>`。`settled_query()`・`query()`とread-lagバリアの
   経路を再利用します。
 - [ ] `tap <id>`・`type <id> <text>`。`run`と同じ形で`ElementNotFound`・`AmbiguousSelector`・
   `ElementNotTappable`を表示します。
 - [ ] `back`・`screenshot [path]`。
+- [ ] `FakeDriver`を使った高速スイートのテスト。コマンド解析、`tree`・`find`の表示、
+  `ElementNotFound`・`AmbiguousSelector`・`ElementNotTappable`の各経路を対象にします。
 - [ ] `docs/cli.md`と`docs/ja/cli.md`のリファレンス節。あわせて、`repl`によって古くなるCLIの一覧
   (`docs/glossary.md`と`docs/ja/glossary.md`のCLI動詞の表、`docs/architecture.md`のコマンド一覧
   ([BE-0113](../../roadmaps/BE-0113-design-doc-realignment/BE-0113-design-doc-realignment-ja.md)))
-  も更新します。
+  と、`bajutsu/repl/`自身の`docs/architecture.md`モジュール表への行(`make lint-module-map`)も
+  更新します。
 
 ## 参考
 
@@ -167,6 +189,7 @@ v1ではそこまで届きません。ツリーに要素そのものが現れな
 - [`Selector`](../../docs/ja/glossary.md#シナリオのオーサリング) —
   `bajutsu/common/scenario/models/selector.py`
 - `SettledReadProvider` — `bajutsu/common/drivers/base/settled_read_provider.py`
+- `BackendLifecycle` — `bajutsu/common/drivers/base/backend_lifecycle.py`
 - `record`と`crawl` — `repl`が隣に位置する、既存の2つのTier 1オーサリング経路(`docs/cli.md`)
 - [BE-0332 — read-lagバリア](../../roadmaps/BE-0332-read-lag-barrier/BE-0332-read-lag-barrier-ja.md)
 - [BE-0262 — Author エディタにライブなステップ選択と target 単位に絞った run を導入する](../../roadmaps/BE-0262-serve-author-live-step-picker/BE-0262-serve-author-live-step-picker-ja.md)
