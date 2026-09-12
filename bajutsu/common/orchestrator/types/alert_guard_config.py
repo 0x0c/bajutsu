@@ -49,20 +49,40 @@ NativeAlertState = Literal[
 
 
 def _widest_first(rules: Iterable[ResolvedAlertRule]) -> list[ResolvedAlertRule]:
-    """*rules*, widest shape first — a stable sort, so BE-0177's scenario-before-target precedence
-    among same-shape rules survives.
+    """*rules*, with a nested shape's wider sibling moved ahead of it — everywhere else, including
+    between two rules of different width that do not nest, declaration order survives untouched.
 
     `_resolve_alert_rule`'s subset test only excludes a candidate whose shape is contained *in* an
     already-dismissed one, not the reverse, so whether a nested-shape prompt's narrower sibling can
     survive that exclusion and re-tap depends on which shape `matching_alert_rule` — itself
-    first-match-in-list-order — happens to try first. Ordering by size before every dedup-path
-    lookup removes that dependency on the catalogue's own declaration order, without reordering
-    `tree_rules` itself: `_AlertGuardGate._dismiss_from_tree` (`waits/_alert_guard_gate.py`) and
-    `dismiss_from_tree_once` below both sort a *copy* of that property to match through, so it stays
-    the shared, declaration-ordered base both stable-sort from, rather than something either
-    consumer's own call reorders in place.
+    first-match-in-list-order — happens to try first. Reordering only a nested pair, rather than
+    sorting every rule by raw label count, removes that dependency on the catalogue's own
+    declaration order without also inverting BE-0177's scenario-before-target precedence for a pair
+    that does not nest — a plain width sort is a stable sort, and a stable sort only preserves that
+    precedence *among same-shape rules* (review finding: sorting by width promoted a wider target
+    rule ahead of a narrower scenario rule the two do not otherwise relate). Implemented as a stable
+    bubble pass: two adjacent rules swap only when the earlier one's shape is a proper subset of the
+    later one's, repeated until no such adjacent pair remains — small enough lists (a handful of
+    rules per prompt at most) that a quadratic pass costs nothing, and simple enough to see that a
+    pair with no subset relation between them, in either direction, never moves.
+
+    Without reordering `tree_rules` itself: `_AlertGuardGate._dismiss_from_tree`
+    (`waits/_alert_guard_gate.py`) and `dismiss_from_tree_once` below both sort a *copy* of that
+    property to match through, so it stays the shared, declaration-ordered base both derive from,
+    rather than something either consumer's own call reorders in place.
     """
-    return sorted(rules, key=lambda rule: len(rule.identifying_labels), reverse=True)
+    result = list(rules)
+    swapped = True
+    while swapped:
+        swapped = False
+        for i in range(len(result) - 1):
+            if result[i].identifying_labels < result[i + 1].identifying_labels:
+                # `result[i]` is a proper subset of `result[i + 1]` — the wider shape must be tried
+                # first, so the subset test above excludes the narrower one once the wider one is
+                # dismissed rather than the reverse.
+                result[i], result[i + 1] = result[i + 1], result[i]
+                swapped = True
+    return result
 
 
 def _resolve_alert_rule(
@@ -115,19 +135,20 @@ def _leftover_after_answered(
     `buttons` a dismissing round actually read: `buttons` is `system_alert_labels()`'s enumeration
     of every alert SpringBoard currently holds, not one alert's own button set, so a second,
     different, unidentified alert already up alongside the one just tapped — the ordinary shape of
-    a stacked pair queued by one action, not a corner case, per this file's own
-    `test_the_end_of_step_guard_still_recovers_a_collision_on_its_very_first_round` — would have
-    its own buttons permanently credited to the tapped alert and never surfaced (review finding:
-    recording the whole read this way was tried and reverted). The trade-off this leaves stands the
-    other way: a rule whose `identifying_labels` deliberately names only *some* of its alert's
-    buttons (`ResolvedAlertRule`'s own docstring — "not a demand that the shape's labels be the
-    alert's whole button set") leaves the rest stranded here, reported as if a second, different,
-    unhandled alert had joined the one already dismissed. No currently declared native shape does
-    this (every entry in `_LABELS` names its prompt's whole button set), and the two failure
-    directions are irreconcilable from a flat button list alone — nothing here can tell "this
-    alert's own unlisted button" apart from "a different alert's button that happens to be
-    enumerable at the same moment" — so this side stays the accepted gap rather than the
-    swallowed-stranger one, which a passing scenario hits today.
+    a stacked pair queued by one action, not a corner case, per
+    `test_the_end_of_step_guard_still_names_a_co_present_alert_no_rule_identifies`
+    (`tests/orchestrator/test_native_alert_guard.py`) — would have its own buttons permanently
+    credited to the tapped alert and never surfaced (review finding: recording the whole read this
+    way was tried and reverted). The trade-off this leaves stands the other way: a rule whose
+    `identifying_labels` deliberately names only *some* of its alert's buttons
+    (`ResolvedAlertRule`'s own docstring — "not a demand that the shape's labels be the alert's
+    whole button set") leaves the rest stranded here, reported as if a second, different, unhandled
+    alert had joined the one already dismissed. No currently declared native shape does this (every
+    entry in `_LABELS` names its prompt's whole button set), and the two failure directions are
+    irreconcilable from a flat button list alone — nothing here can tell "this alert's own unlisted
+    button" apart from "a different alert's button that happens to be enumerable at the same
+    moment" — so this side stays the accepted gap rather than the swallowed-stranger one, which a
+    passing scenario hits today.
     """
     leftover = list(buttons)
     for shape in dismissed:
@@ -226,16 +247,27 @@ class AlertGuardConfig:
         "Don't Allow" buttons would be tapped (BE-0406).
 
         In declaration order — deliberately, unlike `native_rules` below: BE-0177's
-        scenario-before-target precedence has to survive here unconditionally, not merely for
-        same-shape rules, and `_widest_first` is a stable sort that only preserves precedence
-        *among* same-shape rules. Both `_AlertGuardGate._dismiss_from_tree`
-        (`waits/_alert_guard_gate.py`) and `dismiss_from_tree_once` below apply `_widest_first` to a
-        *copy* of what they read from this property, rather than reordering the property itself —
-        the two are declared twins over the same screen, and matching through the same ordering is
-        what keeps them from resolving a shape two different rules could both claim differently
-        depending on which one happens to be running (BE-0418 review finding).
+        scenario-before-target precedence has to survive here unconditionally, and `_widest_first`
+        below only ever reorders a *nested* pair, leaving every other pair — including two rules of
+        different width that do not nest — exactly where declaration put them, so applying it to a
+        copy still leaves that precedence intact. `tree_dedup_rules` below applies it once, so
+        `_AlertGuardGate._dismiss_from_tree` (`waits/_alert_guard_gate.py`) and
+        `dismiss_from_tree_once` below — declared twins over the same screen — read the identical
+        ordering rather than each calling `_widest_first` on its own copy, which would leave nothing
+        to stop the two from drifting apart the way this file's own `native_rules` docstring warns a
+        duplicated filter would (BE-0418 review finding).
         """
         return [rule for rule in self.rules if rule.in_tree]
+
+    @property
+    def tree_dedup_rules(self) -> list[ResolvedAlertRule]:
+        """`tree_rules`, with a nested shape's wider sibling moved ahead of it (`_widest_first`) —
+        the one place every in-tree, dedup-aware match reads from, so `dismiss_from_tree_once`
+        below, `__call__`'s own tree re-resolution, and `_AlertGuardGate._dismiss_from_tree`
+        (`waits/_alert_guard_gate.py`) can never resolve the same screen through three different
+        orderings (BE-0418 review finding).
+        """
+        return _widest_first(self.tree_rules)
 
     @property
     def native_rules(self) -> list[ResolvedAlertRule]:
@@ -404,7 +436,7 @@ class AlertGuardConfig:
         this round's own tree read found, so a caller can resolve the same match again to learn
         which shape a returned `AlertEvent` belongs to.
         """
-        rules = _widest_first(self.tree_rules)
+        rules = self.tree_dedup_rules
         if not rules:
             return None, []
         elements = driver.query()
@@ -581,7 +613,7 @@ class AlertGuardConfig:
                     # over the same widest-first ordering `dismiss_from_tree_once` itself just used,
                     # so this always agrees with what it actually matched.
                     rule = _resolve_alert_rule(
-                        _widest_first(self.tree_rules), tree_buttons, dismissed_tree_shapes
+                        self.tree_dedup_rules, tree_buttons, dismissed_tree_shapes
                     )
                     assert rule is not None  # the round that just dismissed this alert matched it
                     dismissed_tree_shapes |= {rule.identifying_labels}

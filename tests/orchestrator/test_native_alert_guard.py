@@ -2358,6 +2358,26 @@ def test_dismiss_from_tree_once_declines_an_excluded_shape() -> None:
     assert not any(action[0] == "tap" for action in driver.actions)
 
 
+def test_dismiss_from_tree_once_keeps_declaration_order_for_a_non_nested_pair() -> None:
+    # `_widest_first` must only ever reorder a *nested* pair -- moving a wider, unrelated rule
+    # ahead of a narrower one that does not nest with it would invert BE-0177's scenario-before-
+    # target precedence for any two rules of different width that both happen to match the same
+    # read (review finding: a plain width sort did exactly that). `scenario` (declared first,
+    # narrower) and `target` (declared second, wider) share no label at all, so neither nests in
+    # the other -- both match this read independently, and declaration order alone must still
+    # decide which one the tap goes to.
+    scenario = ResolvedAlertRule(
+        identifying_labels=frozenset({"X"}), tap_label="X", native=False, in_tree=True
+    )
+    target = ResolvedAlertRule(
+        identifying_labels=frozenset({"Y", "Z"}), tap_label="Y", native=False, in_tree=True
+    )
+    driver = FakeDriver([_button("X"), _button("Y"), _button("Z")])
+    guard = AlertGuardConfig(rules=[scenario, target])
+    result, _buttons = guard.dismiss_from_tree_once(driver)
+    assert result == AlertEvent(label="X")
+
+
 def test_the_end_of_step_guard_finds_a_second_tree_alert_behind_an_excluded_first_match() -> None:
     # The tree twin of the native "stacked alert behind a fading first match" case: excluding the
     # winning match must not end the search the instant it lands back on an already-answered
