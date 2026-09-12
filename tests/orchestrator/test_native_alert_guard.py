@@ -2002,8 +2002,10 @@ def test_the_end_of_step_guard_does_not_retap_a_fading_alert_after_a_toctou_race
     # rest of the surface (an earlier round's own still-fading dismissal included) is (BE-0418
     # review finding). Round 0 dismisses `notifications`; its fade outlasts `settle`, and a second,
     # disjoint alert joins it; round 1 tries the second alert, which races away before the tap
-    # lands; round 2 must still decline `notifications`' own lingering fade rather than tapping the
-    # device a second real time.
+    # lands — a live native read, so the tree is left alone that round too (BE-0418 review
+    # finding); round 2's own read is genuinely empty, and must still decline `notifications`'
+    # lingering fade rather than tapping the device a second real time, while finally reaching the
+    # tree.
     handled = 0
 
     def react(d: FakeDriver, kind: str, _arg: object) -> None:
@@ -2037,8 +2039,9 @@ def test_the_end_of_step_guard_does_not_retap_a_fading_alert_after_a_toctou_race
                 _button("Cancel"),
             ]
         elif settle_calls == 2:
-            # The second alert genuinely resolves on its own; only notifications' fade remains.
-            driver.system_alert_buttons = [_button("Allow"), _button("Don't Allow")]
+            # Both alerts genuinely resolve on their own, so round 2's own native read is empty —
+            # the only read that licenses the tree tap now (BE-0418 review finding).
+            driver.system_alert_buttons = []
 
     guard = AlertGuardConfig(rules=[notifications, second, tree_rule])
     alerts: list[AlertEvent] = []
@@ -2081,53 +2084,31 @@ def test_the_end_of_step_guard_names_an_unhandled_button_after_a_toctou_race() -
     assert "OK" not in guard.blocked_note and "Cancel" not in guard.blocked_note
 
 
-def test_the_end_of_step_guard_names_a_leftover_native_alert_when_a_stuck_tap_finally_lands() -> (
-    None
-):
-    # The sibling of the fix above, in the branch that clears a stuck tree diagnosis once its own
-    # shape finally lands: that clear used to be unconditional, on the same flawed premise that
-    # `"absent"` always means the whole native surface is clear. A co-present native alert that
-    # raced away the very same round must still be named, not silently dropped by the clear.
-    class _StuckThenLands(FakeDriver):
-        def __init__(self) -> None:
-            super().__init__([_button("Stuck")])
-            self.tree_tap_calls = 0
-
-        def tap(self, sel: base.Selector) -> None:
-            self.tree_tap_calls += 1
-            if self.tree_tap_calls == 1:
-                raise base.ElementNotTappable("the scrim has not lifted yet")
-            super().tap(sel)
-
+def test_the_end_of_step_guard_never_taps_the_tree_while_a_native_alert_races() -> None:
+    # `"absent"` stopped meaning "the SpringBoard surface is clear" once the time-of-check/time-of-
+    # use race started carrying its own non-empty read forward -- but the tree tap was still
+    # licensed by `state == "absent"` alone, so it could fire with a live system alert demonstrably
+    # on screen. XCUITest answers an interrupting alert with its own default button before
+    # synthesizing any interaction (BE-0399), so a tap issued here would silently override the
+    # scenario's own policy with nothing in the report. A tree rule's own button is present and
+    # tappable throughout, and is never touched (BE-0418 review finding).
+    class _RacesAwayEveryRound(FakeDriver):
         def handle_system_alert(self, sel: base.Selector, timeout: float) -> None:
             raise base.ElementNotFound("the prompt raced away")
 
-    driver = _StuckThenLands()
+    driver = _RacesAwayEveryRound([_button("Sheet")])
     driver.system_alert_buttons = [_button("OK"), _button("Cancel"), _button("Weird Button")]
-    stuck_rule = ResolvedAlertRule(
-        identifying_labels=frozenset({"Stuck"}), tap_label="Stuck", native=False, in_tree=True
+    tree_rule = ResolvedAlertRule(
+        identifying_labels=frozenset({"Sheet"}), tap_label="Sheet", native=False, in_tree=True
     )
     native_rule = ResolvedAlertRule(
         identifying_labels=frozenset({"OK", "Cancel"}), tap_label="OK", native=True, in_tree=False
     )
-    settle_calls = 0
-
-    def settle() -> None:
-        nonlocal settle_calls
-        settle_calls += 1
-        if settle_calls == 2:  # right after round 1's own successful "Stuck" dismissal
-            driver.screen = []
-
-    guard = AlertGuardConfig(rules=[stuck_rule, native_rule])
-    alerts: list[AlertEvent] = []
-    cleared = guard(driver, alerts, settle=settle)
-    assert cleared and alerts == [AlertEvent(label="Stuck")]
-    # The stuck tap finally landed, but the same round's native probe raced away leaving "Weird
-    # Button" unaccounted for -- clearing the stuck diagnosis must not silently drop it.
+    guard = AlertGuardConfig(rules=[tree_rule, native_rule])
+    cleared, alerts = _call(driver, guard)
+    assert not cleared and alerts == []
+    assert not any(action[0] == "tap" for action in driver.actions)  # the tree was never touched
     assert "Weird Button" in guard.blocked_note
-    # ...but the raced-away "OK"/"Cancel" shape itself must not also be named: a rule did identify
-    # it, so reporting it as unhandled would be the same misdiagnosis (BE-0418 review finding).
-    assert "OK" not in guard.blocked_note and "Cancel" not in guard.blocked_note
 
 
 def test_the_end_of_step_guard_names_a_leftover_native_alert_on_a_lingering_tree_round() -> None:

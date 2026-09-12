@@ -241,6 +241,32 @@ def _bound_exhaustion_note(
     return ""
 
 
+def _native_round_worth_another_try(
+    dismissed_native: frozenset[frozenset[str]],
+    buttons: Sequence[str],
+    native_rules: Sequence[ResolvedAlertRule],
+) -> bool:
+    """Whether a native round that resolved nothing new might still read differently on a later
+    round (BE-0418) — shared by the `"unhandled"` branch and the time-of-check/time-of-use race
+    branch of `"absent"`, which face the identical question over the identical read.
+
+    Settling and giving the surface another round, rather than ending the call, only pays off in
+    two cases: a fade this call itself created (`dismissed_native` non-empty), or a live
+    shared-label collision (some rule's own shape is present on `buttons`, just not uniquely). A
+    rule ruled out by an *excluded* label being present is neither of those — its shape can be a
+    subset of `buttons` with no fade and no collision at all — so the `excluded_labels` check keeps
+    that case out too (review finding: no currently declared native rule has an excluded label, but
+    a tree-side one already does, `savePassword`'s 26.5 shape, and native rules gain them the same
+    way tree ones did). Neither holding means a later round can only re-read exactly what this one
+    did or find the alert gone on its own, either of which would spend or erase a diagnosis this
+    round could otherwise keep for nothing this call could still change.
+    """
+    return bool(dismissed_native) or any(
+        rule.identifying_labels <= set(buttons) and not rule.excluded_labels & set(buttons)
+        for rule in native_rules
+    )
+
+
 @dataclass(frozen=True)
 class NotTappable:
     """`dismiss_from_tree_once`'s landing race: the button resolved but the tap could not land.
@@ -669,16 +695,6 @@ class AlertGuardConfig:
                 # reach "absent" — and any app-owned sheet stacked underneath — instead of
                 # spending the whole bound re-reading the same alert.
                 #
-                # `_bound_exhaustion_note` checks `native_dismiss_shape` directly against this
-                # round's own read — see its own docstring for why that must be a containment check
-                # against the final round alone, not a streak counted since the tap (BE-0418 review
-                # finding).
-                exhaustion_note = _bound_exhaustion_note(
-                    dismiss_shape=native_dismiss_shape,
-                    dismiss_label=native_dismiss_label,
-                    buttons=buttons,
-                    round_index=round_index,
-                )
                 if stuck_tree_label is None:
                     # `buttons` is the whole enumerable SpringBoard surface, not this one rule's
                     # own set, so declining a re-tap here does not mean nothing else is up: a
@@ -689,7 +705,20 @@ class AlertGuardConfig:
                     # "unhandled" branch below both make too, for the identical reason. A leftover
                     # takes precedence over the exhaustion note: something else is demonstrably
                     # still up regardless of whether this round's own tap ever landed.
-                    note = _leftover_note(buttons, dismissed_native, exhaustion_note)
+                    # `_bound_exhaustion_note` checks `native_dismiss_shape` directly against this
+                    # round's own read — see its own docstring for why that must be a containment
+                    # check against the final round alone, not a streak counted since the tap
+                    # (BE-0418 review finding).
+                    note = _leftover_note(
+                        buttons,
+                        dismissed_native,
+                        _bound_exhaustion_note(
+                            dismiss_shape=native_dismiss_shape,
+                            dismiss_label=native_dismiss_label,
+                            buttons=buttons,
+                            round_index=round_index,
+                        ),
+                    )
                 settle()
                 continue
             if state == "absent":
@@ -716,140 +745,156 @@ class AlertGuardConfig:
                 # review finding). Re-resolving over the same `buttons`/`dismissed_native`
                 # `probe_native` itself just matched against learns which rule, if any, raced away —
                 # the same way other branches re-resolve to learn what was actually tapped.
-                raced_native_rule = _resolve_alert_rule(
-                    self.native_rules, buttons, dismissed_native
-                )
-                leftover_dismissed_native = (
-                    dismissed_native | {raced_native_rule.identifying_labels}
-                    if raced_native_rule is not None
-                    else dismissed_native
-                )
-                tree_result, tree_buttons, tree_read_signature = self.dismiss_from_tree_once(
-                    driver, exclude=dismissed_tree_shapes
-                )
-                if isinstance(tree_result, AlertEvent):
-                    alerts.append(tree_result)  # excluded once cleared, so never a repeat report
-                    # Re-resolves which shape was just tapped, over the same `buttons` this round's
-                    # own tree read already found, the same way the native branch above does — and
-                    # over the same widest-first ordering `dismiss_from_tree_once` itself just used,
-                    # so this always agrees with what it actually matched.
-                    rule = _resolve_alert_rule(
-                        self.tree_dedup_rules, tree_buttons, dismissed_tree_shapes
+                leftover_dismissed_native = dismissed_native | {
+                    rule.identifying_labels
+                    for rule in [_resolve_alert_rule(self.native_rules, buttons, dismissed_native)]
+                    if rule is not None
+                }
+                if not buttons:
+                    # Only a genuinely empty read licenses the tree tap at all: XCUITest answers an
+                    # interrupting out-of-process alert with its own default button before
+                    # synthesizing any interaction, so tapping the tree while the time-of-check/
+                    # time-of-use race above has left a live SpringBoard alert on screen is
+                    # unlicensed, not merely undiagnosed (BE-0399, BE-0418 review finding).
+                    tree_result, tree_buttons, tree_read_signature = self.dismiss_from_tree_once(
+                        driver, exclude=dismissed_tree_shapes
                     )
-                    assert rule is not None  # the round that just dismissed this alert matched it
-                    dismissed_tree_shapes |= {rule.identifying_labels}
-                    # A fresh tap, of any shape, is what `_bound_exhaustion_note` checks on the final
-                    # round (mirrors the native branch above).
-                    tree_dismiss_shape, tree_dismiss_label = rule.identifying_labels, rule.tap_label
-                    # This round's own pre-tap read, so a later round's exhaustion check can tell
-                    # whether the screen has changed since — not merely whether this shape's labels
-                    # are still somewhere in it (BE-0418 review finding).
-                    tree_dismiss_signature, cleared = tree_read_signature, True
-                    # No stuck diagnosis means whatever `note` holds is stale regardless. A stuck
-                    # shape *contained in* this round's own dismissal clears too — not only an exact
-                    # match: `dismissed_tree_shapes |= {rule.identifying_labels}` two lines above
-                    # feeds `_resolve_alert_rule`'s own subset test, so a nested stuck shape can
-                    # never match again this call either, and the two must agree (equality alone
-                    # left a nested `stuck_tree_shape` marked both "answered, never retry" and
-                    # "could not clear" at once, BE-0418 review finding). One with a shape genuinely
-                    # unrelated by containment survives, even sharing the stuck one's own tap label
-                    # (`savePassword`'s three shapes all tap "Not Now" under `choice: deny`): this
-                    # round dismissed a genuinely different in-tree prompt, which says nothing about
-                    # whether the stuck one is still stuck.
-                    if stuck_tree_shape is None or stuck_tree_shape <= rule.identifying_labels:
-                        # Gated on this round's own native read, not merely on `state == "absent"`:
-                        # the time-of-check/time-of-use race also answers "absent" after a
-                        # *non-empty* read, and that only proves the one alert this round tried to
-                        # tap is gone — anything else SpringBoard still enumerates is as unhandled as
-                        # a fresh `"unhandled"` round would find it, not disproven by this round's
-                        # own tree dismissal (BE-0418 review finding).
-                        note = _leftover_note(buttons, leftover_dismissed_native, "")
-                        stuck_tree_label = stuck_tree_shape = None
-                    settle()
-                    continue
-                if isinstance(tree_result, NotTappable):
-                    note = uncleared_prompt_note(tree_result.label)
-                    stuck_tree_label, stuck_tree_shape = tree_result.label, tree_result.shape
-                    settle()
-                    continue
-                # Nothing not-yet-excluded matched, so this round's own read is exactly the
-                # evidence the post-loop check needs if no later round touches the tree again.
-                post_tap_tree_buttons, post_tap_tree_signature = tree_buttons, tree_read_signature
-                # The tree twin of the native `if not buttons` retraction above, but keyed on a
-                # shape rather than the whole surface: a dismissed shape no longer enumerable
-                # anywhere in this read is gone, not fading, so keeping it in `exclude` could only
-                # ever wrongly block a *different*, not-yet-tapped rule whose own shape happens to
-                # nest inside it (BE-0418 review finding) — nothing here retypes a genuinely
-                # re-presented occurrence of the retracted shape itself, since that shape's own
-                # labels being present again is indistinguishable from a fade that never lifted; the
-                # same tree-identity gap the other two open threads on this line already cover.
-                dismissed_tree_shapes = frozenset(
-                    shape for shape in dismissed_tree_shapes if shape <= set(tree_buttons)
-                )
-                # A shape this call already cleared, still enumerable among this round's own tree
-                # read, is the in-tree twin of
-                # `probe_native`'s "already_dismissed": the sheet's own fade outlasted `settle`, so
-                # settle again and give a sheet stacked underneath it another round to be
-                # presented, rather than ending the call on a lingering fade this loop exists to
-                # see past. But that inference only holds while the surrounding tree is otherwise
-                # unchanged since the tap: a shape's labels being enumerable ANYWHERE in the tree
-                # (`tree_buttons`, not one sheet's own set) matches just as well when the sheet
-                # genuinely closed and revealed an app screen whose own ordinary buttons happen to
-                # carry the same labels (`savePassword`'s 26.5 shape, "Save" / "Not Now", is exactly
-                # this — the mid-wait gate's `_dismiss_from_tree` already guards the identical
-                # ambiguity with its own `tree_signature` comparison, BE-0418 review finding).
-                if (
-                    tree_dismiss_signature is not None
-                    and tree_read_signature == tree_dismiss_signature
-                    and any(shape <= set(tree_buttons) for shape in dismissed_tree_shapes)
-                ):
-                    # The tree twin of the native diagnosis above (BE-0418 review finding):
-                    # `dismiss_from_tree_once` reported a tap as landed, but a sheet that accepts a
-                    # tap without closing (a validation error re-presenting it, say) leaves this
-                    # call unable to ever act on it again (`exclude`), and otherwise the step would
-                    # fail on the bare `element not found` BE-0402 exists to prevent. The tree side
-                    # has no leftover concept of its own to prefer over the exhaustion note, but the
-                    # native side does: this round's own native read can still hold a co-present,
-                    # unhandled button — a time-of-check/time-of-use race answers "absent" after a
-                    # non-empty read too, so "absent" alone is not proof the native surface is clear
-                    # (BE-0418 review finding).
-                    exhaustion_note = _bound_exhaustion_note(
-                        dismiss_shape=tree_dismiss_shape,
-                        dismiss_label=tree_dismiss_label,
-                        buttons=tree_buttons,
-                        round_index=round_index,
+                    if isinstance(tree_result, AlertEvent):
+                        alerts.append(tree_result)  # excluded once cleared, never a repeat report
+                        # Re-resolves which shape was just tapped, over the same `buttons` this
+                        # round's own tree read already found, the same way the native branch above
+                        # does — and over the same widest-first ordering `dismiss_from_tree_once`
+                        # itself just used, so this always agrees with what it actually matched.
+                        rule = _resolve_alert_rule(
+                            self.tree_dedup_rules, tree_buttons, dismissed_tree_shapes
+                        )
+                        assert rule is not None  # the round that dismissed this alert matched it
+                        dismissed_tree_shapes |= {rule.identifying_labels}
+                        # A fresh tap, of any shape, is what `_bound_exhaustion_note` checks on the
+                        # final round (mirrors the native branch above).
+                        # `tree_dismiss_signature` is this round's own pre-tap read, so a later
+                        # round's exhaustion check can tell whether the screen has changed since —
+                        # not merely whether this shape's labels are still somewhere in it (BE-0418
+                        # review finding).
+                        (
+                            tree_dismiss_shape,
+                            tree_dismiss_label,
+                            tree_dismiss_signature,
+                            cleared,
+                        ) = (rule.identifying_labels, rule.tap_label, tree_read_signature, True)
+                        # No stuck diagnosis means whatever `note` holds is stale regardless. A
+                        # stuck shape *contained in* this round's own dismissal clears too — not
+                        # only an exact match: `dismissed_tree_shapes |= {rule.identifying_labels}`
+                        # two lines above feeds `_resolve_alert_rule`'s own subset test, so a nested
+                        # stuck shape can never match again this call either, and the two must agree
+                        # (equality alone left a nested `stuck_tree_shape` marked both "answered,
+                        # never retry" and "could not clear" at once, BE-0418 review finding). One
+                        # with a shape genuinely unrelated by containment survives, even sharing the
+                        # stuck one's own tap label (`savePassword`'s three shapes all tap "Not Now"
+                        # under `choice: deny`): this round dismissed a genuinely different in-tree
+                        # prompt, which says nothing about whether the stuck one is still stuck.
+                        if stuck_tree_shape is None or stuck_tree_shape <= rule.identifying_labels:
+                            note = _leftover_note(buttons, leftover_dismissed_native, "")
+                            stuck_tree_label = stuck_tree_shape = None
+                        settle()
+                        continue
+                    if isinstance(tree_result, NotTappable):
+                        note, stuck_tree_label, stuck_tree_shape = (
+                            uncleared_prompt_note(tree_result.label),
+                            tree_result.label,
+                            tree_result.shape,
+                        )
+                        settle()
+                        continue
+                    # Nothing not-yet-excluded matched, so this round's own read is exactly the
+                    # evidence the post-loop check needs if no later round touches the tree again.
+                    post_tap_tree_buttons, post_tap_tree_signature = (
+                        tree_buttons,
+                        tree_read_signature,
                     )
-                    if stuck_tree_label is None:
-                        note = _leftover_note(buttons, leftover_dismissed_native, exhaustion_note)
-                    settle()
-                    continue
-                # An open `NotTappable` diagnosis is itself something this call still has to act
-                # on, so an ambiguous read here — nothing matched, and no already-excluded shape is
-                # lingering either — must not end the call while a round remains for the scrim to
-                # lift: the exact bounded retry Unit 2 exists for (BE-0418 review finding). The same
-                # reasoning as the lingering-exclusion branch above applies: a tree read that matches
-                # nothing is not evidence the stuck sheet resolved, only that this read did not catch
-                # it.
-                if stuck_tree_label is not None:
-                    settle()
-                    continue
-                # Otherwise this round's tree read may simply have caught a still-animating screen
-                # mid-transition rather than a genuinely clear one, so a tree diagnosis is left as
-                # an earlier round's read left it rather than erased on this round's own account —
-                # unless the signature comparison above is what ruled the lingering-fade branch out,
-                # in which case the tree genuinely changed since the tap and there is nothing left to
-                # diagnose (the labels the `any()` above found belong to whatever the tap actually
-                # revealed, not to the shape that was tapped — genuinely revealed, or a genuine
-                # re-presentation of the same prompt, are the same evidence from here and are left
-                # the same way rather than risk tapping the former a second, unlicensed time, BE-0418
-                # review finding). Gated on this round's own native read,
-                # not merely on `state == "absent"`: the time-of-check/time-of-use race also answers
-                # "absent" after a *non-empty* read, and that only proves the one alert this round
-                # tried to tap is gone — anything else SpringBoard still enumerates is as unhandled
-                # as a fresh `"unhandled"` round would find it, and dropping it is the bare `element
-                # not found` BE-0402 exists to prevent (BE-0418 review finding).
+                    # The tree twin of the native retraction above, but keyed on a shape rather than
+                    # the whole surface: a dismissed shape no longer enumerable anywhere in this
+                    # read is gone, not fading, so keeping it in `exclude` could only ever wrongly
+                    # block a *different*, not-yet-tapped rule whose own shape happens to nest
+                    # inside it (BE-0418 review finding) — nothing here retaps a genuinely
+                    # re-presented occurrence of the retracted shape itself, since that shape's own
+                    # labels being present again is indistinguishable from a fade that never lifted;
+                    # the same tree-identity gap the other two open threads on this line already
+                    # cover.
+                    dismissed_tree_shapes = frozenset(
+                        shape for shape in dismissed_tree_shapes if shape <= set(tree_buttons)
+                    )
+                    # A shape this call already cleared, still enumerable among this round's own
+                    # tree read, is the in-tree twin of `probe_native`'s "already_dismissed": the
+                    # sheet's own fade outlasted `settle`, so settle again and give a sheet stacked
+                    # underneath it another round to be presented, rather than ending the call on a
+                    # lingering fade this loop exists to see past. But that inference only holds
+                    # while the surrounding tree is otherwise unchanged since the tap: a shape's
+                    # labels being enumerable ANYWHERE in the tree (`tree_buttons`, not one sheet's
+                    # own set) matches just as well when the sheet genuinely closed and revealed an
+                    # app screen whose own ordinary buttons happen to carry the same labels
+                    # (`savePassword`'s 26.5 shape, "Save" / "Not Now", is exactly this — the
+                    # mid-wait gate's `_dismiss_from_tree` already guards the identical ambiguity
+                    # with its own `tree_signature` comparison, BE-0418 review finding).
+                    if (
+                        tree_dismiss_signature is not None
+                        and tree_read_signature == tree_dismiss_signature
+                        and any(shape <= set(tree_buttons) for shape in dismissed_tree_shapes)
+                    ):
+                        # The tree twin of the native diagnosis above (BE-0418 review finding):
+                        # `dismiss_from_tree_once` reported a tap as landed, but a sheet that
+                        # accepts a tap without closing (a validation error re-presenting it, say)
+                        # leaves this call unable to ever act on it again (`exclude`), and otherwise
+                        # the step would fail on the bare `element not found` BE-0402 exists to
+                        # prevent. The tree side has no leftover concept of its own to prefer over
+                        # the exhaustion note, but the native side does: a co-present, unhandled
+                        # native button this call has not already answered still outranks it.
+                        if stuck_tree_label is None:
+                            note = _leftover_note(
+                                buttons,
+                                leftover_dismissed_native,
+                                _bound_exhaustion_note(
+                                    dismiss_shape=tree_dismiss_shape,
+                                    dismiss_label=tree_dismiss_label,
+                                    buttons=tree_buttons,
+                                    round_index=round_index,
+                                ),
+                            )
+                        settle()
+                        continue
+                    # An open `NotTappable` diagnosis is itself something this call still has to
+                    # act on, so an ambiguous read here — nothing matched, and no already-excluded
+                    # shape is lingering either — must not end the call while a round remains for
+                    # the scrim to lift: the exact bounded retry Unit 2 exists for (BE-0418 review
+                    # finding). The same reasoning as the lingering-exclusion branch above applies:
+                    # a tree read that matches nothing is not evidence the stuck sheet resolved,
+                    # only that this read did not catch it.
+                    if stuck_tree_label is not None:
+                        settle()
+                        continue
+                    # Otherwise this round's tree read may simply have caught a still-animating
+                    # screen mid-transition rather than a genuinely clear one, so a tree diagnosis
+                    # is left as an earlier round's read left it rather than erased on this round's
+                    # own account — unless the signature comparison above is what ruled the
+                    # lingering-fade branch out, in which case the tree genuinely changed since the
+                    # tap and there is nothing left to diagnose (the labels the `any()` above found
+                    # belong to whatever the tap actually revealed, not to the shape that was
+                    # tapped — genuinely revealed, or a genuine re-presentation of the same prompt,
+                    # are the same evidence from here and are left the same way rather than risk
+                    # tapping the former a second, unlicensed time, BE-0418 review finding).
+                    note = _leftover_note(buttons, leftover_dismissed_native, "")
+                    break
+                # A non-empty read here is the time-of-check/time-of-use race, not a genuinely
+                # clear surface, so the tree is left alone entirely this round rather than tapped
+                # under a live SpringBoard alert (BE-0399, BE-0418 review finding). Whatever this
+                # round did not already answer is reported. Always worth another round, unlike
+                # `"unhandled"` below: the raced rule's own shape is in `buttons` by construction —
+                # `probe_native` only reaches this race after `matching_alert_rule` already matched
+                # it, which itself never returns a rule ruled out by its own `excluded_labels` — so
+                # `_native_round_worth_another_try` can never end the call here.
                 note = _leftover_note(buttons, leftover_dismissed_native, "")
-                break
+                settle()
+                continue
             if state == "unhandled":
                 # An alert is up that no rule identifies — but `buttons` is the whole SpringBoard
                 # enumeration, not a fresh, self-contained read, and can still hold a label this
@@ -867,42 +912,25 @@ class AlertGuardConfig:
                 # lands in from one round to the next is not something the caller controls, so the
                 # diagnosis must not depend on it (review finding).
                 if stuck_tree_label is None:
-                    exhaustion_note = _bound_exhaustion_note(
-                        dismiss_shape=native_dismiss_shape,
-                        dismiss_label=native_dismiss_label,
-                        buttons=buttons,
-                        round_index=round_index,
+                    note = _leftover_note(
+                        buttons,
+                        dismissed_native,
+                        _bound_exhaustion_note(
+                            dismiss_shape=native_dismiss_shape,
+                            dismiss_label=native_dismiss_label,
+                            buttons=buttons,
+                            round_index=round_index,
+                        ),
                     )
-                    note = _leftover_note(buttons, dismissed_native, exhaustion_note)
-                if (
-                    stuck_tree_label is None
-                    and not dismissed_native
-                    and not any(
-                        rule.identifying_labels <= set(buttons)
-                        and not rule.excluded_labels & set(buttons)
-                        for rule in self.native_rules
-                    )
+                if stuck_tree_label is None and not _native_round_worth_another_try(
+                    dismissed_native, buttons, self.native_rules
                 ):
-                    # Settling and giving the fade another round, rather than ending the call, only
-                    # pays off in the two cases this branch exists for: a fade this call itself
-                    # created (`dismissed_native` non-empty), or a live shared-label collision (some
-                    # rule's own shape is present on `buttons`, just not uniquely — the flagship
-                    # pair above). A rule ruled out by an *excluded* label being present is neither
-                    # of those — its shape can be a subset of `buttons` with no fade and no
-                    # collision at all — so the `excluded_labels` check keeps that case out too
-                    # (review finding: no currently declared native rule has an excluded label, but
-                    # a tree-side one already does, `savePassword`'s 26.5 shape, and native rules
-                    # gain them the same way tree ones did). Neither holds here, so a later round
-                    # can only re-read exactly what this one did — settling for it would spend a
-                    # full `settle_after_alert_dismiss` sweep for nothing, since a system alert
-                    # still up never lets that sweep's own tree-diff read settle anyway — or find
-                    # the alert gone on its own, which would erase the very diagnosis this round
-                    # just made, the bare `element not found` BE-0402 exists to prevent. Breaking
-                    # here instead keeps that diagnosis and costs nothing this call could still
-                    # change — unless an open `NotTappable` diagnosis is the one still in flight, in
-                    # which case this round's own note computation above was already skipped, so
-                    # there is nothing of this round's own to lose, and a round remains for Unit 2's
-                    # landing-race retry to meet the scrim lifting (BE-0418 review finding).
+                    # Breaking here keeps this round's own diagnosis and costs nothing this call
+                    # could still change — unless an open `NotTappable` diagnosis is the one still
+                    # in flight, in which case this round's own note computation above was already
+                    # skipped, so there is nothing of this round's own to lose, and a round remains
+                    # for Unit 2's landing-race retry to meet the scrim lifting (BE-0418 review
+                    # finding).
                     break
                 settle()
                 continue
