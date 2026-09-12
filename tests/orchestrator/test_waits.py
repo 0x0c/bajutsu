@@ -926,6 +926,38 @@ def test_wait_guard_matches_in_tree_shapes_the_same_way_dismiss_from_tree_once_d
     assert gate.alerts == [AlertEvent(label="Not Now")]
 
 
+def test_wait_guard_never_taps_the_tree_while_a_native_alert_races() -> None:
+    # Twin of `AlertGuardConfig.__call__`'s own `if not buttons` gate (BE-0418 review finding):
+    # `probe_native`'s time-of-check/time-of-use race answers "absent" over a *non-empty* button
+    # read, and this poll reaches the tree through the same `Driver.tap` that call reasons about --
+    # so licensing the tap on `state == "absent"` alone risks it landing under a live SpringBoard
+    # alert, which XCUITest answers with its own default button before synthesizing the interaction
+    # (BE-0399). Before the fix, `probed_absent` ignored the non-empty `buttons` this probe reports
+    # and tapped the tree sheet anyway.
+    from bajutsu.common.orchestrator.types import AlertEvent, NativeAlertState, ResolvedAlertRule
+    from bajutsu.common.orchestrator.waits import _AlertGuardGate
+
+    class _RacesAway(AlertGuardConfig):
+        def probe_native(
+            self,
+            driver: base.Driver,
+            reserved: base.Selector | None = None,
+            *,
+            dismissed: frozenset[frozenset[str]] = frozenset(),
+        ) -> tuple[NativeAlertState, AlertEvent | None, list[str]]:
+            return "absent", None, ["Allow", "Don't Allow"]
+
+    tree_rule = ResolvedAlertRule(
+        identifying_labels=frozenset({"Save"}), tap_label="Save", native=False, in_tree=True
+    )
+    driver = FakeDriver([el(None, "Save", ["button"])])
+    guard = _RacesAway(rules=[tree_rule])
+    gate = _AlertGuardGate(driver=driver, clock=_LogicalClock(), guard=guard, alerts=[])
+    gate.observe(driver.query())
+    assert gate.alerts == []
+    assert not any(action[0] == "tap" for action in driver.actions)
+
+
 def test_wait_guard_reports_a_persistent_collapse_it_cannot_clear() -> None:
     """BE-0402: on a backend with no native path, a persistently collapsed screen is not something
     the guard will act on — it neither guesses nor calls a model. What it does instead is refuse to

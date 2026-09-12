@@ -134,7 +134,12 @@ class _AlertGuardGate:
             # lingering-fade race `__call__` already handles -- would otherwise have the new state
             # silently read as "nothing is blocking" here (review finding).
             assert state != "already_dismissed"
-            probed_absent = state == "absent"
+            # Only a genuinely empty read licenses the in-tree tap below: since BE-0418 the
+            # time-of-check/time-of-use race answers "absent" over a *non-empty* read, and a live
+            # SpringBoard alert is what XCUITest answers with its own default button before
+            # synthesizing any interaction (BE-0399) — the same gate `AlertGuardConfig.__call__`
+            # applies with its own `if not buttons` before reaching `dismiss_from_tree_once`.
+            probed_absent = state == "absent" and not buttons
             self._native_unhandled = state == "unhandled"
             self._native_reserved = state == "reserved"
             if state != "unhandled" and not self._tree_gave_up:
