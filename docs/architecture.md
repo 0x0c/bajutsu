@@ -871,9 +871,10 @@ Android; on iOS it rests on the fast suite's bookkeeping proof alone.
   `poll_interval`; and the note is left alone entirely while an in-tree give-up is still standing —
   so a `wait` blocked by an undeclared SpringBoard alert sitting on top of a sheet the tree path
   gave up on reports the sheet, not the alert. And `_dismiss_from_tree` resolves over the same
-  widest-first `tree_dedup_rules` the one-shot dismiss already used, rather than plain declaration
-  order, so two nested in-tree shapes tap the wider one first regardless of how a scenario declared
-  them — which button a `savePassword`-style policy presses during a `wait` can change accordingly
+  widest-first `tree_dedup_rules` this change gives the one-shot dismiss, rather than plain
+  declaration order, so two nested in-tree shapes match the wider one first regardless of how a
+  scenario declared them — which is what stops a fade still enumerating the wider shape's buttons
+  from matching the narrower sibling and being tapped a second time mid-`wait`
 - DSL `iosTipKitHandling` (BE-0389), an opt-in guard for a blocking Apple TipKit tip: TipKit's
   presentation marks the content it covers accessibility-hidden rather than merely occluding it, so a
   blocked tap can fail as `ElementNotFound`, not only `ElementNotTappable`. The XCUITest backend alone
