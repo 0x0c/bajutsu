@@ -9,6 +9,7 @@
 | Author | [@0x0c](https://github.com/0x0c) |
 | Status | **Implemented** |
 | Tracking issue | [Search](https://github.com/bajutsu-e2e/bajutsu/issues?q=is%3Aissue+label%3Aroadmap-tracking+in%3Atitle+"BE-0421") |
+| Implementing PR | [#1999](https://github.com/bajutsu-e2e/bajutsu/pull/1999) (units 1-6) |
 | Topic | Platform support |
 | Related | [BE-0361](../BE-0361-ios-ci-simulator-diagnostics/BE-0361-ios-ci-simulator-diagnostics.md), [BE-0319](../BE-0319-xcuitest-cold-spawn-resilience/BE-0319-xcuitest-cold-spawn-resilience.md), [BE-0415](../BE-0415-driver-call-trace-per-scenario/BE-0415-driver-call-trace-per-scenario.md) |
 <!-- /BE-METADATA -->
@@ -273,6 +274,18 @@ Nothing in this item changes what a non-macOS run captures.
 > Keep this current as work proceeds. The checklist mirrors the MECE work breakdown in
 > *Detailed design* (one box per unit of work); the log records what changed and when
 > (oldest first), linking the PRs.
+
+Log:
+
+- [#1999](https://github.com/bajutsu-e2e/bajutsu/pull/1999) — Units 1-6. Shipped the whole item.
+  Two corrections to this design landed with it, both found by the self-review pass: the capture site
+  is `end_lease` plus `_discard_runner`, not the discard alone (a mid-run crash releases without one,
+  and with `crash_retries: 0` no discard ever runs), and the guard is a `_runner_crashed()` predicate
+  rather than the discard's own `crashed` flag, which misses the shape where `xcodebuild` lingers past
+  its ended test run. Ownership of the snapshot moves to the releasing lease
+  (`take_crash_snapshot`), because the environment is kept warm per device and evidence left on it is
+  both readable and erasable by the next scenario to lease that device. The wedged-but-alive crash
+  shape is left to BE-0354 / BE-0361 and declared as such in `docs/ci.md` rather than implied covered.
 
 - [x] Unit 1 — `take_crash_snapshot()` on the `RunEnvironment` protocol shape and, returning a thunk
       that answers `[]`, on `_DeviceEnvironment` (ios.py), `WebEnvironment`, and `AndroidEnvironment`.
