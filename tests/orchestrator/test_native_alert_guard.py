@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
-from typing import cast
+from typing import ClassVar, cast
 
 import pytest
 from conftest import guard_rule
@@ -2150,6 +2150,51 @@ def test_the_end_of_step_guard_names_an_unhandled_button_after_a_toctou_race() -
     assert "OK" not in guard.blocked_note and "Cancel" not in guard.blocked_note
 
 
+def test_the_end_of_step_guard_does_not_call_a_fourth_queued_prompt_unhandled() -> None:
+    # The "dismissed" branch's own leftover check credited only `dismissed_native` -- the shapes
+    # this call has *tapped* -- not every rule `identified_alert_rules` finds on the same read, so a
+    # fourth declared prompt queued behind three the call already dismissed, uniquely identified on
+    # the final round's own read but not yet tapped, survived into the leftover and was named an
+    # alert no rule identifies (BE-0418 review finding). Unlike a mid-call round, the final round has
+    # no successor to self-correct it. Four disjoint native rules; rounds 0-2 dismiss the first
+    # three cleanly, and the fourth is still on screen, fully identified, when the bound is spent.
+    class _DismissesThreeOfFour(FakeDriver):
+        _SHAPES: ClassVar[dict[str, set[str]]] = {
+            "A1": {"A1", "A2"},
+            "B1": {"B1", "B2"},
+            "C1": {"C1", "C2"},
+        }
+
+        def handle_system_alert(self, sel: base.Selector, timeout: float) -> None:
+            super().handle_system_alert(sel, timeout)
+            label = sel["label"] if isinstance(sel, dict) else None
+            shape = self._SHAPES.get(label, set()) if label is not None else set()
+            self.system_alert_buttons = [
+                b for b in self.system_alert_buttons if b["label"] not in shape
+            ]
+
+    driver = _DismissesThreeOfFour([])
+    driver.system_alert_buttons = [
+        _button(label) for label in ("A1", "A2", "B1", "B2", "C1", "C2", "D1", "D2")
+    ]
+    guard = AlertGuardConfig(
+        rules=[
+            ResolvedAlertRule(identifying_labels=frozenset({"A1", "A2"}), tap_label="A1"),
+            ResolvedAlertRule(identifying_labels=frozenset({"B1", "B2"}), tap_label="B1"),
+            ResolvedAlertRule(identifying_labels=frozenset({"C1", "C2"}), tap_label="C1"),
+            ResolvedAlertRule(identifying_labels=frozenset({"D1", "D2"}), tap_label="D1"),
+        ]
+    )
+    cleared, alerts = _call(driver, guard)
+    assert cleared
+    assert alerts == [
+        AlertEvent(label="A1"),
+        AlertEvent(label="B1"),
+        AlertEvent(label="C1"),
+    ]
+    assert guard.blocked_note == ""
+
+
 def test_the_end_of_step_guard_does_not_call_a_co_present_declared_prompt_unhandled_on_a_race() -> (
     None
 ):
@@ -2231,6 +2276,49 @@ def test_the_end_of_step_guard_does_not_call_a_raced_ambiguous_alert_unhandled()
     cleared, alerts = _call(driver, guard)
     assert not cleared and alerts == []
     assert guard.blocked_note == uncleared_prompt_note("Allow")
+
+
+def test_the_end_of_step_guard_does_not_call_a_co_present_declared_prompt_unhandled_on_an_ambiguous_match() -> (
+    None
+):
+    # The "unhandled" branch's own leftover credit resolved only `_resolve_alert_rule`'s single
+    # match, unlike the race branch beside it (`leftover_dismissed_native`) and the mid-wait gate's
+    # own `"unhandled"` branch, both of which credit every rule `identified_alert_rules` finds on
+    # the same read (BE-0418 review finding). "notifications" hits `AmbiguousSelector` every round;
+    # "paste" is a second, disjoint declared prompt fully present on the same read but never itself
+    # attempted -- a single-rule credit still let its labels survive into the leftover and be named
+    # an alert no rule identifies.
+    class _AmbiguousEveryRound(FakeDriver):
+        def handle_system_alert(self, sel: base.Selector, timeout: float) -> None:
+            raise base.AmbiguousSelector("the alert offers this label twice")
+
+    driver = _AmbiguousEveryRound([])
+    driver.system_alert_buttons = [
+        _button("Allow"),
+        _button("Don't Allow"),
+        _button("Allow Paste"),
+        _button("Don't Allow Paste"),
+    ]
+    guard = AlertGuardConfig(
+        rules=[
+            ResolvedAlertRule(
+                identifying_labels=frozenset({"Allow", "Don't Allow"}),
+                tap_label="Allow",
+                native=True,
+                in_tree=False,
+            ),
+            ResolvedAlertRule(
+                identifying_labels=frozenset({"Allow Paste", "Don't Allow Paste"}),
+                tap_label="Allow Paste",
+                native=True,
+                in_tree=False,
+            ),
+        ]
+    )
+    cleared, alerts = _call(driver, guard)
+    assert not cleared and alerts == []
+    assert guard.blocked_note == uncleared_prompt_note("Allow")
+    assert "Allow Paste" not in guard.blocked_note and "Don't Allow Paste" not in guard.blocked_note
 
 
 def test_the_end_of_step_guard_never_taps_the_tree_while_a_native_alert_races() -> None:

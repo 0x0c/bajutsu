@@ -858,11 +858,13 @@ Android; on iOS it rests on the fast suite's bookkeeping proof alone.
   that state now also answers the time-of-check/time-of-use race — a matched rule's own tap racing
   away over a *non-empty* read — so a poll catching that race no longer licenses the in-tree dismiss
   the way a genuinely empty enumeration does, and a declared app-owned sheet stacked behind the race
-  goes uncleared for that poll's own `poll_interval` rather than being tapped immediately. The same
-  poll stopped clearing `blocked_note` unconditionally on that race too, and can now report its own
-  note naming whichever buttons no declared rule accounts for on the read — a note this path never
-  produced on a bare `"absent"` answer before. Its `"unhandled"` note changed three ways too: a read
-  a rule *did* identify, whose tap then found the label twice, now names that prompt as one the
+  goes untapped until a probe reads the surface genuinely empty rather than being tapped
+  immediately — for one `poll_interval` when the race resolves on the next probe, and for the
+  wait's whole remaining timeout when it does not, since nothing re-licenses the tap in between. The
+  same poll stopped clearing `blocked_note` unconditionally on that race too, and can now report its
+  own note naming whichever buttons no declared rule accounts for on the read — a note this path
+  never produced on a bare `"absent"` answer before. Its `"unhandled"` note changed three ways too:
+  an alert a rule *did* identify, whose tap then found the label twice, is now named as a prompt the
   guard could not clear rather than as one no rule identifies; a co-present button no rule
   identifies on that same read is credited the way the `raced` branch credits one, rather than the
   ambiguous rule's own diagnosis crowding it out and leaving that button unreported for a whole
