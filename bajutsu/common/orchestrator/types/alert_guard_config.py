@@ -225,10 +225,11 @@ def _bound_exhaustion_note(
     checking it alone both answers the only question that still matters and cannot be thrown off by
     a gap of any width or kind.
 
-    Callers decide for themselves whether an empty result here defers to a note of their own (the
-    native side's own leftover note; the tree side has no such concept, so it applies the result
-    directly), and whether to apply it at all (a still-open tree diagnosis, `stuck_tree_label`,
-    takes precedence over either surface's own note).
+    Both callers pass the result to `_leftover_note` as its *fallback*, so a native leftover this
+    call has not already answered outranks it on either surface: the tree side has no leftover of
+    its own, but still defers to the native one (`__call__`'s lingering-fade branch). Whether to
+    apply it at all is theirs too — a still-open tree diagnosis, `stuck_tree_label`, takes
+    precedence over either surface's own note.
     """
     if (
         round_index == _GUARD_CALL_MAX_ROUNDS - 1
