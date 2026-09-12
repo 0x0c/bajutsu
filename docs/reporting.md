@@ -19,17 +19,22 @@ runs/<runId>/
 ├── junit.xml         # CI integration (1 scenario = 1 testcase)
 ├── ctrf.json         # Common Test Report Format (richer CI consumers: PR comments, dashboards)
 ├── report.html       # self-contained HTML (no external assets)
-└── <stepId>/         # per-step evidence (when using FileSink)
-    ├── before.png    # screenshot, before the step acts
-    ├── after.png     # screenshot, after it acts
-    ├── elements.json # query() dump
-    ├── segment.mp4   # video (interval)
-    └── device.log    # deviceLog (interval)
+└── <sid>/            # one scenario's evidence (when using FileSink)
+    └── <stepId>/     # per-step evidence
+        ├── before.png    # screenshot, before the step acts
+        ├── after.png     # screenshot, after it acts
+        ├── elements.json # query() dump
+        ├── segment.mp4   # video (interval)
+        └── device.log    # deviceLog (interval)
 ```
 
 The CLI assigns `runId` as `YYYYMMDD-HHMMSS`. `bajutsu/common/run_meta/id.py`
 ([BE-0200](../roadmaps/BE-0200-run-id-contract/BE-0200-run-id-contract.md)) mints it once, so every
-call site shares one format. `stepId` is `step.name` or `step<i>`.
+call site shares one format. `sid` is `{NN}-{slug}`: a zero-padded run-order index plus the stem of
+the scenario's own source file (`login_flow.yaml` → `login_flow`), or a slug of the scenario's
+`name:` field when no source file is known — a scenario built directly rather than loaded from disk
+([BE-0417](../roadmaps/BE-0417-scenario-result-folder-naming/BE-0417-scenario-result-folder-naming.md)).
+`stepId` is `step.name` or `step<i>`.
 
 ## manifest.json
 
@@ -137,8 +142,10 @@ means the same thing after the run that produced it exits
   `scenarios` stays the flat result list, each entry tagged with its `engine`; `matrix` is
   `{ engines, scenarios, cells: { "<scenario>": { "<engine>": { ok, sid, failure } } } }` — a pure
   aggregation of those per-engine verdicts (the report renders it as a grid). `ok` is all-must-pass
-  across every engine × scenario. Omitted for a single-engine / iOS run. (`schemaVersion` is `4`
-  or higher once this block can appear.)
+  across every engine × scenario. Omitted for a single-engine / iOS run. Nothing enforces a unique
+  `name:` across a multi-file run, so a second scenario sharing an earlier one's name gets its own
+  row labeled with a `(2)`, `(3)`, … suffix rather than overwriting the first's cell. (`schemaVersion`
+  is `4` or higher once this block can appear.)
 
 ## junit.xml
 
@@ -226,14 +233,27 @@ example, the `ctrf-io/github-test-reporter` action turns it into a PR comment / 
 ## report.html
 
 A self-contained HTML for humans (inline CSS, no external assets). The header shows the run id and
-overall PASS/FAIL, the **scenario file name** under the run id (`source_name`), and the **file-level
-`description`** when present. Each scenario row's summary shows the **scenario name** and, when set,
-the **scenario-level `description`** beside it, so a run surfaces scenario name + file name +
-descriptions throughout. Bajutsu merges the scenario definition and its execution into one **Steps tab**. It has labelled sections (preconditions / **steps** /
+overall PASS/FAIL. Below that sits the **scenario file name** (`source_name`), the whole suite's
+label. `source_name` names the whole suite. A lone `--scenario` file gives its own name, and a
+multi-file or whole-dir run gives the containing directory's name instead. The **file-level
+`description`** follows when present.
+
+Each scenario row's summary shows the **scenario name**. It also shows the scenario's **own
+originating file name** (`source_files`). This name is distinct from the header's whole-suite
+label. A `bajutsu run` that read the scenario off disk sets `source_files`; an offline re-render
+does not. When set, the **scenario-level `description`** sits beside the name. A run thus surfaces
+scenario name, file name, and description throughout.
+
+Bajutsu merges the scenario definition and its execution into one **Steps tab**. It has labelled sections (preconditions / **steps** /
 **expectations**), each a table. The **steps** table: `#` / `result` (a PASS/FAIL pill in its own
 column) / `action` (a colored badge) / `detail` (the target description) / `at` / `view` (screenshot +
 an **in-report element-tree viewer**: the captured elements open in an in-page overlay, no new tab) /
-`reason`. The screenshot shown is the post-action `after.png`
+`reason`. The `#` column also carries the step's own line number in the scenario file when
+available. For example, it can read `2:15`. A `setup`/component expansion that changed the step
+list's shape drops it instead. A wrong line would mislead more than none. The `at` cell also shows
+the step's own elapsed time in parentheses, at the cell's end. For example, `3.2s (1.1s)`. That
+parenthetical shows whenever the duration rounds to something other than 0.0s. A slow `wait` or a
+sluggish gesture is then visible without opening the recording. The screenshot shown is the post-action `after.png`
 ([evidence](evidence.md#interval-evidence-video--devicelog--apptrace)). Every step that acts records
 one. A step that fails before acting records none, and shows its `before.png` instead. Hovering an
 element in the viewer highlights its frame on the screenshot. That frame comes from `elements.json`,
@@ -259,7 +279,17 @@ The **preconditions** table is collapsible (key / value).
 The **expectations** table uses parallel columns `result` / `kind` (badge) / `target` (the checked
 selector, e.g. `#counter.value`) / `comparison` (e.g. `== “2”`) / `reason`, with the same id/constant
 tokens. A **Rich / YAML toggle** switches the same tab between this structured view and the raw
-scenario YAML.
+scenario YAML. For a freshly baked `bajutsu run` report, that YAML is the scenario's own text, as
+authored. Comments and formatting stay intact: the report slices this text straight from the
+source file. It never re-serializes the parsed model. A literal `totp.secret` still gets masked in
+place. A scenario whose `setup`/component expansion changed its step count keeps this verbatim
+text — still accurate as authored — but loses the `#` column's line numbers, which the expansion
+would leave pointing at the wrong steps. A `data`/`dataFile`-driven scenario always shows the
+structured re-dump instead. It never shows the verbatim text. Every row shares one authored
+template. Substituting `${row.*}` per row leaves the step count unchanged. A verbatim slice would
+show the same unsubstituted template for every row. It would never show what that row actually
+ran. An offline re-render (`bajutsu report`, below) falls back to the structured re-dump it always
+used: the original file's raw text was never persisted into the run.
 
 A `visual` expectation renders an **interactive baseline-vs-actual comparator** beneath its row,
 with four modes: **Swipe** (drag a divider to wipe between the two), **Onion** (a slider cross-fades
@@ -290,14 +320,15 @@ Device Log / App Trace remain separate tabs.
 ## Write API
 
 ```python
-def write_report(run_dir, run_id, results, definitions=None, sources=None, source_name=None, description=None, provenance=None) -> Path  # all 4 formats; definitions = per-scenario dict, sources = raw YAML, source_name = scenario file name, description = file-level description; provenance = run-identity stamp (BE-0049)
-def write_html_and_junit(run_dir, run_id, results, definitions=None, sources=None, source_name=None, description=None, provenance=None) -> None  # the regenerable half (report.html + junit.xml + ctrf.json), leaving manifest.json untouched — used by re-render; provenance feeds the CTRF tool/environment fields
+def write_report(run_dir, run_id, results, definitions=None, sources=None, source_name=None, description=None, provenance=None, writer=None, target=None, label=None, source_files=None, step_lines=None) -> Path  # all 4 formats; definitions = per-scenario dict, sources = raw YAML, source_name = scenario file name (whole suite), description = file-level description; source_files / step_lines = each scenario's own file name and steps' original line numbers, when a live run recovered them; provenance = run-identity stamp (BE-0049)
+def write_html_and_junit(run_dir, run_id, results, definitions=None, sources=None, source_name=None, description=None, provenance=None, writer=None, source_files=None, step_lines=None) -> None  # the regenerable half (report.html + junit.xml + ctrf.json), leaving manifest.json untouched — used by re-render; provenance feeds the CTRF tool/environment fields
 def manifest_dict(run_id, results, *, source_name=None, provenance=None, target=None, label=None) -> dict  # the versioned render model (schemaVersion); the manifest source (for tests / inspection)
 def run_provenance(scenario_yaml, *, git_revision, config_source=None) -> dict  # the run-identity stamp: scenarioHash + toolVersion + optional gitRevision (BE-0049) + optional configSource (BE-0063)
 def ctrf_json(run_id, results, *, provenance=None) -> dict  # the CTRF projection of the result model (BE-0161); provenance feeds tool.version / environment.commit
 def junit_xml(results) -> str
-def html_report(run_id, results, run_dir=None, definitions=None, sources=None, source_name=None, description=None) -> str
-def scenario_render_inputs(scenarios) -> tuple[list[dict], list[str]]  # (definitions, sources); shared by the bake and the re-render
+def html_report(run_id, results, run_dir=None, definitions=None, sources=None, source_name=None, description=None, source_files=None, step_lines=None) -> str
+def scenario_render_inputs(scenarios, plan_sources=None) -> tuple[list[dict], list[str]]  # (definitions, sources); shared by the bake and the re-render — `sources` is each scenario's own verbatim YAML when `plan_sources` (keyed by declared scenario name) recovers one, else the structured re-dump as before
+def scenario_source_meta(scenarios, plan_sources=None) -> tuple[list[str | None], list[list[int] | None]]  # (source_files, step_lines), aligned with `scenario_render_inputs`'s `sources`
 ```
 
 `runner.run_and_report` calls this `write_report` and returns `(results, manifest_path)` to the CLI

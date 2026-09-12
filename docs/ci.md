@@ -110,7 +110,7 @@ A job whose bound follows from its own arithmetic sets its own value and gives t
 comment beside it: 180 minutes for the AWS Device Farm submission, 60 for the iOS scenario jobs, 30
 for the Android `smoke` job and 25 for the other Android scenario jobs, 20 for `claude-review`, 15
 for the Android Gradle-cache warm-up and for each of `ai-smoke`'s two live-model jobs, and 10 for
-`mcp-wire` and the prose companion. Every job carrying no such reasoning takes the repository default
+`mcp-wire`. Every job carrying no such reasoning takes the repository default
 of **30 minutes**. That default clears the slowest successful job we have measured, CodeQL's Swift
 analysis at about 20 minutes, and still turns a stall into a red check inside the half hour.
 

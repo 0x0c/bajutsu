@@ -266,7 +266,7 @@ def _emit_step(step: Step) -> list[str]:  # noqa: C901, PLR0911, PLR0912
         return lines
     if step.clear is not None:
         # No XCUIElement "clear" primitive: focus, select-all, then delete the whole selection —
-        # the faithful peer of the runner's focus-then-backspace clear (BE-0265).
+        # the same sequence the runner's driver actuates on a TEXT_SELECTION backend (BE-0265).
         target = _element(step.clear.into.as_selector())
         return [
             f"{target}.tap()",

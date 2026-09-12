@@ -180,7 +180,12 @@ def test_signed_redirect_is_never_stored() -> None:
     # caller. Asserted as a property, so a harmless reformat of the constant doesn't fail here.
     directives = {d.strip() for d in SIGNED_REDIRECT_CACHE_CONTROL.split(",")}
     assert "no-store" in directives
-    assert not [d for d in directives if d.startswith(("max-age", "s-maxage", "public"))]
+    assert "public" not in directives
+    # A *zero* freshness lifetime is the point (see the constant); a non-zero one is the regression.
+    assert not [
+        d for d in directives if d.startswith(("max-age", "s-maxage")) and not d.endswith("=0")
+    ]
+    assert "s-maxage=0" in directives  # the CDN that reads only a freshness lifetime
 
 
 def test_inline_artifact_is_never_stored_by_a_shared_cache() -> None:

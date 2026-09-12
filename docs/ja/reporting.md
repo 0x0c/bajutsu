@@ -19,15 +19,17 @@ runs/<runId>/
 ├── junit.xml         # CI 連携（1 シナリオ = 1 testcase）
 ├── ctrf.json         # Common Test Report Format（PR コメントやダッシュボードなど、より豊かな CI の消費側向け）
 ├── report.html       # 自己完結 HTML（外部アセット無し）
-└── <stepId>/         # ステップごとの証跡（FileSink 使用時）
-    ├── before.png    # screenshot（ステップが動作する前）
-    ├── after.png     # screenshot（動作したあと）
-    ├── elements.json # query() ダンプ
-    ├── segment.mp4   # video（区間）
-    └── device.log    # deviceLog（区間）
+└── <sid>/            # シナリオ単位の証跡（FileSink 使用時）
+    └── <stepId>/     # ステップごとの証跡
+        ├── before.png    # screenshot（ステップが動作する前）
+        ├── after.png     # screenshot（動作したあと）
+        ├── elements.json # query() ダンプ
+        ├── segment.mp4   # video（区間）
+        └── device.log    # deviceLog（区間）
 ```
 
-`runId` は `YYYYMMDD-HHMMSS` の形式で、`bajutsu/common/run_meta/id.py`（[BE-0200](../../roadmaps/BE-0200-run-id-contract/BE-0200-run-id-contract-ja.md)）が一箇所で採番します。この形式は report、Web UI、その他すべての呼び出し元で共有する単一の契約です。`stepId` は `step.name` または `step<i>` です。
+`runId` は `YYYYMMDD-HHMMSS` の形式で、`bajutsu/common/run_meta/id.py`（[BE-0200](../../roadmaps/BE-0200-run-id-contract/BE-0200-run-id-contract-ja.md)）が一箇所で採番します。この形式は report、Web UI、その他すべての呼び出し元で共有する単一の契約です。`sid` は `{NN}-{slug}` の形式で、ゼロ埋めされた実行順の連番と、シナリオを読み込んだ元ファイルの語幹（`login_flow.yaml` なら `login_flow`）をつなげたものです。ファイルから読み込まれていないシナリオ（メモリ上で直接組み立てられたものなど、元ファイルが不明な場合）では、代わりにシナリオの `name:` フィールドをスラッグ化した値になります
+（[BE-0417](../../roadmaps/BE-0417-scenario-result-folder-naming/BE-0417-scenario-result-folder-naming-ja.md)）。`stepId` は `step.name` または `step<i>` です。
 
 ## manifest.json
 
@@ -81,7 +83,7 @@ runs/<runId>/
 - `target`（トップ、任意）: この run が実行した target です。「Android の target は通るのに iOS の target は落ちる」を、保存済みのデータから計算できます（[BE-0404](../../roadmaps/BE-0404-collapse-project-layer/BE-0404-collapse-project-layer-ja.md)）。1 つの run が解決する target は 1 つなので、シナリオごとではなく `backend` の隣に置きます。`serve` はこれを run の行へ写し、target どうしを順位付けします。target を持たない run では省かれます。（この項目が出るようになった時点で `schemaVersion` は `10` 以上です。）
 - `label`（トップ、任意）: run 履歴の区切りです。bind している config 自身の名前か、運用者が `run --label` で上書きした値が入ります。不透明なメタデータで、解析も config との照合もせず、`ok` の入力にもなりません。`serve` を再起動したあとに 2 つの config の run を読み分けられるのは、この値のおかげです。label を持たない run では省かれます。（この項目が出るようになった時点で `schemaVersion` は `10` 以上です。）
 - `idb`（トップ、任意、レガシー）: 古い manifest には `idb_companion` / client のバージョンブロックが残っていることがあります（BE-0005）。idb バックエンドとともに BE-0290 で廃止され、今は書き出されません。未知のトップレベルキーは読み込み時に無視されるため、これを含む古い manifest も問題なく読めます。
-- `matrix`（トップ、任意）: クロスブラウザのエンジン × シナリオのグリッドで、`bajutsu run --browsers` の run のときだけ出ます（[BE-0076](../../roadmaps/BE-0076-web-cross-browser-engines/BE-0076-web-cross-browser-engines-ja.md)）。`scenarios` はフラットな結果リストのままで、各エントリに `engine` が付きます。`matrix` は `{ engines, scenarios, cells: { "<scenario>": { "<engine>": { ok, sid, failure } } } }` で、エンジンごとの判定を集約しただけのものです（report はこれをグリッドとして描画します）。`ok` はエンジン × シナリオのすべてに対する all-must-pass です。単一エンジン／iOS の run では省かれます。（このブロックが出るようになった時点で `schemaVersion` は `4` 以上です。）
+- `matrix`（トップ、任意）: クロスブラウザのエンジン × シナリオのグリッドで、`bajutsu run --browsers` の run のときだけ出ます（[BE-0076](../../roadmaps/BE-0076-web-cross-browser-engines/BE-0076-web-cross-browser-engines-ja.md)）。`scenarios` はフラットな結果リストのままで、各エントリに `engine` が付きます。`matrix` は `{ engines, scenarios, cells: { "<scenario>": { "<engine>": { ok, sid, failure } } } }` で、エンジンごとの判定を集約しただけのものです（report はこれをグリッドとして描画します）。`ok` はエンジン × シナリオのすべてに対する all-must-pass です。単一エンジン／iOS の run では省かれます。複数ファイルにまたがる run では `name` の一意性は保証されません。そのため、同じ名前のシナリオが2つ目以降にあると、最初のセルを上書きするのではなく、`(2)`、`(3)` などの接尾辞が付いた別の行として保持します。（このブロックが出るようになった時点で `schemaVersion` は `4` 以上です。）
 
 ## junit.xml
 
@@ -144,14 +146,24 @@ step 1 tap: FAIL 一致なし: {...}</failure>
 ## report.html
 
 人間が見る自己完結 HTML（インライン CSS、外部アセット無し）です。ヘッダには run id と全体 PASS/FAIL、
-その下にシナリオファイル名（`source_name`）、さらにファイルレベルの `description` があれば
-表示します。各シナリオ行のサマリにはシナリオ名と、設定があれば横にシナリオレベルの
-`description` を表示します。こうして run 全体でシナリオ名 + ファイル名 + description を提示します。
+その下にシナリオファイル名（`source_name`）を表示します。`source_name` は run 全体のラベルです。
+単一ファイルならそのファイル名、複数ファイルやディレクトリ指定なら親ディレクトリ名になります。
+さらにファイルレベルの `description` があれば表示します。
+
+各シナリオ行のサマリには、シナリオ名と、そのシナリオ自身の元ファイル名（`source_files`）を表示します。
+この元ファイル名は `source_name` とは別物です。`bajutsu run` がディスクからシナリオを読んだ場合だけ
+設定され、オフライン再描画では設定されません。設定があれば、横にシナリオレベルの `description` も
+表示します。こうして run 全体でシナリオ名 + ファイル名 + description を提示します。
 
 シナリオ定義とその実行結果は 1 つの Steps タブに統合され、ラベル付きセクション
 （**preconditions** / **steps** / **expectations**）ごとにテーブルで描画されます。steps テーブル：`#` / `result`（PASS/FAIL ピルを独立カラムで）/
 `action`（色付きバッジ）/ `detail`（対象説明）/ `at` / `view`（スクリーンショット＋レポート内 element tree
 ビューア: キャプチャした要素を別タブではなくページ内オーバーレイで開く）/ `reason`。
+`#` 列には、`step_lines` がシナリオファイル中の行番号を復元できたとき、`2:15` のようにその行番号も
+併記します。`setup` やコンポーネント展開でステップ構成が変わった場合、行番号は誤って示すより
+省略します。`at` セルには、所要時間が 0.0 秒以外に丸まるとき、セルの末尾に括弧書きで経過時間も
+表示します（例: `3.2s (1.1s)`）。時間のかかった `wait` や動作の遅いジェスチャーが、録画を開かなくても
+わかります。
 表示するスクリーンショットは、動作後の `after.png` です
 （[evidence](evidence.md#区間証跡video--devicelog--apptrace)）。動作したステップは、いずれも
 `after.png` を記録します。動作する前に失敗したステップは `after.png` を記録しないため、
@@ -178,7 +190,19 @@ detail 中の識別子（`#home.title`）と定数リテラル（`”text”` �
 preconditions テーブルは折りたたみ可（key / value）。
 expectations テーブルは並行カラム `result` / `kind`（バッジ）/ `target`（検査対象セレクタ。例:
 `#counter.value`）/ `comparison`（例 `== “2”`）/ `reason`（同じ id/定数トークン）です。Rich / YAML
-トグルで同じタブを構造化ビューと生のシナリオ YAML に切り替えられます。
+トグルで同じタブを構造化ビューと生のシナリオ YAML に切り替えられます。新しく bake した `bajutsu run`
+のレポートでは、その YAML はシナリオ自身の元ファイルから切り出した生テキストです。コメントや整形は
+パースしたモデルから作り直さないため、そのまま残ります。リテラルな `totp.secret` はその場で
+マスクします。`setup` やコンポーネント展開でステップ構成が変わったシナリオでも、この元テキストは
+著者が書いたとおり正確なので保持します。ただしその場合、`#` 列の行番号は失われます。
+
+`data`/`dataFile` によるデータ駆動シナリオは、常に構造化データから作り直した YAML を表示します。
+生テキストは表示しません。各行は同じ元テンプレートを共有します。`expand_data` は行ごとに
+`${row.*}` を置換しますが、ステップ数は変えません。そのため生テキストをそのまま出すと、どの行も
+同じ未置換のテンプレートになり、実際に実行した内容を示せません。
+
+オフライン再描画（`bajutsu report`、後述）は、元ファイルの生テキストを run に保存していないため、
+従来どおり構造化データから作り直した YAML を使います。
 
 `visual` の expectation は行の下に **baseline と actual のインタラクティブ比較ビュー**を描画します。
 4 モード: **Swipe**（仕切りをドラッグして左右にワイプ）/ **Onion**（スライダーで actual を
@@ -198,14 +222,15 @@ baseline に重ねてクロスフェード）/ **Blend**（`mix-blend-mode: diff
 ## 書き出し API
 
 ```python
-def write_report(run_dir, run_id, results, definitions=None, sources=None, source_name=None, description=None, provenance=None) -> Path  # 4 形式を書く。definitions=シナリオ毎の dict、sources=生 YAML、source_name=シナリオファイル名、description=ファイルレベルの説明、provenance=run の同一性スタンプ（BE-0049）
-def write_html_and_junit(run_dir, run_id, results, definitions=None, sources=None, source_name=None, description=None, provenance=None) -> None  # 再生成できる側だけ（report.html + junit.xml + ctrf.json）。manifest.json は触らない。再描画が使う。provenance は CTRF の tool/environment フィールドに使う
+def write_report(run_dir, run_id, results, definitions=None, sources=None, source_name=None, description=None, provenance=None, writer=None, target=None, label=None, source_files=None, step_lines=None) -> Path  # 4 形式を書く。definitions=シナリオ毎の dict、sources=生 YAML、source_name=シナリオファイル名（run 全体）、description=ファイルレベルの説明、source_files/step_lines=live run が復元できたときの各シナリオ自身のファイル名とステップの元の行番号、provenance=run の同一性スタンプ（BE-0049）
+def write_html_and_junit(run_dir, run_id, results, definitions=None, sources=None, source_name=None, description=None, provenance=None, writer=None, source_files=None, step_lines=None) -> None  # 再生成できる側だけ（report.html + junit.xml + ctrf.json）。manifest.json は触らない。再描画が使う。provenance は CTRF の tool/environment フィールドに使う
 def manifest_dict(run_id, results, *, source_name=None, provenance=None, target=None, label=None) -> dict  # バージョン付き render モデル（schemaVersion）。manifest の素（テスト、検査用）
 def run_provenance(scenario_yaml, *, git_revision, config_source=None) -> dict  # run の同一性スタンプ: scenarioHash + toolVersion + 任意の gitRevision（BE-0049）+ 任意の configSource（BE-0063）
 def ctrf_json(run_id, results, *, provenance=None) -> dict  # 実行結果モデルの CTRF への射影（BE-0161）。provenance は tool.version / environment.commit に使う
 def junit_xml(results) -> str
-def html_report(run_id, results, run_dir=None, definitions=None, sources=None, source_name=None, description=None) -> str
-def scenario_render_inputs(scenarios) -> tuple[list[dict], list[str]]  # (definitions, sources)。初回 bake と再描画で共有
+def html_report(run_id, results, run_dir=None, definitions=None, sources=None, source_name=None, description=None, source_files=None, step_lines=None) -> str
+def scenario_render_inputs(scenarios, plan_sources=None) -> tuple[list[dict], list[str]]  # (definitions, sources)。初回 bake と再描画で共有。plan_sources（宣言されたシナリオ名がキー）が復元できたときは、sources に各シナリオ自身の生 YAML を使う。復元できなければ従来どおり構造化データから作り直す
+def scenario_source_meta(scenarios, plan_sources=None) -> tuple[list[str | None], list[list[int] | None]]  # (source_files, step_lines)。scenario_render_inputs の sources と対応する
 ```
 
 `runner.run_and_report` がこの `write_report` を呼び、CLI に `(results, manifest_path)` を返します

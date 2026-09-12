@@ -252,3 +252,14 @@ def scenario_slug(name: str) -> str:
     """A filesystem-safe id derived from a scenario name (for its evidence dir)."""
     slug = re.sub(r"[^0-9a-zA-Z]+", "-", name).strip("-").lower()
     return slug or "scenario"
+
+
+def sanitize_source_stem(stem: str) -> str:
+    """Make a scenario file's stem safe as an evidence-dir `sid` component (BE-0417).
+
+    Unlike `scenario_slug`, leaves Unicode letters/digits, `_`, and `.` alone (fullwidth/Japanese
+    characters are ordinary in this codebase's own scenario names), so a plain stem like
+    `login_flow` or `決済フロー` passes through unchanged; only a character unsafe in an unescaped
+    HTML attribute / URL path segment (`#`, `?`, `/`, whitespace, …) is replaced.
+    """
+    return re.sub(r"[^\w.-]", "_", stem)

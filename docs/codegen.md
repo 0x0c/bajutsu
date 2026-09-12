@@ -211,7 +211,7 @@ test.describe('Components', () => {
 | `type` (with `into`) | `await loc.fill('…')` |
 | `type` (no `into`) | `await page.keyboard.type('…')` |
 | `longPress` | `await loc.click({ delay: <ms> })` |
-| `clear` | `await loc.clear()` — the faithful peer of the driver's own focus-then-backspace clear (BE-0265) |
+| `clear` | `await loc.clear()` — the faithful peer of the driver's own select-all-then-backspace clear (BE-0265) |
 | `delete { count }` | focus + `count` × `page.keyboard.press('Backspace')` (BE-0265) |
 | `select` | `await loc.selectText()` — the web peer of select-all (BE-0265) |
 | `copy` | `await page.keyboard.press('Control+c')` |
