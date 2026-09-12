@@ -988,6 +988,40 @@ def test_wait_guard_names_an_ambiguous_matched_alert_uncleared_not_unhandled() -
     assert gate.blocked_note == uncleared_prompt_note("Allow")
 
 
+def test_wait_guard_reports_a_co_present_alert_no_rule_identifies_on_an_ambiguous_match() -> None:
+    # `AmbiguousSelector` fires only after a rule has already matched, and `buttons` here is the
+    # whole SpringBoard enumeration, not that rule's own shape -- so a co-present button no rule
+    # identifies can sit alongside it on the very same read. This branch used to report only the
+    # ambiguous rule's own diagnosis (`uncleared_prompt_note`), silently dropping "Weird Button"
+    # for a whole `poll_interval` -- the exact BE-0402 disclosure this branch exists to make, and
+    # the same shape the `raced` branch just below already handles via `identified_alert_rules`
+    # (BE-0418 review finding).
+    from bajutsu.common.orchestrator.types import ResolvedAlertRule
+    from bajutsu.common.orchestrator.waits import _AlertGuardGate
+
+    class _AmbiguousEveryPoll(FakeDriver):
+        def handle_system_alert(self, sel: base.Selector, timeout: float) -> None:
+            raise base.AmbiguousSelector("the alert offers this label twice")
+
+    driver = _AmbiguousEveryPoll([])
+    driver.system_alert_buttons = [
+        el(None, "Allow", ["button"]),
+        el(None, "Don't Allow", ["button"]),
+        el(None, "Weird Button", ["button"]),
+    ]
+    guard = AlertGuardConfig(
+        rules=[
+            ResolvedAlertRule(
+                identifying_labels=frozenset({"Allow", "Don't Allow"}), tap_label="Allow"
+            )
+        ]
+    )
+    gate = _AlertGuardGate(driver=driver, clock=_LogicalClock(), guard=guard, alerts=[])
+    gate.observe([])
+    assert "Weird Button" in gate.blocked_note
+    assert "Allow" not in gate.blocked_note and "Don't Allow" not in gate.blocked_note
+
+
 def test_wait_guard_keeps_an_unhandled_note_when_a_matched_alert_races() -> None:
     # Twin of the `AlertGuardConfig.__call__` TOCTOU fix, for this poll's own note-clear
     # (BE-0418 review finding): `"absent"` carries two meanings here too -- a genuinely empty

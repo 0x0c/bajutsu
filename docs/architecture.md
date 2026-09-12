@@ -857,7 +857,11 @@ Android; on iOS it rests on the fast suite's bookkeeping proof alone.
   produced on a bare `"absent"` answer before. And `_dismiss_from_tree` resolves over the same
   widest-first `tree_dedup_rules` the one-shot dismiss already used, rather than plain declaration
   order, so two nested in-tree shapes tap the wider one first regardless of how a scenario declared
-  them — which button a `savePassword`-style policy presses during a `wait` can change accordingly
+  them — which button a `savePassword`-style policy presses during a `wait` can change accordingly.
+  The gate's own `"unhandled"` branch — reached not only when no rule identifies the alert at all,
+  but also when a matched rule's own tap lands ambiguously — now names a co-present button no rule
+  identifies the same way the `raced` branch does, rather than reporting only the ambiguous rule's
+  diagnosis and leaving anything else the same read enumerated unreported for a whole `poll_interval`
 - DSL `iosTipKitHandling` (BE-0389), an opt-in guard for a blocking Apple TipKit tip: TipKit's
   presentation marks the content it covers accessibility-hidden rather than merely occluding it, so a
   blocked tap can fail as `ElementNotFound`, not only `ElementNotTappable`. The XCUITest backend alone

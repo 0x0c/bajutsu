@@ -11,6 +11,7 @@ from bajutsu.common.drivers.elements import tree_signature
 
 from ._functions import (
     alert_block_note,
+    identified_alert_rules,
     matching_alert_rule,
     selector_names_button,
     subtract_labels,
@@ -716,13 +717,16 @@ class AlertGuardConfig:
                 # `dismissed_native` either — nothing was actually dismissed — so a leftover
                 # computed against `dismissed_native` alone still lets that alert's own labels
                 # survive into it, reporting an alert a rule *did* identify as unhandled (BE-0418
-                # review finding). Re-resolving over the same `buttons`/`dismissed_native`
-                # `probe_native` itself just matched against learns which rule, if any, raced away —
-                # the same way other branches re-resolve to learn what was actually tapped.
+                # review finding). Crediting every rule `buttons` still identifies, not only the one
+                # `probe_native` raced against: a second declared prompt co-present on the same read
+                # is not the raced rule's own shape, so a single-rule credit still lets its labels
+                # survive into the leftover and be named as an alert nothing identifies, when a rule
+                # identified it and only the tap failed for a *different* shape (BE-0418 review
+                # finding) — the same fix `_observe_native`'s own `raced` branch
+                # (`waits/_alert_guard_gate.py`) already applies via `identified_alert_rules`.
                 leftover_dismissed_native = dismissed_native | {
                     rule.identifying_labels
-                    for rule in [_resolve_alert_rule(self.native_rules, buttons, dismissed_native)]
-                    if rule is not None
+                    for rule in identified_alert_rules(self.native_rules, buttons)
                 }
                 if not buttons:
                     # Only a genuinely empty read licenses the tree tap at all: XCUITest answers an

@@ -13,7 +13,6 @@ from bajutsu.common.orchestrator.types import (
     alert_block_note,
     identified_alert_rules,
     match_alert_rule,
-    matching_alert_rule,
     subtract_labels,
     uncleared_prompt_note,
 )
@@ -175,17 +174,29 @@ class _AlertGuardGate:
                 # tells them apart: a rule did identify the second, and only the tap failed to take,
                 # which is `uncleared_prompt_note`'s own case, not the hedged "unhandled" form
                 # (BE-0418 review finding; see `uncleared_prompt_note`'s docstring).
+                #
+                # But `buttons` here is the whole SpringBoard enumeration, not the ambiguous rule's
+                # own shape, and `AmbiguousSelector` fires only after a rule already matched -- so a
+                # co-present button no rule identifies can sit alongside it in the same read. Every
+                # shape a rule identifies, not only the ambiguous one's own, and the same
+                # `identified_alert_rules` / `subtract_labels` pair the `raced` branch below shares
+                # with `_leftover_note` (`types/_functions.py`): a button nothing accounts for still
+                # outranks the ambiguous rule's own diagnosis, since something else is demonstrably
+                # unhandled either way (BE-0418 review finding).
                 self._collapsed_polls = 0
                 if not self._tree_gave_up:
                     # The same exception the clear-guard above and the `raced` branch below both
                     # make: an in-tree give-up names a prompt a rule *did* identify and a tap
                     # failed to clear, and nothing re-arms that note once a live SpringBoard alert
                     # stops `probed_absent` from holding (BE-0418 review finding).
-                    ambiguous_rule = matching_alert_rule(self.guard.native_rules, buttons)
+                    identified = identified_alert_rules(self.guard.native_rules, buttons)
+                    leftover = subtract_labels(
+                        buttons, (rule.identifying_labels for rule in identified)
+                    )
                     self.blocked_note = (
-                        uncleared_prompt_note(ambiguous_rule.tap_label)
-                        if ambiguous_rule is not None
-                        else alert_block_note(buttons)
+                        alert_block_note(leftover)
+                        if leftover or not identified
+                        else uncleared_prompt_note(identified[0].tap_label)
                     )
                 return
             if raced:

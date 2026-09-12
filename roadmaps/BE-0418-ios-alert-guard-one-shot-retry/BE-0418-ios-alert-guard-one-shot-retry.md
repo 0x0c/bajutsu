@@ -260,12 +260,17 @@ Log:
   stacked-alert, landing-race, permanently-obstructed, settle-on-exhaustion, nested-shape, and
   lingering-tree-exclusion cases the design and the live review both call for.
 
-  Four files' recorded coverage floors dropped by 0.01-0.02 points each across the PR's rounds
-  and were accepted via `make coverage-floors`, every one traced to pre-existing, unrelated
-  uncovered lines becoming a marginally larger share of a slightly smaller file rather than new
-  untested logic: `loop/_functions.py`, `loop/_step_runner.py` (the original multi-round loop),
-  and `waits/_alert_guard_gate.py`, `waits/_functions.py` (relocating `_tree_signature` to the
-  shared `drivers/elements.py` as the public `tree_signature`).
+  Coverage floors moved on five files across the PR's rounds, accepted via `make
+  coverage-floors` as each round landed. Three dropped by 0.01-0.03 points each, every one traced
+  via `coverage.json`'s own `missing_lines`/`missing_branches` to a pre-existing, unrelated gap
+  becoming a marginally larger share of a slightly smaller file rather than new untested logic:
+  `loop/_functions.py` (97.41 → 97.38), `loop/_step_runner.py` (98.29 → 98.28, the original
+  multi-round loop), and `waits/_functions.py` (97.9 → 97.88, relocating `_tree_signature` to the
+  shared `drivers/elements.py` as the public `tree_signature`). The other two rose over the same
+  span rather than dropping: `waits/_alert_guard_gate.py` (97.07 → 97.36) and `types/_functions.py`
+  (97.46 → 97.75), a later round's shared-helper extraction (`identified_alert_rules`,
+  `subtract_labels`) and its regression tests fully covering branches an earlier round had briefly
+  left untested.
 
 ## References
 

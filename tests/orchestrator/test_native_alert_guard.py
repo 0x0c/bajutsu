@@ -2147,6 +2147,49 @@ def test_the_end_of_step_guard_names_an_unhandled_button_after_a_toctou_race() -
     assert "OK" not in guard.blocked_note and "Cancel" not in guard.blocked_note
 
 
+def test_the_end_of_step_guard_does_not_call_a_co_present_declared_prompt_unhandled_on_a_race() -> (
+    None
+):
+    # The TOCTOU race branch's own leftover credit used to resolve only the *one* rule that raced
+    # (`_resolve_alert_rule`), so a second, disjoint declared prompt co-present on the very same
+    # read survived into the leftover and was named as an alert no rule identifies -- exactly the
+    # misdiagnosis `uncleared_prompt_note`'s docstring says must not happen, since a rule does
+    # identify it and the very next native probe would dismiss it (BE-0418 review finding). Mirrors
+    # `test_wait_guard_does_not_call_a_co_present_declared_prompt_unhandled_on_a_race`
+    # (`tests/orchestrator/test_waits.py`), the mid-wait gate's own fix for the identical shape.
+    # "notifications" races away; "paste" is a second, disjoint prompt fully present on this read.
+    class _RacesAway(FakeDriver):
+        def handle_system_alert(self, sel: base.Selector, timeout: float) -> None:
+            raise base.ElementNotFound("the prompt raced away")
+
+    driver = _RacesAway([])
+    driver.system_alert_buttons = [
+        _button("Allow"),
+        _button("Don't Allow"),
+        _button("Allow Paste"),
+        _button("Don't Allow Paste"),
+    ]
+    guard = AlertGuardConfig(
+        rules=[
+            ResolvedAlertRule(
+                identifying_labels=frozenset({"Allow", "Don't Allow"}),
+                tap_label="Allow",
+                native=True,
+                in_tree=False,
+            ),
+            ResolvedAlertRule(
+                identifying_labels=frozenset({"Allow Paste", "Don't Allow Paste"}),
+                tap_label="Allow Paste",
+                native=True,
+                in_tree=False,
+            ),
+        ]
+    )
+    cleared, alerts = _call(driver, guard)
+    assert not cleared and alerts == []
+    assert guard.blocked_note == ""
+
+
 def test_the_end_of_step_guard_does_not_call_a_raced_ambiguous_alert_unhandled() -> None:
     # `probe_native` reaches "unhandled" two ways: a genuinely unidentified alert, and the other
     # half of the TOCTOU race above -- a matched rule whose tap found the label twice
