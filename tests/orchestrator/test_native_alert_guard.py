@@ -1401,6 +1401,37 @@ def test_the_end_of_step_guard_ends_on_the_first_unhandled_round_when_it_dismiss
     assert driver.probes == 1  # never re-probed to see the alert clear itself
 
 
+def test_the_end_of_step_guard_ends_on_the_first_unhandled_round_ruled_out_by_an_exclusion() -> (
+    None
+):
+    # `rule.identifying_labels <= set(buttons)` is also true, with no fade and no collision, when
+    # a rule matched on shape but was ruled out by an *excluded* label being present --
+    # `matching_alert_rule` rejects that case just as it rejects a genuine count collision, but the
+    # early-break condition above only ever checked the shape, not the exclusion, so this case was
+    # read as "recoverable" and given rounds it could never use (review finding). No native rule in
+    # today's catalogue declares `excluded_labels`, but a tree one already does (`savePassword`'s
+    # 26.5 shape), so this is a matter of when a native one does, not if.
+    class _CountingDriver(FakeDriver):
+        def __init__(self, buttons: list[str]) -> None:
+            super().__init__([])
+            self.system_alert_buttons = [_button(label) for label in buttons]
+            self.probes = 0
+
+        def system_alert_labels(self) -> list[str]:
+            self.probes += 1
+            return [b["label"] for b in self.system_alert_buttons if b["label"]]
+
+    driver = _CountingDriver(["A1", "A2", "X"])
+    rule = ResolvedAlertRule(
+        identifying_labels=frozenset({"A1", "A2"}), tap_label="A1", excluded_labels=frozenset({"X"})
+    )
+    guard = AlertGuardConfig(rules=[rule])
+    cleared, alerts = _call(driver, guard)
+    assert not cleared and alerts == []
+    assert "A1" in guard.blocked_note or "X" in guard.blocked_note
+    assert driver.probes == 1  # never re-probed a screen no later round could read differently
+
+
 def test_the_end_of_step_guard_still_recovers_a_collision_on_its_very_first_round() -> None:
     # The early-break above is gated on more than `dismissed_native` alone: a rule's own shape
     # being present on the surface (just not uniquely) is itself evidence a later round can read

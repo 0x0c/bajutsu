@@ -739,19 +739,27 @@ class AlertGuardConfig:
                     leftover = _leftover_after_answered(buttons, dismissed_native)
                     note = alert_block_note(leftover) if leftover else exhaustion_note
                 if not dismissed_native and not any(
-                    rule.identifying_labels <= set(buttons) for rule in self.native_rules
+                    rule.identifying_labels <= set(buttons)
+                    and not rule.excluded_labels & set(buttons)
+                    for rule in self.native_rules
                 ):
                     # Settling and giving the fade another round, rather than ending the call, only
                     # pays off in the two cases this branch exists for: a fade this call itself
                     # created (`dismissed_native` non-empty), or a live shared-label collision (some
                     # rule's own shape is present on `buttons`, just not uniquely — the flagship
-                    # pair above). Neither holds here, so a later round can only re-read exactly
-                    # what this one did — settling for it would spend a full
-                    # `settle_after_alert_dismiss` sweep for nothing, since a system alert still up
-                    # never lets that sweep's own tree-diff read settle anyway — or find the alert
-                    # gone on its own, which would erase the very diagnosis this round just made,
-                    # the bare `element not found` BE-0402 exists to prevent. Breaking here instead
-                    # keeps that diagnosis and costs nothing this call could still change.
+                    # pair above). A rule ruled out by an *excluded* label being present is neither
+                    # of those — its shape can be a subset of `buttons` with no fade and no
+                    # collision at all — so the `excluded_labels` check keeps that case out too
+                    # (review finding: no currently declared native rule has an excluded label, but
+                    # a tree-side one already does, `savePassword`'s 26.5 shape, and native rules
+                    # gain them the same way tree ones did). Neither holds here, so a later round
+                    # can only re-read exactly what this one did — settling for it would spend a
+                    # full `settle_after_alert_dismiss` sweep for nothing, since a system alert
+                    # still up never lets that sweep's own tree-diff read settle anyway — or find
+                    # the alert gone on its own, which would erase the very diagnosis this round
+                    # just made, the bare `element not found` BE-0402 exists to prevent. Breaking
+                    # here instead keeps that diagnosis and costs nothing this call could still
+                    # change.
                     break
                 settle()
                 continue
