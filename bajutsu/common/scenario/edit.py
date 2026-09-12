@@ -18,6 +18,12 @@ from __future__ import annotations
 import yaml
 
 from bajutsu.common import _yaml
+from bajutsu.common.scenario._yaml_nodes import (
+    _content_span,
+    _mapping_get,
+    _scalar_value,
+    _scenario_nodes,
+)
 from bajutsu.common.scenario.load import load_scenario_file
 from bajutsu.common.scenario.models import STEP_ACTIONS, Assertion, Scenario, Selector, Step
 from bajutsu.common.scenario.serialize import dump_block
@@ -167,17 +173,6 @@ def _action_alias(step: Step) -> str:
     return "unknown"
 
 
-def _scenario_nodes(root: yaml.Node) -> list[yaml.Node]:
-    """The MappingNode of each scenario, for the bare-list or `{scenarios: […]}` file form."""
-    if isinstance(root, yaml.SequenceNode):
-        return list(root.value)
-    if isinstance(root, yaml.MappingNode):
-        node = _mapping_get(root, "scenarios")
-        if isinstance(node, yaml.SequenceNode):
-            return list(node.value)
-    return []
-
-
 def _find_scenario_node(root: yaml.Node, name: str) -> yaml.MappingNode:
     """The scenario MappingNode whose `name` matches — mirrors `_match_scenario`'s first-match."""
     nodes = [n for n in _scenario_nodes(root) if isinstance(n, yaml.MappingNode)]
@@ -197,49 +192,11 @@ def _steps_node(root: yaml.Node, name: str) -> yaml.SequenceNode:
     return node
 
 
-def _mapping_get(node: yaml.Node | None, key: str) -> yaml.Node | None:
-    if not isinstance(node, yaml.MappingNode):
-        return None
-    return next((v for k, v in node.value if _scalar_value(k) == key), None)
-
-
 def _mapping_key_line(node: yaml.MappingNode, key: str) -> int:
     return int(next(k.start_mark.line for k, _ in node.value if _scalar_value(k) == key))
 
 
-def _scalar_value(node: yaml.Node | None) -> str | None:
-    return node.value if isinstance(node, yaml.ScalarNode) else None
-
-
 # --- source spans + splicing ------------------------------------------------------------------
-
-
-def _leaf_max_end(node: yaml.Node) -> tuple[int, int]:
-    """The furthest (line, column) any scalar leaf under *node* ends at.
-
-    A collection node's own `end_mark` overshoots to the next sibling — sweeping up trailing
-    comments and blank lines — so the real content end is the max end over its scalar leaves.
-    """
-    if isinstance(node, yaml.ScalarNode):
-        return (node.end_mark.line, node.end_mark.column)
-    children = (
-        list(node.value)
-        if isinstance(node, yaml.SequenceNode)
-        else [child for pair in node.value for child in pair]
-    )
-    best = (-1, -1)
-    for child in children:
-        best = max(best, _leaf_max_end(child))
-    return best
-
-
-def _content_span(node: yaml.Node) -> tuple[int, int]:
-    """`(start_line, end_line_exclusive)` of *node*'s real content, excluding trailing comments."""
-    line, column = _leaf_max_end(node)
-    # A leaf ending at column 0 closed on the previous line (a block scalar's terminator); otherwise
-    # its content is on `line` itself.
-    last = line if column > 0 else line - 1
-    return node.start_mark.line, last + 1
 
 
 def _indent_of(line: str) -> str:

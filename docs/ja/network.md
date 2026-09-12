@@ -135,7 +135,12 @@ Web では Playwright 自身の `requestfinished` イベントがそこで発火
 **iOS** — [BajutsuKit](../../BajutsuKit/README.md) をリンクし、早い段階で
 `BajutsuNet.startIfEnabled()` を呼びます。これは `BAJUTSU_COLLECTOR` が設定されていなければ何もせず、
 `URLSession` の HTTP(S) のみを捕捉し、**テスト/デバッグ専用**です（ヘッダとボディを記録するので、
-リリースには含めず `redact` を使ってください）。
+リリースには含めず `redact` を使ってください）。横取りしたリクエストは、メソッド・ヘッダ・ボディ・
+キャッシュポリシー・タイムアウトをそのまま保って転送します。リダイレクトは横取り側では追わず、
+URL Loading System に差し戻して、アプリ自身のセッションからあらためて発行させます。ただし
+`URLProtocol` には、アプリ自身の `URLSessionConfiguration` やセッションデリゲートを取得する手段が
+ありません。そのため、自前のセッションデリゲートで TLS ピンニングやクライアント証明書認証をしている
+アプリは、横取り後、その検証に失敗することがあります。
 
 **Android** — [BajutsuAndroid](../../BajutsuAndroid/README.md) をリンクし、起動時に
 `BajutsuNet.configure(env)` を（起動環境変数のマップとともに）呼び、アプリの `OkHttpClient` に
