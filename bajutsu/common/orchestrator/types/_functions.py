@@ -36,11 +36,17 @@ def _no_network() -> list[NetworkExchange]:
 def alert_block_note(buttons: Sequence[str]) -> str:
     """What the guard saw blocking the screen, for a failure reason to name (BE-0402).
 
-    *buttons* are the labels blocking the screen that no rule accounts for — `probe_native`'s
-    `"unhandled"` answer, or the leftover buttons a `"dismissed"`, `already_dismissed`, or
-    `"unhandled"` round (`_leftover_after_answered`) finds beyond every shape this call has already
-    answered (`AlertGuardConfig.__call__`, BE-0418) — a fresh dismissal computes it too, since the
-    alert it just tapped is never the only thing `buttons` enumerates. Empty means the
+    *buttons* are the labels blocking the screen that this call has not already answered —
+    `probe_native`'s `"unhandled"` answer, or the leftover buttons a `"dismissed"`,
+    `already_dismissed`, or `"unhandled"` round (`_leftover_after_answered`) finds beyond every
+    shape this call has already answered (`AlertGuardConfig.__call__`, BE-0418) — a fresh dismissal
+    computes it too, since the alert it just tapped is never the only thing `buttons` enumerates.
+    Not-yet-answered is weaker than "no rule accounts for it": a label two rules both name can
+    collide (the built-in `notifications` and `tracking` both grant `"Allow"`) and land here
+    un-subtracted even though a rule does identify it, once a per-label collision keeps
+    `matching_alert_rule` from resolving either
+    (`test_the_end_of_step_guard_filters_the_unhandled_note_when_the_collision_never_resolves`).
+    Empty means the
     block was inferred from the collapsed-tree proxy rather than enumerated — a surface
     `springboard.alerts` cannot see, or a backend with no native query at all — so the note hedges
     rather than naming buttons nobody read. A prompt the policy *did* name and a tap that did not

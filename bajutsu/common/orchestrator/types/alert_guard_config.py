@@ -733,6 +733,16 @@ class AlertGuardConfig:
                         note = exhaustion_note
                     settle()
                     continue
+                # An open `NotTappable` diagnosis is itself something this call still has to act
+                # on, so an ambiguous read here — nothing matched, and no already-excluded shape is
+                # lingering either — must not end the call while a round remains for the scrim to
+                # lift: the exact bounded retry Unit 2 exists for (BE-0418 review finding). The same
+                # reasoning as the lingering-exclusion branch above applies: a tree read that matches
+                # nothing is not evidence the stuck sheet resolved, only that this read did not catch
+                # it.
+                if stuck_tree_label is not None:
+                    settle()
+                    continue
                 # Otherwise this round's tree read may simply have caught a still-animating screen
                 # mid-transition rather than a genuinely clear one, so a tree diagnosis is left as
                 # an earlier round's read left it rather than erased on this round's own account —
@@ -743,8 +753,7 @@ class AlertGuardConfig:
                 # answered "absent", a deterministic no-SpringBoard-alert fact, so an
                 # `already_dismissed` round's leftover note would otherwise name an alert this call
                 # has since watched go away.
-                if stuck_tree_label is None:
-                    note = ""
+                note = ""
                 break
             if state == "unhandled":
                 # An alert is up that no rule identifies — but `buttons` is the whole SpringBoard

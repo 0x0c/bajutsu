@@ -1815,6 +1815,10 @@ def test_the_end_of_step_guard_preserves_an_uncleared_note_through_a_later_empty
     # names this risk: "a round that reads a tree still mid-animation risks matching nothing at
     # all"). Erasing round 1's real diagnosis on that ambiguous evidence would leave the eventual
     # failure reading as a bare missing element again — exactly what this proposal exists to fix.
+    # An open `NotTappable` diagnosis must also keep the call retrying through that ambiguous round
+    # rather than ending on it (BE-0418 review finding): round 1's empty read is itself only
+    # ambiguous, not proof the stuck sheet resolved, so the call still spends round 2 on it — this
+    # driver never lets the tap land, so all three rounds are used before the call gives up.
     class _ObstructedThenAmbiguous(FakeDriver):
         def __init__(self) -> None:
             super().__init__([_button("Not Now")])
@@ -1830,9 +1834,43 @@ def test_the_end_of_step_guard_preserves_an_uncleared_note_through_a_later_empty
     guard = AlertGuardConfig(rules=[guard_rule("Not Now")])
     cleared, alerts = _call(driver, guard)
     assert not cleared and alerts == []
-    assert driver.attempts == 2  # round 1's not-tappable retried once, then round 2 found nothing
+    assert driver.attempts == 3  # every round retried; the stuck diagnosis never let the call give
+    # up on round 1's merely-ambiguous read
     assert "a system prompt the guard could not clear is still up" in guard.blocked_note
     assert "Not Now" in guard.blocked_note
+
+
+def test_the_end_of_step_guard_lands_a_stuck_tap_after_an_ambiguous_middle_round() -> None:
+    # The positive twin of the test above: an open `NotTappable` diagnosis must not just survive an
+    # ambiguous middle round, it must let the call spend a genuinely useful round after it. Round 0's
+    # scrim has not lifted; round 1's read catches the sheet mid-frame and matches nothing at all
+    # (no rule, not even an already-excluded one); round 2's scrim has finally lifted. Before the fix,
+    # round 1's empty read ended the call outright, so the tap round 2 would have landed never ran.
+    class _ScrimLiftsOnTheLastRound(FakeDriver):
+        def __init__(self) -> None:
+            super().__init__([_button("Not Now")])
+            self.query_calls = 0
+            self.tap_calls = 0
+
+        def query(self) -> list[base.Element]:
+            self.query_calls += 1
+            if self.query_calls == 2:  # round 1's own read: the sheet mid-frame, nothing enumerable
+                return []
+            return super().query()
+
+        def tap(self, sel: base.Selector) -> None:
+            self.tap_calls += 1
+            if self.tap_calls == 1:
+                raise base.ElementNotTappable("the scrim has not lifted yet")
+            super().tap(sel)
+
+    driver = _ScrimLiftsOnTheLastRound()
+    guard = AlertGuardConfig(rules=[guard_rule("Not Now")])
+    cleared, alerts = _call(driver, guard)
+    assert cleared and alerts == [AlertEvent(label="Not Now")]
+    assert guard.blocked_note == ""  # the stuck diagnosis clears once its own shape finally lands
+    assert driver.tap_calls == 2  # round 0's failed attempt, round 2's landing one — round 1 tapped
+    # nothing because its own read matched no rule at all
 
 
 def test_the_end_of_step_guard_never_retaps_a_native_alert_it_already_dismissed() -> None:
