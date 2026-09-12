@@ -49,26 +49,30 @@ NativeAlertState = Literal[
 
 
 def _widest_first(rules: Iterable[ResolvedAlertRule]) -> list[ResolvedAlertRule]:
-    """*rules*, with a nested shape's wider sibling moved ahead of it — everywhere else, including
-    between two rules of different width that do not nest, declaration order survives untouched.
+    """*rules*, with a nested shape's wider sibling moved ahead of it — the only reordering this makes
+    deliberately. It is not otherwise order-preserving: the wider rule is inserted directly ahead
+    of the first rule it strictly contains, so every rule declaration order put between the two
+    moves back a place with it, whether or not it nests with either (`narrower`, `unrelated`,
+    `widest` — this file's own test fixture order — yields `widest`, `narrower`, `unrelated`).
+    Subset is only a partial order, so no placement can leave every non-nesting pair where
+    declaration put it. What BE-0177 needs is narrower than that and does hold: two layers
+    declaring the same prompt resolve to the same shapes, so the scenario's copy of a shape stays
+    ahead of the target's copy of it.
 
     `_resolve_alert_rule`'s subset test only excludes a candidate whose shape is contained *in* an
     already-dismissed one, not the reverse, so whether a nested-shape prompt's narrower sibling can
     survive that exclusion and re-tap depends on which shape `matching_alert_rule` — itself
-    first-match-in-list-order — happens to try first. Reordering only a nested pair, rather than
-    sorting every rule by raw label count, removes that dependency on the catalogue's own
-    declaration order without also inverting BE-0177's scenario-before-target precedence for a pair
-    that does not nest — a plain width sort is a stable sort, and a stable sort only preserves that
-    precedence *among same-shape rules* (review finding: sorting by width promoted a wider target
-    rule ahead of a narrower scenario rule the two do not otherwise relate). Implemented as a
-    stable insertion pass: each rule is placed ahead of the first already-placed rule its own shape
-    strictly contains, and appended otherwise — so a pair with no subset relation between them, in
-    either direction, never moves, while a wider shape still overtakes a narrower one however many
-    unrelated rules declaration order put between the two. Swapping only *adjacent* pairs would not
-    manage that second part: subset is a partial order, so one non-nesting rule between a narrow
-    shape and its wider sibling blocks every swap and leaves the narrow shape matching first
-    (review finding — a savePassword-style catalogue declaring its three shapes narrower,
-    unrelated, widest would still double-tap the wide sheet under the adjacent-swap version).
+    first-match-in-list-order — happens to try first. Reordering the nested pair, rather than
+    sorting every rule by raw label count, is what a plain width sort cannot do for BE-0177's own
+    precedence — a stable sort only preserves scenario-before-target precedence *among same-shape
+    rules* (review finding: sorting by width promoted a wider target rule ahead of a narrower
+    scenario rule the two do not otherwise relate). Implemented as a stable insertion pass: each
+    rule is placed ahead of the first already-placed rule its own shape strictly contains, and
+    appended otherwise. Swapping only *adjacent* pairs would not reach a nested pair separated by
+    an unrelated one: subset is a partial order, so one non-nesting rule between a narrow shape and
+    its wider sibling blocks every adjacent swap and leaves the narrow shape matching first (review
+    finding — a savePassword-style catalogue declaring its three shapes narrower, unrelated, widest
+    would still double-tap the wide sheet under the adjacent-swap version).
 
     Without reordering `tree_rules` itself: `_AlertGuardGate._dismiss_from_tree`
     (`waits/_alert_guard_gate.py`) and `dismiss_from_tree_once` below both sort a *copy* of that
@@ -259,15 +263,18 @@ class AlertGuardConfig:
         "Don't Allow" buttons would be tapped (BE-0406).
 
         In declaration order — deliberately, unlike `native_rules` below: BE-0177's
-        scenario-before-target precedence has to survive here unconditionally, and `_widest_first`
-        below only ever reorders a *nested* pair, leaving every other pair — including two rules of
-        different width that do not nest — exactly where declaration put them, so applying it to a
-        copy still leaves that precedence intact. `tree_dedup_rules` below applies it once, so
-        `_AlertGuardGate._dismiss_from_tree` (`waits/_alert_guard_gate.py`) and
+        scenario-before-target precedence has to survive here, and what it actually needs is
+        narrower than full declaration order — two layers declaring the same prompt resolve to the
+        same shapes, and `_widest_first` below never reorders two rules of equal shape, so the
+        scenario's copy still precedes the target's copy of it once `tree_dedup_rules` below
+        applies that reordering to a copy of this property (review finding: `_widest_first`
+        reorders more than just a nested pair when an unrelated rule sits between the two, so this
+        property could not claim full declaration order survives regardless). `tree_dedup_rules`
+        applies it once, so `_AlertGuardGate._dismiss_from_tree` (`waits/_alert_guard_gate.py`) and
         `dismiss_from_tree_once` below — declared twins over the same screen — read the identical
-        ordering rather than each calling `_widest_first` on its own copy, which would leave nothing
-        to stop the two from drifting apart the way this file's own `native_rules` docstring warns a
-        duplicated filter would (BE-0418 review finding).
+        ordering rather than each calling `_widest_first` on its own copy, which would leave
+        nothing to stop the two from drifting apart the way this file's own `native_rules`
+        docstring warns a duplicated filter would (BE-0418 review finding).
         """
         return [rule for rule in self.rules if rule.in_tree]
 
