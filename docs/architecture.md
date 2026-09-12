@@ -788,11 +788,12 @@ Android; on iOS it rests on the fast suite's bookkeeping proof alone.
   device and never risks landing on nothing or on whatever the closing alert has by then revealed
   underneath it, on either path. Both are keyed on a rule's own shape rather than the buttons a
   probe reads, since that read enumerates every alert the surface currently holds and so changes
-  the moment a different alert joins or leaves it, which the alert already dismissed did not do.
-  Both key on shape rather than a rule's own tap label, too: two rules can share one alert's shape
-  under different choices, a scenario's `choice` overriding a target's for the same prompt, and
-  keying on the label alone would let one such rule's exclusion promote its sibling to tap the
-  opposite button on the alert this call already answered. A later alert resolving to a shape that
+  the moment a different alert joins or leaves it — something the alert this call already dismissed
+  has not itself done. Both key on shape rather than a rule's own tap label, too: two rules can
+  share one alert's shape under different choices, a scenario's `choice` overriding a target's for
+  the same prompt, and keying on the label alone would let one such rule's exclusion promote its
+  sibling to tap the opposite button on the alert this call already answered. A later alert
+  resolving to a shape that
   is neither a match nor a narrower rendering of one already dismissed — including one sharing the
   tapped label alone (the built-in `notifications` and `tracking` prompts both grant `"Allow"`) —
   still taps as usual once it is no longer read alongside the one already dismissed; two such

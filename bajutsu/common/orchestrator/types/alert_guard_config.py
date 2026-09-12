@@ -208,9 +208,17 @@ class NotTappable:
     `_alert_guard_gate.py` already carries across polls, for the same scrim-over-a-still-animating-
     sheet race. `label` is the tap label `_resolve_alert_rule` already resolved, so a caller that gives
     up can name it in `uncleared_prompt_note` without resolving it a second time.
+
+    `shape` is that same rule's `identifying_labels`, carried alongside the label rather than in
+    place of it: two `in_tree` rules can share one tap label under different choices — `savePassword`
+    under `choice: deny` resolves to three shapes that all tap "Not Now" — so a caller comparing
+    labels alone to ask "is this still the same stuck prompt" can match a *different* prompt that
+    merely shares the label, clearing a diagnosis for a sheet that is still stuck (BE-0418 review
+    finding). The label still names the prompt in the note; the shape is what identifies it.
     """
 
     label: str
+    shape: frozenset[str]
 
 
 @dataclass
@@ -472,7 +480,7 @@ class AlertGuardConfig:
             # finishing its presentation animation. Not a reason to give up: the caller's own
             # round-bounded loop retries the same tap, mirroring the mid-wait path's own retry for
             # this exception (BE-0418).
-            return NotTappable(label=label), buttons
+            return NotTappable(label=label, shape=rule.identifying_labels), buttons
         return AlertEvent(label=label), buttons
 
     def __call__(
@@ -528,10 +536,16 @@ class AlertGuardConfig:
         """
         cleared = False
         note = ""
-        # The tap label a tree round could not land, naming which stuck diagnosis is still open —
-        # not a bare bool: a later round tapping a *different* in-tree prompt must not clear a
-        # still-open diagnosis for one that never became tappable (BE-0418 review finding).
+        # The tap label and shape of a tree round that could not land, naming and identifying which
+        # stuck diagnosis is still open — not a bare bool: a later round tapping a *different*
+        # in-tree prompt must not clear a still-open diagnosis for one that never became tappable
+        # (BE-0418 review finding). Compared by shape, not label: two `in_tree` rules can share one
+        # tap label under different choices (`savePassword`'s three shapes all tap "Not Now" under
+        # `choice: deny`), so a later round dismissing a genuinely different prompt that happens to
+        # share the stuck one's label must not read as "the same prompt finally landed" (BE-0418
+        # review finding). The label still names the prompt in the eventual note.
         stuck_tree_label: str | None = None
+        stuck_tree_shape: frozenset[str] | None = None
         dismissed_native: frozenset[frozenset[str]] = frozenset()
         dismissed_tree_shapes: frozenset[frozenset[str]] = frozenset()
         # The shape and tap label of the native rule most recently tapped fresh, for
@@ -628,18 +642,22 @@ class AlertGuardConfig:
                     cleared = True
                     # No stuck diagnosis means whatever `note` holds is stale regardless — a native
                     # leftover note this round's own "absent" probe already disproves, say — so it
-                    # clears unconditionally. One that names *this* label clears too: the prompt it
-                    # was stuck on finally landed. One naming a *different* label survives: this
-                    # round dismissed an unrelated in-tree prompt, which says nothing about whether
-                    # the stuck one is still stuck (BE-0418 review finding).
-                    if stuck_tree_label is None or tree_result.label == stuck_tree_label:
+                    # clears unconditionally. One matching *this shape* clears too: the prompt it was
+                    # stuck on finally landed. One with a *different shape* survives, even sharing
+                    # the stuck one's own tap label (`savePassword`'s three shapes all tap "Not Now"
+                    # under `choice: deny`): this round dismissed a genuinely different in-tree
+                    # prompt, which says nothing about whether the stuck one is still stuck (BE-0418
+                    # review finding).
+                    if stuck_tree_shape is None or rule.identifying_labels == stuck_tree_shape:
                         note = ""
                         stuck_tree_label = None
+                        stuck_tree_shape = None
                     settle()
                     continue
                 if isinstance(tree_result, NotTappable):
                     note = uncleared_prompt_note(tree_result.label)
                     stuck_tree_label = tree_result.label
+                    stuck_tree_shape = tree_result.shape
                     settle()
                     continue
                 # Nothing not-yet-excluded matched. A shape this call already cleared, still

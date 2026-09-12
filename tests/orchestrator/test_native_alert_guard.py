@@ -2095,6 +2095,51 @@ def test_the_end_of_step_guard_keeps_a_stuck_tree_note_on_a_lingering_tree_round
     assert "Stuck" in guard.blocked_note  # the stuck diagnosis, not silently cleared
 
 
+def test_the_end_of_step_guard_keeps_a_stuck_tree_note_when_another_shape_shares_its_label() -> (
+    None
+):
+    # The other half of the fix above, and the one label alone cannot tell apart: two `in_tree`
+    # rules can share one tap label under different choices -- `savePassword`'s three shapes all
+    # tap "Not Now" under `choice: deny` -- so comparing the *label* a later round's tap lands on
+    # against the stuck prompt's own label would read a genuinely different prompt's success as
+    # the stuck one finally landing (BE-0418 review finding). `a` and `b` tap the identical label;
+    # only their shapes differ.
+    class _StuckDriver(FakeDriver):
+        def tap(self, sel: base.Selector) -> None:
+            if (
+                isinstance(sel, dict)
+                and sel.get("label") == "Not Now"
+                and any(el["label"] == "A1" for el in self.screen)
+            ):
+                raise base.ElementNotTappable("A's scrim never lifts")
+            super().tap(sel)
+
+    driver = _StuckDriver([_button("A1"), _button("A2"), _button("Not Now")])
+    a = ResolvedAlertRule(
+        identifying_labels=frozenset({"A1", "A2"}), tap_label="Not Now", native=False, in_tree=True
+    )
+    b = ResolvedAlertRule(
+        identifying_labels=frozenset({"B1", "B2"}), tap_label="Not Now", native=False, in_tree=True
+    )
+    settle_count = 0
+
+    def settle() -> None:
+        nonlocal settle_count
+        settle_count += 1
+        if settle_count == 1:
+            # A's own sheet moves off-screen (or behind another), and a distinct prompt that shares
+            # its tap label takes its place.
+            driver.screen = [_button("B1"), _button("B2"), _button("Not Now")]
+
+    guard = AlertGuardConfig(rules=[a, b])
+    alerts: list[AlertEvent] = []
+    cleared = guard(driver, alerts, settle=settle)
+    assert cleared and alerts == [AlertEvent(label="Not Now")]  # only b ever actually tapped
+    # a's own stuck diagnosis survives b's unrelated success, even though the note names the same
+    # label either way -- an empty note here would mean the bug cleared it.
+    assert guard.blocked_note == uncleared_prompt_note("Not Now")
+
+
 def test_the_end_of_step_guard_does_not_retap_a_fading_alert_when_another_one_joins_it() -> None:
     # The native dedup keys on the matched rule's own shape, not the raw buttons read: that read
     # (`system_alert_labels()`) enumerates every alert SpringBoard currently holds, so a still-
