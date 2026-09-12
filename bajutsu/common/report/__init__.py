@@ -9,8 +9,10 @@ from __future__ import annotations
 
 from bajutsu.common.report.ctrf import ctrf_json
 from bajutsu.common.report.html import (
+    ScenarioPlanSource,
     html_report,
     scenario_render_inputs,
+    scenario_source_meta,
     write_html_and_junit,
     write_report,
 )
@@ -18,6 +20,7 @@ from bajutsu.common.report.load import load_run, rebake, rerender_html, results_
 from bajutsu.common.report.manifest import git_revision, junit_xml, manifest_dict, run_provenance
 
 __all__ = [
+    "ScenarioPlanSource",
     "ctrf_json",
     "git_revision",
     "html_report",
@@ -29,6 +32,7 @@ __all__ = [
     "results_from_manifest",
     "run_provenance",
     "scenario_render_inputs",
+    "scenario_source_meta",
     "write_html_and_junit",
     "write_report",
 ]

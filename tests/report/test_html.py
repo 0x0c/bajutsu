@@ -10,7 +10,8 @@ from bajutsu.common.drivers.fake import FakeDriver
 from bajutsu.common.evidence import Artifact
 from bajutsu.common.evidence.network import NetworkExchange
 from bajutsu.common.orchestrator import RunResult, run_scenario
-from bajutsu.common.report import html_report
+from bajutsu.common.report import ScenarioPlanSource, html_report
+from bajutsu.common.report.html import scenario_render_inputs, scenario_source_meta
 from bajutsu.common.scenario import Scenario
 
 
@@ -79,6 +80,62 @@ def test_html_report_shows_source_filename() -> None:
     out = html_report("run9", [_failing()], source_name="smoke.yaml")
     assert 'class="sfile">smoke.yaml' in out  # the scenario file name in the summary header
     assert 'class="sfile"' not in html_report("run9", [_failing()])  # omitted when unknown
+
+
+def test_html_report_shows_scenario_source_file_and_step_lines() -> None:
+    # A scenario's own originating file and its steps' original line numbers, shown beside
+    # the scenario and its executed step respectively — both omitted when unknown.
+    definition = {"name": "s1", "steps": [{"tap": {"id": "a"}}]}
+    out = html_report(
+        "run9",
+        [_passing()],
+        definitions=[definition],
+        source_files=["login.yaml"],
+        step_lines=[[7]],
+    )
+    assert 'class="scnfile"' in out and ">login.yaml<" in out
+    assert 'class="linehint"' in out and ">:7<" in out
+    bare = html_report("run9", [_passing()], definitions=[definition])
+    assert 'class="scnfile"' not in bare
+    assert 'class="linehint"' not in bare
+
+
+def test_scenario_render_inputs_prefers_a_recovered_plan_source() -> None:
+    # A scenario `plan_sources` recovers a verbatim text for shows that text (comments intact,
+    # since it is never re-serialized) instead of the structured re-dump; one it has nothing for
+    # falls back exactly as before `plan_sources` existed.
+    known = Scenario.model_validate({"name": "known", "steps": [{"tap": {"id": "a"}}]})
+    unknown = Scenario.model_validate({"name": "unknown", "steps": [{"tap": {"id": "a"}}]})
+    plan_sources = {
+        "known": ScenarioPlanSource(
+            file_name="known.yaml", text="- name: known  # kept verbatim\n", step_lines=[3]
+        )
+    }
+    _definitions, sources = scenario_render_inputs([known, unknown], plan_sources)
+    assert sources[0] == "- name: known  # kept verbatim\n"
+    assert "# kept verbatim" not in sources[1]  # the unknown scenario falls back to a re-dump
+
+
+def test_scenario_source_meta_returns_the_recovered_step_lines() -> None:
+    scenario = Scenario.model_validate({"name": "s", "steps": [{"tap": {"id": "a"}}]})
+    full = {"s": ScenarioPlanSource(file_name="s.yaml", text="- name: s\n", step_lines=[3])}
+    files, lines = scenario_source_meta([scenario], full)
+    assert files == ["s.yaml"]
+    assert lines == [[3]]
+
+
+def test_scenario_source_meta_omits_step_lines_without_a_recovered_text() -> None:
+    scenario = Scenario.model_validate({"name": "s", "steps": [{"tap": {"id": "a"}}]})
+    # A recovered plan with step lines but no text (should not happen in practice, but the meta
+    # must still refuse to show a line number for text it never actually rendered).
+    no_text = {"s": ScenarioPlanSource(file_name="s.yaml", text=None, step_lines=[3])}
+    files, lines = scenario_source_meta([scenario], no_text)
+    assert files == ["s.yaml"]
+    assert lines == [None]
+    # No recovered plan at all: both are absent.
+    files, lines = scenario_source_meta([scenario], {})
+    assert files == [None]
+    assert lines == [None]
 
 
 def test_html_report_shows_descriptions() -> None:
