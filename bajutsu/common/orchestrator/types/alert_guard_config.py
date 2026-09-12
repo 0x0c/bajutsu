@@ -225,11 +225,15 @@ def _bound_exhaustion_note(
     checking it alone both answers the only question that still matters and cannot be thrown off by
     a gap of any width or kind.
 
-    Both callers pass the result to `_leftover_note` as its *fallback*, so a native leftover this
-    call has not already answered outranks it on either surface: the tree side has no leftover of
-    its own, but still defers to the native one (`__call__`'s lingering-fade branch). Whether to
-    apply it at all is theirs too — a still-open tree diagnosis, `stuck_tree_label`, takes
-    precedence over either surface's own note.
+    Only the native caller (`__call__`'s `already_dismissed` branch) passes the result to
+    `_leftover_note` as its *fallback*, so a native leftover this call has not already answered can
+    outrank it there — a co-present, unhandled button the same read enumerated alongside the fade.
+    The tree caller (the lingering-fade branch) calls this directly instead: that branch runs only
+    inside `if not buttons:`, where the native surface is provably empty, so a native leftover could
+    never be live there regardless of how the result were wrapped — the tree side simply has no
+    leftover of its own to defer *from*. Whether to apply either result at all is each caller's own
+    to decide first — a still-open tree diagnosis, `stuck_tree_label`, takes precedence over either
+    surface's own note.
     """
     if (
         round_index == _GUARD_CALL_MAX_ROUNDS - 1
@@ -787,7 +791,10 @@ class AlertGuardConfig:
                         # under `choice: deny`): this round dismissed a genuinely different in-tree
                         # prompt, which says nothing about whether the stuck one is still stuck.
                         if stuck_tree_shape is None or stuck_tree_shape <= rule.identifying_labels:
-                            note = _leftover_note(buttons, leftover_dismissed_native, "")
+                            # Not `_leftover_note`: `buttons` is `[]` here, inside `if not buttons:`
+                            # above, so that call would only ever reduce to its own fallback (BE-0418
+                            # review finding) — spelled out directly instead.
+                            note = ""
                             stuck_tree_label = stuck_tree_shape = None
                         settle()
                         continue
@@ -833,19 +840,16 @@ class AlertGuardConfig:
                         # accepts a tap without closing (a validation error re-presenting it, say)
                         # leaves this call unable to ever act on it again (`exclude`), and otherwise
                         # the step would fail on the bare `element not found` BE-0402 exists to
-                        # prevent. The tree side has no leftover concept of its own to prefer over
-                        # the exhaustion note, but the native side does: a co-present, unhandled
-                        # native button this call has not already answered still outranks it.
+                        # prevent. Not wrapped in `_leftover_note`, unlike the native side's own call
+                        # on `_bound_exhaustion_note` above: `buttons` is provably `[]` here, inside
+                        # `if not buttons:`, so that wrapper would only ever reduce to this very
+                        # fallback (BE-0418 review finding) — called directly instead.
                         if stuck_tree_label is None:
-                            note = _leftover_note(
-                                buttons,
-                                leftover_dismissed_native,
-                                _bound_exhaustion_note(
-                                    dismiss_shape=tree_dismiss_shape,
-                                    dismiss_label=tree_dismiss_label,
-                                    buttons=tree_buttons,
-                                    round_index=round_index,
-                                ),
+                            note = _bound_exhaustion_note(
+                                dismiss_shape=tree_dismiss_shape,
+                                dismiss_label=tree_dismiss_label,
+                                buttons=tree_buttons,
+                                round_index=round_index,
                             )
                         settle()
                         continue
@@ -868,8 +872,10 @@ class AlertGuardConfig:
                     # belong to whatever the tap actually revealed, not to the shape that was
                     # tapped — genuinely revealed, or a genuine re-presentation of the same prompt,
                     # are the same evidence from here and are left the same way rather than risk
-                    # tapping the former a second, unlicensed time, BE-0418 review finding).
-                    note = _leftover_note(buttons, leftover_dismissed_native, "")
+                    # tapping the former a second, unlicensed time, BE-0418 review finding). Not
+                    # `_leftover_note`: `buttons` is `[]` here too, inside `if not buttons:` above, so
+                    # that call would only ever reduce to its own fallback (BE-0418 review finding).
+                    note = ""
                     break
                 # A non-empty read here is the time-of-check/time-of-use race, not a genuinely
                 # clear surface, so the tree is left alone entirely this round rather than tapped

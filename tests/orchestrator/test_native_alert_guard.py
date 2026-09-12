@@ -3315,8 +3315,10 @@ def test_probe_native_reports_an_ambiguous_alert_as_unhandled_not_absent() -> No
 
 def test_probe_native_still_reports_a_vanished_alert_as_absent() -> None:
     # The other half of the same race keeps its answer: the alert really did go away between the
-    # presence query and the tap, so nothing is blocking and the in-tree path may proceed. The
-    # original, non-empty read still comes back alongside "absent" (BE-0418 review finding).
+    # presence query and the tap, so that one alert is no longer blocking. The original, non-empty
+    # read still comes back alongside "absent" (BE-0418 review finding) — and is what now withholds
+    # the in-tree path rather than licensing it: both consumers require an empty read (`__call__`'s
+    # `if not buttons`, `_observe_native`'s `state == "absent" and not buttons`).
     class _VanishedOnTap(FakeDriver):
         def handle_system_alert(self, sel: base.Selector, timeout: float) -> None:
             raise base.ElementNotFound("the alert vanished")
