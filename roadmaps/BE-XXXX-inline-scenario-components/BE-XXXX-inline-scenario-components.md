@@ -54,7 +54,9 @@ plain, fully-expanded steps alone, so determinism holds.
   (`bajutsu/common/scenario/models/scenario/scenario_file.py`) gains `components: dict[str,
   Component]`, defaulting to empty. Each entry is the same `Component` model BE-0030 already
   validates a standalone component file against (`params` + `steps`). One schema serves both
-  forms.
+  forms. A scenario file itself has two on-disk forms (`docs/dsl-grammar.md` §2): a bare list of
+  scenarios, or a `{description, scenarios}` mapping. The mapping form alone can carry
+  `components:`, so an author declaring one converts a bare-list file first.
 - **A name resolves in the file; a path resolves as a file; the two never collide.** `use: {
   component: <ref> }` keeps a single field. The ref's own shape decides how it resolves. A ref
   containing `/` or ending in `.yaml` / `.yml` resolves as a file, the same way BE-0030 already
@@ -65,25 +67,41 @@ plain, fully-expanded steps alone, so determinism holds.
   neither a new field nor a naming convention.
 - **A shared resolver, so `bajutsu run` and the device-free tools agree.** Two loaders expand a
   scenario file today: `load_expanded_scenarios` (`bajutsu/common/scenario/load_expanded.py`), which
-  `trace --explain`, `audit`, `coverage`, and serve all use, and `run/cli.py`'s `_expand_file`, which
-  builds its own separate `resolve` lambda for the deterministic `run` gate. A new
-  `component_resolver(scenario_file, root, base)`, factored into `bajutsu/common/scenario/`, becomes
-  the one place that builds a `resolve` closure from a loaded `ScenarioFile`. Both loaders call it,
-  so an inline `components:` block expands the same way whether a scenario runs through `run` or
-  through a device-free reader — one implementation instead of two that can drift apart.
-- **A bare name stops resolving once expansion crosses into a component file.** `component_resolver`
-  tracks whether the step being expanded still belongs to the scenario file that declared
-  `components:`, or has already been substituted in from a path-resolved `.component.yaml`.
-  `expand_components`'s internal recursion (`expand(steps, stack)`, `bajutsu/common/scenario/expand.py`)
-  already threads a `stack` of visited refs; it carries one more piece of state alongside it — a flag
-  cleared the first time a path-shaped ref resolves, and never set again for anything expanded under
-  that point. The resolver consults the declaring file's `components:` map only while the flag holds.
-  A `.component.yaml` file itself declares no `components:` of its own, so a bare name reached after
-  the flag clears is always undefined, never a fallback into whichever file happened to `use` it.
-  This keeps one shared component file's expansion the same everywhere it is called from. A
-  file-scoped component may still `use` another file-scoped component (the flag never clears), and
-  may `use` a file-based one (a path-shaped ref, unaffected by any of this); a file-based component's
-  own steps may not `use` a bare name at all.
+  `trace --explain`, `audit`, `coverage`, `impact`, and serve all use, and `run/cli.py`'s
+  `_expand_file`, which builds its own separate `resolve` lambda for the deterministic `run` gate. A
+  new `component_resolver(local, root, base)`, factored into `bajutsu/common/scenario/`, becomes the
+  one place that builds a `resolve` closure bound to a local `components:` map (a loaded
+  `ScenarioFile`'s own, or empty). Both loaders call it, so an inline `components:` block expands the
+  same way whether a scenario runs through `run` or through a device-free reader. The two loaders
+  have already drifted once without it: `load_expanded_scenarios` normalizes a malformed component
+  file into `invalid YAML in <file>` (BE-0150), while `run/cli.py` lets the same `yaml.YAMLError`
+  escape its `except (OSError, ValueError)` as a raw traceback. The shared resolver keeps the
+  normalized form, so `run` gains the clean error too.
+- **Crossing into a component file swaps the active resolver, not a flag.** `component_resolver`
+  binds its `resolve` closure to one local map: the scenario file's own `components:` while expanding
+  that file's own steps (its top level, `before` / `after` / `interrupts`, or a file-scoped
+  component's substituted steps), and an empty map while expanding a path-resolved component's
+  substituted steps. `expand_components` (`bajutsu/common/scenario/expand.py`) builds a *fresh*
+  `component_resolver` bound to an empty map the moment a path-shaped ref resolves, and expands that
+  component's steps under it rather than under the caller's resolver. A bare name found there is
+  always undefined, because a plain `Component` (`params` + `steps`) declares no `components:` for
+  the empty-map resolver to consult. Each resolver instance owns its own per-ref cache, so the same
+  bare name resolved under two different active resolvers — inside two different component files, or
+  a scenario file versus a component file — never collides through one shared cache, the failure mode
+  a single global cache (as `expand_components` has today) would hit. A file-scoped component's own
+  steps expand under the same resolver as their caller, so a file-scoped component may still `use`
+  another file-scoped one; it may also `use` a file-based one, through a path-shaped ref the resolver
+  swap does not touch. A file-based component's own steps carry no local map, so they may not `use` a
+  bare name at all.
+- **A setup prelude expands its own `use` steps before splicing.** A `setup` reference
+  (`Preconditions.setup`) also names a scenario-file-shaped document: `apply_setups`
+  (`bajutsu/common/scenario/expand.py`) loads it through `load_scenarios` and takes its first
+  scenario's `steps`, today unexpanded, before splicing them ahead of the calling scenario's own.
+  Once a prelude file can declare its own `components:`, `apply_setups` runs `expand_components` on
+  the prelude's steps first — under a `component_resolver` bound to the prelude's own map — before
+  splicing the fully-expanded result into the caller. No unexpanded `use` step crosses from a prelude
+  into the scenario that includes it, so a shared prelude's bare names always resolve against the
+  prelude's own `components:`, never against whichever scenario happened to set it as `setup`.
 - **No new path-containment surface.** The loader parses a file-scoped component once, as part of
   the scenario file it already read. Resolving its name never opens a second file, so BE-0174's
   containment check has nothing new to guard here.
@@ -91,6 +109,26 @@ plain, fully-expanded steps alone, so determinism holds.
   map across a suite directory's other files (`load_scenarios_dir` loads each file independently),
   so a name declared in one file stays invisible to another. Reuse across files stays BE-0030's
   file-ref job.
+
+Today, without this item, an author facing that duplication either repeats the steps by hand:
+
+```yaml
+# one scenario file — the same three steps copied into every scenario that needs them
+scenarios:
+  - name: search returns dogs
+    steps:
+      - type: { text: dog, into: { id: home.search }, submit: true }
+    expect:
+      - label: { sel: { id: home.status }, equals: "1 result" }
+  - name: search returns cats
+    steps:
+      - type: { text: cat, into: { id: home.search }, submit: true }
+    expect:
+      - label: { sel: { id: home.status }, equals: "2 results" }
+```
+
+or pays BE-0030's file-per-component cost for a block this file alone calls. This item's inline
+`components:` block gives a third option — defined and called from the same file:
 
 ```yaml
 # one scenario file — no separate component file
@@ -126,8 +164,11 @@ scenarios:
   text.
 * **A distinguishing syntax on `use` (for example `component: "local:<name>"`).** Rejected in favor
   of deciding by the ref's own shape: a path-like ref versus a bare name. Every existing file ref in
-  this repository's scenarios already ends in `.yaml` / `.yml`. The shape rule needs no new syntax
-  on `use`, and no scenario written before this change needs an update.
+  this repository's scenarios already ends in `.yaml` / `.yml`. The shape rule needs no new syntax on
+  `use`, and every scenario in this repository keeps working unchanged. One ref shape does change
+  meaning: a bare ref naming a component file with no `.yaml` / `.yml` suffix and no `/`. Such a ref
+  now fails loudly as an undefined component instead of resolving as a file — a deliberate,
+  low-risk trade, since a suite outside this repository could still write one.
 
 ## Progress
 
@@ -136,13 +177,16 @@ scenarios:
 > (oldest first), linking the PRs.
 
 - [ ] Add `components: dict[str, Component]` to `ScenarioFile`
-- [ ] Factor `component_resolver(scenario_file, root, base)` into `bajutsu/common/scenario/`,
-      dispatching a `use` ref by shape (bare name → the file's own `components:` map, while still
-      inside that file's scope; path-like ref → the existing file resolution), and wire both
+- [ ] Factor `component_resolver(local, root, base)` into `bajutsu/common/scenario/`, binding a
+      `resolve` closure to a local `components:` map (dispatching a `use` ref by shape: bare name →
+      the bound local map, path-like ref → the existing file resolution), and wire both
       `load_expanded_scenarios` and `run/cli.py`'s `_expand_file` through it
-- [ ] Track, through `expand_components`'s recursion, whether expansion has crossed into a
-      path-resolved component file; once it has, fail a bare name as undefined rather than falling
-      back to the declaring file's map
+- [ ] In `expand_components`, expand a path-resolved component's steps under a *fresh*
+      `component_resolver` bound to an empty map, rather than under the caller's resolver, so a bare
+      name there always fails as undefined and each resolver's per-ref cache stays isolated
+- [ ] Update `apply_setups` to expand a setup prelude's own `use` steps — under a `component_resolver`
+      bound to the prelude's own `components:` map — before splicing the result into the calling
+      scenario
 - [ ] Cover it in the fast suite:
       - A file-scoped component expands identically to its hand-duplicated steps.
       - A file-scoped component and a file-based component coexist in one scenario.
@@ -153,16 +197,20 @@ scenarios:
         file identically.
       - A file-scoped component may itself `use` another file-scoped component, and may `use` a
         file-based one.
-      - A bare `use` inside a separate `.component.yaml` file fails as undefined, even when a
-        same-named entry exists in the including scenario file's `components:` map.
-- [ ] Update `docs/scenarios.md` (§Components) and `docs/dsl-grammar.md` (§6.2) plus their `docs/ja/`
-      mirrors
+      - A bare `use` inside a separate component file fails as undefined, even when a same-named
+        entry exists in the including scenario file's `components:` map and that file has already
+        expanded the same name once.
+      - A setup prelude's own bare `use` resolves against the prelude's own `components:`, unaffected
+        by a same-named entry in the calling scenario file's map.
+- [ ] Update `docs/scenarios.md` (§Components) and `docs/dsl-grammar.md` (the `ScenarioFile`
+      production in §2, and §6.2) plus their `docs/ja/` mirrors
 
 ## References
 
-`bajutsu/common/scenario/models/scenario/component.py`, `bajutsu/common/scenario/expand.py`,
-`bajutsu/common/scenario/load_expanded.py`, `bajutsu/run/cli.py` (`_expand_file`) — the component
-model and the two expansion call sites this item unifies behind one resolver.
+`bajutsu/common/scenario/models/scenario/component.py`, `bajutsu/common/scenario/expand.py`
+(`expand_components`, `apply_setups`), `bajutsu/common/scenario/load_expanded.py`,
+`bajutsu/run/cli.py` (`_expand_file`) — the component model and the expansion call sites this item
+unifies behind one resolver.
 
 [BE-0030 — Parameterized shared steps](../BE-0030-parameterized-shared-steps/BE-0030-parameterized-shared-steps.md) —
 the file-based component this item adds a scenario-local sibling to.
