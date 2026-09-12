@@ -1980,26 +1980,22 @@ def test_the_end_of_step_guard_reports_an_unhandled_native_alert_uncleared_at_th
     assert guard.blocked_note == uncleared_prompt_note("Allow")
 
 
-def test_the_end_of_step_guard_does_not_report_a_dismissed_alerts_own_extra_button() -> None:
-    # `_leftover_after_answered` must subtract the *whole* read a dismissing round actually made,
-    # not just the matched rule's own `identifying_labels` -- a rule is deliberately allowed to name
-    # only some of its alert's buttons (`ResolvedAlertRule`'s own docstring), so a three-button alert
-    # identified by a two-label shape would otherwise leave its own third button stranded, reported
-    # as if a second, different, unhandled alert had joined the one already dismissed (review
-    # finding). Modeled on iOS's own three-button location prompt, whose "Allow Once" / "Allow While
-    # Using App" / "Don't Allow" the two-label form every entry in the real catalogue uses today
-    # would naturally encode as just "Allow Once" and "Don't Allow".
-    location = ResolvedAlertRule(
-        identifying_labels=frozenset({"Allow Once", "Don't Allow"}), tap_label="Allow Once"
-    )
-    driver = _fake_with_alert(["Allow Once", "Allow While Using App", "Don't Allow"])
-    guard = AlertGuardConfig(rules=[location])
+def test_the_end_of_step_guard_still_names_a_co_present_alert_no_rule_identifies() -> None:
+    # `_leftover_after_answered` subtracts a dismissed rule's own `identifying_labels`, not the
+    # whole round-0 read -- a second, different, unidentified alert already up alongside the one
+    # a scenario declares is the ordinary shape of a stacked pair queued by one action (review
+    # finding: recording the whole read instead, tried for a different finding, swallowed exactly
+    # this case). The scenario declares only `notifications`; SpringBoard's very first read already
+    # holds a second, undeclared alert ("OK" / "Cancel") right alongside it.
+    driver = _fake_with_alert(["Allow", "Don't Allow", "OK", "Cancel"])
+    guard = AlertGuardConfig(rules=[guard_rule("Allow", identifying=("Allow", "Don't Allow"))])
     alerts: list[AlertEvent] = []
     cleared = guard(driver, alerts, settle=lambda: None)
-    assert cleared and alerts == [AlertEvent(label="Allow Once")]
-    # Not an "unhandled system alert" note naming the stranded third button: the rule *did*
-    # identify this alert, and only the tap's own outcome is in question.
-    assert guard.blocked_note == uncleared_prompt_note("Allow Once")
+    assert cleared and alerts == [AlertEvent(label="Allow")]  # notifications did clear
+    # Names the still-unidentified "OK" / "Cancel" alert, not a claim that notifications itself
+    # never cleared -- the tap the guard actually made is not what is still blocking the screen.
+    assert "OK" in guard.blocked_note and "Cancel" in guard.blocked_note
+    assert "Allow" not in guard.blocked_note
 
 
 def test_the_end_of_step_guard_clears_a_native_leftover_note_once_the_surface_reads_absent() -> (
