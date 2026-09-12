@@ -702,8 +702,7 @@ class AlertGuardConfig:
                     dismissed_tree_shapes |= {rule.identifying_labels}
                     # A fresh tap, of any shape, is what `_bound_exhaustion_note` checks on the final
                     # round (mirrors the native branch above).
-                    tree_dismiss_shape = rule.identifying_labels
-                    tree_dismiss_label = rule.tap_label
+                    tree_dismiss_shape, tree_dismiss_label = rule.identifying_labels, rule.tap_label
                     # This round's own pre-tap read, so a later round's exhaustion check can tell
                     # whether the screen has changed since — not merely whether this shape's labels
                     # are still somewhere in it (BE-0418 review finding).
@@ -753,11 +752,12 @@ class AlertGuardConfig:
                     # `dismiss_from_tree_once` reported a tap as landed, but a sheet that accepts a
                     # tap without closing (a validation error re-presenting it, say) leaves this
                     # call unable to ever act on it again (`exclude`), and otherwise the step would
-                    # fail on the bare `element not found` BE-0402 exists to prevent. This round's
-                    # probe answered "absent" too, the same deterministic fact the branch below acts
-                    # on, so a native leftover note is stale here as well — only a tree diagnosis
-                    # survives, since a tree read alone cannot contradict it, and the tree side has
-                    # no leftover concept of its own to prefer over the exhaustion note.
+                    # fail on the bare `element not found` BE-0402 exists to prevent. The tree side
+                    # has no leftover concept of its own to prefer over the exhaustion note, but the
+                    # native side does: this round's own native read can still hold a co-present,
+                    # unhandled button — a time-of-check/time-of-use race answers "absent" after a
+                    # non-empty read too, so "absent" alone is not proof the native surface is clear
+                    # (BE-0418 review finding).
                     exhaustion_note = _bound_exhaustion_note(
                         dismiss_shape=tree_dismiss_shape,
                         dismiss_label=tree_dismiss_label,
@@ -765,7 +765,7 @@ class AlertGuardConfig:
                         round_index=round_index,
                     )
                     if stuck_tree_label is None:
-                        note = exhaustion_note
+                        note = _leftover_note(buttons, dismissed_native, exhaustion_note)
                     settle()
                     continue
                 # An open `NotTappable` diagnosis is itself something this call still has to act
@@ -784,7 +784,10 @@ class AlertGuardConfig:
                 # unless the signature comparison above is what ruled the lingering-fade branch out,
                 # in which case the tree genuinely changed since the tap and there is nothing left to
                 # diagnose (the labels the `any()` above found belong to whatever the tap actually
-                # revealed, not to the shape that was tapped). Gated on this round's own native read,
+                # revealed, not to the shape that was tapped — genuinely revealed, or a genuine
+                # re-presentation of the same prompt, are the same evidence from here and are left
+                # the same way rather than risk tapping the former a second, unlicensed time, BE-0418
+                # review finding). Gated on this round's own native read,
                 # not merely on `state == "absent"`: the time-of-check/time-of-use race also answers
                 # "absent" after a *non-empty* read, and that only proves the one alert this round
                 # tried to tap is gone — anything else SpringBoard still enumerates is as unhandled

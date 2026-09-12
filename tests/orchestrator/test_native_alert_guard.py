@@ -2079,6 +2079,41 @@ def test_the_end_of_step_guard_names_a_leftover_native_alert_when_a_stuck_tap_fi
     assert "Weird Button" in guard.blocked_note
 
 
+def test_the_end_of_step_guard_names_a_leftover_native_alert_on_a_lingering_tree_round() -> None:
+    # The third branch sharing the same flawed premise as the two fixes above: the lingering-fade
+    # branch's own exhaustion-note computation used to discard the native leftover unconditionally,
+    # on the same stale assumption that "absent" always means the native surface is clear. Round 0
+    # taps an in-tree sheet whose fade outlasts `settle`; round 1's native probe races away on a
+    # non-empty read, leaving "Weird Button" unaccounted for, while the unchanged tree read lands in
+    # the lingering-fade branch below (BE-0418 review finding).
+    class _RacesAwayOnTap(FakeDriver):
+        def handle_system_alert(self, sel: base.Selector, timeout: float) -> None:
+            raise base.ElementNotFound("the prompt raced away")
+
+    driver = _RacesAwayOnTap([_button("Sheet")])
+    tree_rule = ResolvedAlertRule(
+        identifying_labels=frozenset({"Sheet"}), tap_label="Sheet", native=False, in_tree=True
+    )
+    native_rule = ResolvedAlertRule(
+        identifying_labels=frozenset({"OK", "Cancel"}), tap_label="OK", native=True, in_tree=False
+    )
+
+    def settle() -> None:
+        # Round 0's own dismiss seeds the native surface for round 1 onward; "Sheet" is never
+        # removed from the tree, modeling its own fade outlasting every settle in this test.
+        driver.system_alert_buttons = [
+            _button("OK"),
+            _button("Cancel"),
+            _button("Weird Button"),
+        ]
+
+    guard = AlertGuardConfig(rules=[tree_rule, native_rule])
+    alerts: list[AlertEvent] = []
+    cleared = guard(driver, alerts, settle=settle)
+    assert cleared and alerts == [AlertEvent(label="Sheet")]
+    assert "Weird Button" in guard.blocked_note
+
+
 def test_the_end_of_step_guard_reports_a_native_alert_uncleared_after_a_leading_tree_round() -> (
     None
 ):
