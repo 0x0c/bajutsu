@@ -3190,17 +3190,17 @@ def test_a_cold_spawn_failure_discard_leaves_a_real_crashs_evidence_alone(
     )  # the cold-spawn failure contributed nothing of its own
 
 
-def test_a_second_crash_on_one_environment_overwrites_the_first_snapshot(
+def test_a_second_crash_on_one_environment_belongs_to_the_next_lease(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    # The narrow limitation BE-0421 accepts and documents: the snapshot is cached on the environment,
-    # not per scenario, so two crash-recovery episodes racing on one shared warm environment leave the
-    # second's evidence where the first's was. Pinned here so a future reader sees it is deliberate —
-    # BE-0354's device-replacement rung already treats that state as a degraded-device escalation.
+    # Ownership moves at `take_crash_snapshot()`, not at the crash itself, so a second crash on the
+    # same warm environment can never reach the first scenario's evidence: the first lease has already
+    # taken its copy by the time a second scenario gets a chance to lease the device. Not calling
+    # `take_crash_snapshot()` between the two crashes (unlike `test_taking_the_snapshot_moves_it_off_
+    # the_shared_environment`) is the point — it pins that the *cache itself* holds only the second
+    # crash's evidence once the second has happened, regardless of whether anyone read the first.
     env, _reports = _crashed_runner(monkeypatch, tmp_path)
     env._discard_runner()
-    first = env.take_crash_snapshot()()
-    assert first
     env.start(_sim_eff(test_runner=str(_write_runner(tmp_path))), Preconditions())
     assert env._runner_log is not None
     env._runner_log.write_text("the second scenario's crash\n", encoding="utf-8")

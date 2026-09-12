@@ -541,9 +541,22 @@ def device_pool(  # noqa: C901, PLR0915
                         mid_run=True,
                         what=f"discarding the runner on {udid} after a failed end-of-lease teardown",
                     )
+
+                def _take_crash_snapshot() -> None:
+                    nonlocal crash_evidence
+                    crash_evidence = lease_env.take_crash_snapshot()
+
                 # After every teardown above, because those are what let the environment observe a
                 # crashed runner, and before `free.put` hands the device to the next lease (BE-0421).
-                crash_evidence = lease_env.take_crash_snapshot()
+                # Guarded like every other site here, even though today's implementation cannot raise:
+                # this call sits ahead of `free.put`, so a hiccup in a future implementation that does
+                # real work here (the protocol explicitly allows it) must not skip it and strand the
+                # device on the next lease's `free.get()`.
+                guarded_teardown(
+                    _take_crash_snapshot,
+                    mid_run=True,
+                    what=f"capturing the crash snapshot on {udid} at the lease's end",
+                )
                 free.put(udid)
 
             meta = catalog.get(udid, {})
