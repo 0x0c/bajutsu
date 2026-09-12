@@ -648,13 +648,6 @@ class AlertGuardConfig:
         # once the sheet actually closed can carry the identical label. Comparing full tree identity
         # rather than just this shape's labels catches that case (BE-0418 review finding).
         tree_dismiss_signature: tuple[tuple[str | None, str | None], ...] | None = None
-        # The tree read from whichever round last found nothing new to tap — an excluded shape
-        # still lingering, an ambiguous read, or genuinely nothing at all — for the post-loop check
-        # below to compare `tree_dismiss_signature` against, since a call whose final round takes a
-        # different path entirely (a native alert dismissed on the last round, say) leaves no round
-        # of its own to run that comparison inline (BE-0418 review finding).
-        post_tap_tree_buttons: list[str] = []
-        post_tap_tree_signature: tuple[tuple[str | None, str | None], ...] | None = None
         for round_index in range(_GUARD_CALL_MAX_ROUNDS):
             state, event, buttons = self.probe_native(driver, dismissed=dismissed_native)
             if state == "dismissed":
@@ -806,12 +799,6 @@ class AlertGuardConfig:
                         )
                         settle()
                         continue
-                    # Nothing not-yet-excluded matched, so this round's own read is exactly the
-                    # evidence the post-loop check needs if no later round touches the tree again.
-                    post_tap_tree_buttons, post_tap_tree_signature = (
-                        tree_buttons,
-                        tree_read_signature,
-                    )
                     # The tree twin of the native retraction above, but keyed on a shape rather than
                     # the whole surface: a dismissed shape no longer enumerable anywhere in this
                     # read is gone, not fading, so keeping it in `exclude` could only ever wrongly
@@ -946,19 +933,17 @@ class AlertGuardConfig:
         # other path — a native alert dismissed on the very last round, say — never runs it, even
         # though the evidence that branch would have used survives right here to check: the tree
         # twin of the native diagnosis's own reach across both `already_dismissed` and `"unhandled"`.
-        # Not a fresh query, though — nothing settles between the loop ending and here, so an
-        # immediate re-read only shows what the last round that touched the tree already showed,
-        # which reads a tap that landed *this* round identically to one that never closed at all.
-        # `post_tap_tree_buttons`/`post_tap_tree_signature` instead carry forward the read from
-        # whichever *earlier* round last found nothing new to tap — the same evidence the branch
-        # above already trusted enough to end or continue the call on (BE-0418 review finding).
-        if (
-            not note
-            and tree_dismiss_shape is not None
-            and tree_dismiss_label is not None
-            and post_tap_tree_signature == tree_dismiss_signature
-            and tree_dismiss_shape <= set(post_tap_tree_buttons)
-        ):
-            note = uncleared_prompt_note(tree_dismiss_label)
+        # A *fresh* query, deliberately, rather than the last round's own read: every path that
+        # would leave `tree_dismiss_shape` set also called `settle()` on its way here, at least once
+        # and often twice, so this is the one use of that evidence that outlives the settle it was
+        # taken before — a stale read would misreport a sheet the call's own settling has since
+        # watched close (BE-0418 review finding). Read-only, so nothing here risks the unlicensed
+        # tap the loop's own gate above exists to prevent.
+        if not note and tree_dismiss_shape is not None and tree_dismiss_label is not None:
+            _, final_tree_buttons, final_tree_signature = _read_tree(driver)
+            if final_tree_signature == tree_dismiss_signature and tree_dismiss_shape <= set(
+                final_tree_buttons
+            ):
+                note = uncleared_prompt_note(tree_dismiss_label)
         self.blocked_note = note
         return cleared

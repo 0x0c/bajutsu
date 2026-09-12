@@ -1870,7 +1870,13 @@ def test_the_end_of_step_guard_lands_a_stuck_tap_after_an_ambiguous_middle_round
 
     driver = _ScrimLiftsOnTheLastRound()
     guard = AlertGuardConfig(rules=[guard_rule("Not Now")])
-    cleared, alerts = _call(driver, guard)
+
+    def settle() -> None:
+        if driver.tap_calls == 2:  # the landing tap genuinely closes the sheet, once it lands
+            driver.screen = []
+
+    alerts: list[AlertEvent] = []
+    cleared = guard(driver, alerts, settle=settle)
     assert cleared and alerts == [AlertEvent(label="Not Now")]
     assert guard.blocked_note == ""  # the stuck diagnosis clears once its own shape finally lands
     assert driver.tap_calls == 2  # round 0's failed attempt, round 2's landing one — round 1 tapped
@@ -1913,6 +1919,10 @@ def test_the_end_of_step_guard_keeps_trying_a_stuck_tree_prompt_through_an_unrel
         elif settle_calls == 2:
             # It resolves on its own before round 2's own native probe.
             driver.system_alert_buttons = []
+        elif settle_calls == 3:
+            # Round 2's own landing tap genuinely closes the sheet, the way a real device's
+            # settle_after_alert_dismiss would reflect by the time this call returns.
+            driver.screen = []
 
     guard = AlertGuardConfig(rules=[tree_rule])
     alerts: list[AlertEvent] = []
@@ -1973,6 +1983,9 @@ def test_the_end_of_step_guard_retaps_a_native_alert_that_genuinely_re_raises_af
         settle_calls += 1
         if settle_calls == 2:  # right after round 1's in-tree dismiss settles
             driver.system_alert_buttons = [_button("Allow")]  # the app re-raises the same prompt
+            # Round 1's own tap genuinely closed "Not Now", the way a real device's
+            # settle_after_alert_dismiss would reflect by the time this call returns.
+            driver.screen = []
 
     guard = AlertGuardConfig(
         rules=[
@@ -2886,6 +2899,10 @@ def test_the_end_of_step_guard_gives_a_lingering_tree_exclusion_another_round_in
         settle_count += 1
         if settle_count == 2:  # not revealed until the round *after* the one that tapped "Not Now"
             driver.screen = [*driver.screen, _button("Later")]
+        elif settle_count == 3:
+            # Round 2's own landing tap genuinely closes "Later", the way a real device's
+            # settle_after_alert_dismiss would reflect by the time this call returns.
+            driver.screen = []
 
     guard = AlertGuardConfig(rules=[first, second])
     cleared, alerts = _call(driver, guard, settle=settle)
