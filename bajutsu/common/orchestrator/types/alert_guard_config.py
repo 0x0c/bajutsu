@@ -683,6 +683,17 @@ class AlertGuardConfig:
                     # already names: a fourth declared, live prompt queued behind the three this call
                     # already tapped is still a rule *did* identify, and the final round has no
                     # successor of its own to self-correct a single-rule credit's misdiagnosis
+                    # (BE-0418 review finding). A queued-but-not-yet-tapped fourth prompt is exactly
+                    # what that credit subtracts out of the leftover, though, so a bare `""` fallback
+                    # would go silent on it in turn — `_raced_exhaustion_note` resolves a rule fresh
+                    # against this round's own read the same way the race and `"unhandled"` branches
+                    # already do, naming that fourth prompt instead of dropping it (BE-0418 review
+                    # finding). No fallback of its own, unlike those two siblings: `dismissed_native`
+                    # already includes the shape this round just tapped, so `_resolve_alert_rule`'s
+                    # own dismissed-exclusion retry can never resolve back to it — a `None` result
+                    # here means nothing else is queued, and `native_dismiss_shape` would otherwise
+                    # trivially satisfy `_bound_exhaustion_note`'s check against this very round's own
+                    # pre-tap read, naming the alert that was just confirmed tapped as still uncleared
                     # (BE-0418 review finding).
                     note = _leftover_note(
                         buttons,
@@ -691,7 +702,14 @@ class AlertGuardConfig:
                             rule.identifying_labels
                             for rule in identified_alert_rules(self.native_rules, buttons)
                         },
-                        "",
+                        _raced_exhaustion_note(
+                            self.native_rules,
+                            buttons,
+                            dismissed_native,
+                            round_index,
+                            None,
+                            None,
+                        ),
                     )
                 settle()
                 continue

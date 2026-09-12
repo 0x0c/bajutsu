@@ -2150,7 +2150,7 @@ def test_the_end_of_step_guard_names_an_unhandled_button_after_a_toctou_race() -
     assert "OK" not in guard.blocked_note and "Cancel" not in guard.blocked_note
 
 
-def test_the_end_of_step_guard_does_not_call_a_fourth_queued_prompt_unhandled() -> None:
+def test_the_end_of_step_guard_names_a_fourth_queued_prompt_instead_of_going_silent() -> None:
     # The "dismissed" branch's own leftover check credited only `dismissed_native` -- the shapes
     # this call has *tapped* -- not every rule `identified_alert_rules` finds on the same read, so a
     # fourth declared prompt queued behind three the call already dismissed, uniquely identified on
@@ -2158,6 +2158,11 @@ def test_the_end_of_step_guard_does_not_call_a_fourth_queued_prompt_unhandled() 
     # alert no rule identifies (BE-0418 review finding). Unlike a mid-call round, the final round has
     # no successor to self-correct it. Four disjoint native rules; rounds 0-2 dismiss the first
     # three cleanly, and the fourth is still on screen, fully identified, when the bound is spent.
+    # Crediting it keeps it out of the generic `alert_block_note` -- it must never be named as an
+    # alert nothing identifies -- but the call still never taps it, so the exhaustion fallback
+    # (`_raced_exhaustion_note`, BE-0418 review finding) now names it via `uncleared_prompt_note`
+    # rather than falling silent, the same bare-`""` misdiagnosis already fixed on the race and
+    # `"unhandled"` branches.
     class _DismissesThreeOfFour(FakeDriver):
         _SHAPES: ClassVar[dict[str, set[str]]] = {
             "A1": {"A1", "A2"},
@@ -2192,7 +2197,7 @@ def test_the_end_of_step_guard_does_not_call_a_fourth_queued_prompt_unhandled() 
         AlertEvent(label="B1"),
         AlertEvent(label="C1"),
     ]
-    assert guard.blocked_note == ""
+    assert guard.blocked_note == uncleared_prompt_note("D1")
 
 
 def test_the_end_of_step_guard_does_not_call_a_co_present_declared_prompt_unhandled_on_a_race() -> (

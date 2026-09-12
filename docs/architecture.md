@@ -873,8 +873,8 @@ Android; on iOS it rests on the fast suite's bookkeeping proof alone.
   gave up on reports the sheet, not the alert. And `_dismiss_from_tree` resolves over the same
   widest-first `tree_dedup_rules` this change gives the one-shot dismiss, rather than plain
   declaration order, so two nested in-tree shapes match the wider one first regardless of how a
-  scenario declared them — which is what stops a fade still enumerating the wider shape's buttons
-  from matching the narrower sibling and being tapped a second time mid-`wait`
+  scenario declared them — the two are declared twins over the same screen, so which button a
+  scenario gets must not depend on whether a `wait` happened to be running when the sheet appeared
 - DSL `iosTipKitHandling` (BE-0389), an opt-in guard for a blocking Apple TipKit tip: TipKit's
   presentation marks the content it covers accessibility-hidden rather than merely occluding it, so a
   blocked tap can fail as `ElementNotFound`, not only `ElementNotTappable`. The XCUITest backend alone
