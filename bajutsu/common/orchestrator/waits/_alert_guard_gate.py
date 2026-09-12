@@ -12,7 +12,6 @@ from bajutsu.common.orchestrator.types import (
     Clock,
     alert_block_note,
     match_alert_rule,
-    matching_alert_rule,
     uncleared_prompt_note,
 )
 
@@ -183,16 +182,19 @@ class _AlertGuardGate:
                 #
                 # Preserving an existing note is not the same as producing one: a co-present button
                 # no rule identifies, enumerated by this very read alongside the raced rule's own
-                # shape, would otherwise go unreported for a whole `poll_interval` -- mirrors
-                # `AlertGuardConfig.__call__`'s own race branch, which subtracts only the raced
-                # rule's own labels from the read rather than the whole surface (BE-0418 review
+                # shape, would otherwise go unreported for a whole `poll_interval` (BE-0418 review
                 # finding).
-                raced_rule = matching_alert_rule(self.guard.native_rules, buttons)
-                leftover = [
+                #
+                # Every shape a rule identifies on this read, not only the one that raced: a
+                # second, *declared* prompt co-present with it is one the next probe answers, so
+                # naming it here would report an alert a rule does identify as unhandled.
+                identified = {
                     label
-                    for label in buttons
-                    if raced_rule is None or label not in raced_rule.identifying_labels
-                ]
+                    for rule in self.guard.native_rules
+                    if rule.identifying_labels <= set(buttons)
+                    for label in rule.identifying_labels
+                }
+                leftover = [label for label in buttons if label not in identified]
                 if leftover:
                     self._native_unhandled = True
                     self.blocked_note = alert_block_note(leftover)

@@ -1050,6 +1050,44 @@ def test_wait_guard_reports_a_co_present_alert_no_rule_identifies_on_a_race() ->
     assert "Allow" not in gate.blocked_note and "Don't Allow" not in gate.blocked_note
 
 
+def test_wait_guard_does_not_call_a_co_present_declared_prompt_unhandled_on_a_race() -> None:
+    # The leftover computation above must subtract every rule a *declared* shape identifies on this
+    # read, not only the one that raced: `matching_alert_rule` returns just its own first match, so
+    # a second, different declared prompt stacked alongside the raced one would otherwise survive
+    # into `leftover` and be reported as an alert no rule identifies -- the exact misdiagnosis
+    # `uncleared_prompt_note`'s docstring says must not happen, since a rule does identify it and the
+    # very next native probe would dismiss it (BE-0418 review finding). "notifications" races away;
+    # "paste" is a second, disjoint prompt fully present on the very same read.
+    from bajutsu.common.orchestrator.types import ResolvedAlertRule
+    from bajutsu.common.orchestrator.waits import _AlertGuardGate
+
+    class _RacesAway(FakeDriver):
+        def handle_system_alert(self, sel: base.Selector, timeout: float) -> None:
+            raise base.ElementNotFound("the prompt raced away")
+
+    driver = _RacesAway([])
+    driver.system_alert_buttons = [
+        el(None, "Allow", ["button"]),
+        el(None, "Don't Allow", ["button"]),
+        el(None, "Allow Paste", ["button"]),
+        el(None, "Don't Allow Paste", ["button"]),
+    ]
+    guard = AlertGuardConfig(
+        rules=[
+            ResolvedAlertRule(
+                identifying_labels=frozenset({"Allow", "Don't Allow"}), tap_label="Allow"
+            ),
+            ResolvedAlertRule(
+                identifying_labels=frozenset({"Allow Paste", "Don't Allow Paste"}),
+                tap_label="Allow Paste",
+            ),
+        ]
+    )
+    gate = _AlertGuardGate(driver=driver, clock=_LogicalClock(), guard=guard, alerts=[])
+    gate.observe([])
+    assert gate.blocked_note == ""
+
+
 def test_wait_guard_reports_nothing_when_a_race_leaves_no_leftover() -> None:
     # The other half of the fresh-diagnosis fix above: a race whose own read holds nothing beyond
     # the raced rule's own shape has no leftover to report, so this poll must not manufacture a note
