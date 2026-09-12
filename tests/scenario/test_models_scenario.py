@@ -309,3 +309,22 @@ def test_permissions_rejects_unknown_action() -> None:
         Scenario.model_validate(
             {"name": "x", "permissions": {"camera": "bogus"}, "steps": [{"tap": {"id": "a"}}]}
         )
+
+
+def test_source_stem_defaults_to_none() -> None:
+    s = Scenario.model_validate({"name": "x", "steps": [{"tap": {"id": "a"}}]})
+    assert s.source_stem is None
+
+
+def test_source_stem_set_by_loader_is_readable() -> None:
+    s = Scenario.model_validate({"name": "x", "steps": [{"tap": {"id": "a"}}]})
+    s.set_source_stem("login_flow")
+    assert s.source_stem == "login_flow"
+
+
+def test_source_stem_never_appears_in_model_dump() -> None:
+    s = Scenario.model_validate({"name": "x", "steps": [{"tap": {"id": "a"}}]})
+    s.set_source_stem("login_flow")
+    assert "source_stem" not in s.model_dump()
+    assert "sourceStem" not in s.model_dump(by_alias=True)
+    assert "source_stem" not in dump_scenarios([s])

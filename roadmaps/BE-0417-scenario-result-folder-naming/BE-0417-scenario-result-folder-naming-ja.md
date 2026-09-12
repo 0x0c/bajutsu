@@ -7,8 +7,9 @@
 |---|---|
 | 提案 | [BE-0417](BE-0417-scenario-result-folder-naming-ja.md) |
 | 提案者 | [@0x0c](https://github.com/0x0c) |
-| 状態 | **提案** |
+| 状態 | **実装済み** |
 | トラッキング Issue | [検索](https://github.com/bajutsu-e2e/bajutsu/issues?q=is%3Aissue+label%3Aroadmap-tracking+in%3Atitle+"BE-0417") |
+| 実装 PR | [#1977](https://github.com/bajutsu-e2e/bajutsu/pull/1977) |
 | トピック | コードベース品質・技術的負債 |
 | 関連 | [BE-0200](../BE-0200-run-id-contract/BE-0200-run-id-contract-ja.md) |
 <!-- /BE-METADATA -->
@@ -46,10 +47,12 @@
   該当し、本項目の影響を受けません。
 - **クロスブラウザマトリクスの階層構造は変更しません。** `--browsers` が作る `<engine>/<sid>/` と
   いう階層はそのままです。変わるのは `sid` 自体の組み立て方だけです。
-- **`_matrix()` に既存する、シナリオ名をキーにした衝突は扱いません。**
-  `bajutsu/common/report/manifest.py:78-91` は `--browsers` のマトリクス集計をシナリオ名で
-  キー化しています。同一エンジン内に同名シナリオが複数あると、片方のマトリクスセルがもう片方を
-  上書きします。これは本項目とは別の既存課題です。
+- **`_matrix()` に既存していた、シナリオ名をキーにした衝突は扱いません。**
+  `bajutsu/common/report/manifest.py` は `--browsers` のマトリクス集計をシナリオ名でキー化して
+  おり、同一エンジン内に同名シナリオが複数あると片方のマトリクスセルがもう片方を上書きしていま
+  した。これは本項目とは別の既存課題でしたが、本項目の実装に着手する前に
+  [#1970](https://github.com/bajutsu-e2e/bajutsu/pull/1970) で独立に修正済みです
+  （`_matrix()` は現在、同名シナリオを `(N)` サフィックスで区別します）。この課題はもう存在しません。
 
 ## 動機
 
@@ -145,7 +148,46 @@
 > 作業分解(作業の単位ごとに1つ)に対応し、ログには変更内容と時期(古い順)を PR へのリンクと
 > ともに記録します。
 
-- [ ] 未着手。
+- [x] 作業単位 1——`Scenario.source_stem`：`PrivateAttr` のプライベート属性、読み取り専用の
+  `source_stem` プロパティ、そして `set_source_stem()` セッターを追加します。ローダーから
+  `_source_stem` へ直接代入すると `ruff` の `SLF001` に抵触するため、公開セッター経由の書き込みに
+  しています（プロパティ自体は設計どおり読み取り専用のままです）。
+- [x] 作業単位 2——`_expand_file()`（`bajutsu/run/cli.py`）と `load_expanded_scenarios()`
+  （`bajutsu/common/scenario/load_expanded.py`）が、それぞれ展開後の最終的なシナリオ一覧に対し、
+  返す直前に `set_source_stem()` を呼び出します。
+- [x] 作業単位 3——`scenario_slug()` の隣に `sanitize_source_stem()` を追加します。
+  `bajutsu/common/runner/pipeline.py` の `run_one` と `_cancelled_pass` は、共通の
+  `_evidence_sid()` ヘルパー1つを介して（2箇所が食い違わないように）`s.source_stem` をこの関数に
+  通して `sid` を組み立て、読み込み元ファイルが不明なときだけ `scenario_slug(s.name)` に
+  フォールバックします。設計の字面からの逸脱があります：置換する文字クラスは、仕様どおりの
+  `[^A-Za-z0-9_.-]` ではなく `[^\w.-]`（Unicode の単語構成文字）にしています。ASCII 限定の
+  文字クラスでは、日本語のシナリオファイル名の語幹が黙ってアンダースコアの連なりに潰れてしまい
+  ます。この codebase 自身のバイリンガルな慣習（CLAUDE.md）を踏まえると現実的なケースであり、
+  まさにそのファイルに対して本項目自身の動機を損ないます。`\w` であっても、設計の根拠が挙げていた
+  文字（`#`、`?`、`/`、空白など。エスケープされない HTML 属性や URL パスセグメントとしての安全性）
+  はすべて置換対象のままで、かつ非 ASCII の語幹も識別可能なまま残ります。
+- [x] 作業単位 4——`docs/reporting.md` と `docs/ja/reporting.md` の出力レイアウトに `<sid>/`
+  の階層を追加しました（これまで `<stepId>/` が `runs/<runId>/` の直下にぶら下がっているように
+  見えていましたが、実際のランタイムはすでにこの階層で証跡を書き出しています）。あわせて `sid`
+  の導出規則を説明する 1 行を追加しました。
+- [x] 作業単位 5——上記すべてに対するテストを追加しました。`_cancelled_pass` のマトリクス経路、
+  両ローダーのデータ駆動展開ケース、`sanitize_source_stem()` の文字置換、そして `source_stem`
+  が `model_dump()` に現れないことを確認しています。
+
+ログ：
+
+- [#1977](https://github.com/bajutsu-e2e/bajutsu/pull/1977)——作業単位すべて（5つ）を実装し、本項目
+  を完了しました。`Scenario.source_stem`（`model_dump()` に一切現れない、読み込み時専用の
+  `PrivateAttr`）、それを展開後の最終的なシナリオ一覧に設定する2つのデバイス不要ローダー、そして
+  `scenario_slug()` の隣に `sanitize_source_stem()` を追加しました。`pipeline.py` の `run_one` と
+  `_cancelled_pass` は、共通の `_evidence_sid()` ヘルパーを介して読み込み元ファイルの語幹から
+  `sid` を組み立て、読み込み元ファイルが不明なときは `scenario_slug(name)` にフォールバック
+  します。設計の字面からの逸脱が1点あります：サニタイザーが置換する文字クラスを、仕様どおりの
+  ASCII 限定 `[^A-Za-z0-9_.-]` ではなく `[^\w.-]`（Unicode の単語構成文字）にしています。セルフ
+  レビューの過程で見つかったもので、ASCII 限定の文字クラスでは日本語のシナリオファイル名の語幹が
+  黙ってアンダースコアの連なりに潰れてしまい、まさにそのファイルに対して本項目自身の動機を損なう
+  ためです。また、`_matrix()` の衝突について、本 PR に着手する前に #1970 で独立に修正済みだった
+  内容を指していた「やらないこと」の記述も訂正しました。
 
 ## 参考
 

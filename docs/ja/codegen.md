@@ -208,7 +208,7 @@ test.describe('Components', () => {
 | `type`（`into` あり） | `await loc.fill('…')` |
 | `type`（`into` なし） | `await page.keyboard.type('…')` |
 | `longPress` | `await loc.click({ delay: <ms> })` |
-| `clear` | `await loc.clear()`。ドライバ自身のフォーカス→バックスペースによる clear（BE-0265）を忠実に再現します |
+| `clear` | `await loc.clear()`。ドライバ自身の全選択→バックスペースによる clear（BE-0265）を忠実に再現します |
 | `delete { count }` | フォーカス + `page.keyboard.press('Backspace')` を `count` 回（BE-0265） |
 | `select` | `await loc.selectText()`。web における全選択の対応物です（BE-0265） |
 | `copy` | `await page.keyboard.press('Control+c')` |

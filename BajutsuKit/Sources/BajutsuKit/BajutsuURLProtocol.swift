@@ -13,6 +13,12 @@ final class BajutsuURLProtocol: URLProtocol, URLSessionDataDelegate {
     private var capturedResponse: URLResponse?
     private var capturedRequestBody: Data?
     private var startedAt = Date()
+    // Set once `willPerformHTTPRedirection` hands the load to a fresh protocol instance for the
+    // redirected request. The inner task is not cancelled at that point (only told not to
+    // auto-follow), so its delegate callbacks keep arriving after `client` has moved on to that
+    // new instance; this flag stops them from reaching `client` or `BajutsuNet.report` a second
+    // (and racy — 3xx-response-delivered vs. `stopLoading()`-cancelled) time.
+    private var didRedirect = false
 
     // MARK: URLProtocol
 
@@ -57,6 +63,13 @@ final class BajutsuURLProtocol: URLProtocol, URLSessionDataDelegate {
             serveStub(rule)
             return
         }
+        // `.default`, not the app's own configuration: `URLProtocol` exposes no public way to
+        // recover the `URLSessionConfiguration` (or delegate) a request was issued through, so an
+        // app that relies on session-scoped state — an ephemeral/custom cookie storage, a
+        // non-default `httpAdditionalHeaders`, or a delegate-driven auth-challenge/TLS-pinning
+        // decision — can see different behavior once intercepted. Request-scoped settings
+        // (headers, method, body, cachePolicy, timeoutInterval) are unaffected: they live on the
+        // `URLRequest` copied above, not on the configuration.
         inner = URLSession(configuration: .default, delegate: self, delegateQueue: nil)
         innerTask = inner?.dataTask(with: mutable as URLRequest)
         innerTask?.resume()
@@ -108,6 +121,7 @@ final class BajutsuURLProtocol: URLProtocol, URLSessionDataDelegate {
         _ session: URLSession, dataTask: URLSessionDataTask, didReceive response: URLResponse,
         completionHandler: @escaping (URLSession.ResponseDisposition) -> Void
     ) {
+        guard !didRedirect else { completionHandler(.cancel); return }
         capturedResponse = response
         client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
         completionHandler(.allow)
@@ -119,6 +133,7 @@ final class BajutsuURLProtocol: URLProtocol, URLSessionDataDelegate {
     }
 
     func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+        guard !didRedirect else { inner?.finishTasksAndInvalidate(); return }
         if let error {
             client?.urlProtocol(self, didFailWithError: error)
         } else {
@@ -129,6 +144,32 @@ final class BajutsuURLProtocol: URLProtocol, URLSessionDataDelegate {
             body: responseData, startedAt: startedAt, error: error
         )
         inner?.finishTasksAndInvalidate()
+    }
+
+    // A redirect followed by the forwarding session in `startLoading()` (`.default`) would carry
+    // that session's cookies/config rather than the app's own, so it is not auto-followed here.
+    // `wasRedirectedTo` hands it back to the URL Loading System, which starts a fresh
+    // `canInit`-routed load for the new request under the app's real session — the same path an
+    // unintercepted redirect would take. That hand-back does not cancel this instance's inner
+    // task, so `didRedirect` mutes the delegate methods above: without it, `client` (already
+    // pointed at the new instance) would keep getting stale `didReceive`/`didComplete` calls —
+    // and `BajutsuNet.report` a second, racy exchange — from this one. The redirected request
+    // also carries the `BajutsuHandled` marker `startLoading()` set on the request the inner
+    // task issued, so it is stripped here — left in place, `canInit` would refuse the new load
+    // and the redirect target would go unobserved entirely.
+    func urlSession(
+        _ session: URLSession, task: URLSessionTask,
+        willPerformHTTPRedirection response: HTTPURLResponse, newRequest request: URLRequest,
+        completionHandler: @escaping (URLRequest?) -> Void
+    ) {
+        didRedirect = true
+        var next = request
+        if let mutable = (request as NSURLRequest).mutableCopy() as? NSMutableURLRequest {
+            URLProtocol.removeProperty(forKey: Self.handledKey, in: mutable)
+            next = mutable as URLRequest
+        }
+        client?.urlProtocol(self, wasRedirectedTo: next, redirectResponse: response)
+        completionHandler(nil)
     }
 
     // MARK: cover app-created sessions

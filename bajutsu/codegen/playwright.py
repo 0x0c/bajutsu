@@ -356,7 +356,7 @@ def _emit_step(step: Step) -> list[str]:  # noqa: C901, PLR0911, PLR0912
         return [f"await page.keyboard.type({_ts(step.type.text)});"]
     if step.clear is not None:
         # Playwright's Locator.clear() focuses and empties the field — the faithful peer of the
-        # driver's focus-then-backspace clear (BE-0265).
+        # driver's select-all-then-backspace clear (BE-0265).
         return _act(step.clear.into.as_selector(), "clear()")
     if step.delete is not None:
         sel = step.delete.into.as_selector()

@@ -57,6 +57,7 @@ def _result_panel(
     source: str | None,
     exchanges: list[dict[str, Any]],
     run_dir: Path | None,
+    step_lines: list[int] | None,
 ) -> dict[str, Any]:
     plan = (definition or {}).get("steps") or []
     return {
@@ -71,7 +72,7 @@ def _result_panel(
         "beforerows": _phase_rows(
             r.before_outcomes, (definition or {}).get("before") or [], r.video_anchor_s, run_dir
         ),
-        "steprows": _merged_rows(r, plan, exchanges, run_dir),
+        "steprows": _merged_rows(r, plan, exchanges, run_dir, step_lines),
         "afterrows": _after_rows(r, (definition or {}).get("after") or [], run_dir),
         "expects": _expects_data(r, definition),
     }
@@ -217,6 +218,8 @@ def _scenario_data(
     run_dir: Path | None,
     definition: dict[str, Any] | None,
     source: str | None,
+    source_file: str | None = None,
+    step_lines: list[int] | None = None,
 ) -> dict[str, Any]:
     video = _artifact(r, "video")
     net = _artifact(r, "network")
@@ -232,7 +235,7 @@ def _scenario_data(
         if _domain_allowed(_exchange_host(str(d.get("url") or "")), domains)
     ]
     panels: list[dict[str, Any]] = [
-        _result_panel(r, definition, source, step_exchanges, run_dir),
+        _result_panel(r, definition, source, step_exchanges, run_dir, step_lines),
         _environment_panel(r),
     ]
     if net is not None:
@@ -250,6 +253,7 @@ def _scenario_data(
         "device": r.device,
         "open": not r.ok,
         "description": (definition or {}).get("description"),
+        "source_file": source_file,
         "duration": _fmt_duration(r.duration_s),
         "video": video.name if video else None,
         "panels": panels,

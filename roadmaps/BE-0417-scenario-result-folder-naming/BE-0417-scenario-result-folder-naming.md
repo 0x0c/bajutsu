@@ -7,8 +7,9 @@
 |---|---|
 | Proposal | [BE-0417](BE-0417-scenario-result-folder-naming.md) |
 | Author | [@0x0c](https://github.com/0x0c) |
-| Status | **Proposal** |
+| Status | **Implemented** |
 | Tracking issue | [Search](https://github.com/bajutsu-e2e/bajutsu/issues?q=is%3Aissue+label%3Aroadmap-tracking+in%3Atitle+"BE-0417") |
+| Implementing PR | [#1977](https://github.com/bajutsu-e2e/bajutsu/pull/1977) |
 | Topic | Codebase quality & technical debt |
 | Related | [BE-0200](../BE-0200-run-id-contract/BE-0200-run-id-contract.md) |
 <!-- /BE-METADATA -->
@@ -42,10 +43,12 @@ index prefix is unchanged.
   for instance) — unaffected by this item.
 - **The `--browsers` cross-browser matrix's `<engine>/<sid>/` layer is unchanged.** Only what `sid`
   itself is built from changes.
-- **The pre-existing name-keyed collision in `_matrix()`** (`bajutsu/common/report/manifest.py:78-91`
-  builds the `--browsers` matrix summary keyed by scenario name, so two same-named scenarios in one
-  engine overwrite each other's matrix cell) is a separate, already-existing issue this item does not
-  touch.
+- **The pre-existing name-keyed collision in `_matrix()`** (`bajutsu/common/report/manifest.py`
+  built the `--browsers` matrix summary keyed by scenario name, so two same-named scenarios in one
+  engine overwrote each other's matrix cell) was a separate, already-existing issue this item did
+  not touch. It has since been fixed independently by [#1970](https://github.com/bajutsu-e2e/bajutsu/pull/1970)
+  (`_matrix()` now disambiguates same-named scenarios with a `(N)` suffix), before this item's
+  implementation began, and no longer applies.
 
 ## Motivation
 
@@ -132,7 +135,43 @@ that holds its evidence, with no detour through `manifest.json`.
 > *Detailed design* (one box per unit of work); the log records what changed and when
 > (oldest first), linking the PRs.
 
-- [ ] Not started.
+- [x] Unit 1 — `Scenario.source_stem`: a private `PrivateAttr`, a read-only `source_stem` property,
+  and a `set_source_stem()` setter (a public setter rather than a direct `_source_stem` assignment
+  from the loaders, since `ruff`'s `SLF001` forbids a private-attribute write from outside the
+  class — the property stays read-only as designed).
+- [x] Unit 2 — `_expand_file()` (`bajutsu/run/cli.py`) and `load_expanded_scenarios()`
+  (`bajutsu/common/scenario/load_expanded.py`) both call `set_source_stem()` on every scenario in
+  their final expanded list, right before returning.
+- [x] Unit 3 — `sanitize_source_stem()` added beside `scenario_slug()`; `run_one` and
+  `_cancelled_pass` in `bajutsu/common/runner/pipeline.py` build `sid` from `s.source_stem` through
+  it (via one shared `_evidence_sid()` helper, so the two sites can't drift), falling back to
+  `scenario_slug(s.name)` when no source file is known. Deviation from the literal design: the
+  replaced-character class is `[^\w.-]` (Unicode word characters), not the letter-of-the-spec
+  `[^A-Za-z0-9_.-]` — the ASCII-only class silently collapsed a Japanese-named scenario file's stem
+  to a run of underscores, which this codebase's own bilingual convention (CLAUDE.md) makes a
+  realistic case, and defeats this item's own motivation for exactly that file. `\w` still replaces
+  every character the design's own rationale (unescaped HTML attribute / URL path segment safety)
+  cites — `#`, `?`, `/`, whitespace — while keeping a non-ASCII stem identifiable.
+- [x] Unit 4 — `docs/reporting.md` / `docs/ja/reporting.md`'s Output layout gained the `<sid>/`
+  level (it previously hung `<stepId>/` directly off `runs/<runId>/`, though the runtime already
+  nests evidence that way) and a line naming `sid`'s derivation.
+- [x] Unit 5 — Tests for all of the above, including the `_cancelled_pass` matrix path, the
+  data-driven-expansion case for both loaders, `sanitize_source_stem()`'s character replacement,
+  and that `source_stem` never appears in `model_dump()`.
+
+Log:
+
+- [#1977](https://github.com/bajutsu-e2e/bajutsu/pull/1977) — All 5 units, completing the item.
+  Added `Scenario.source_stem` (a load-time `PrivateAttr` never leaked by `model_dump()`), the two
+  device-free loaders setting it on their final expanded scenario list, and `sanitize_source_stem()`
+  beside `scenario_slug()`. `pipeline.py`'s `run_one` and `_cancelled_pass` now build `sid` from the
+  source file's stem through a shared `_evidence_sid()` helper, falling back to `scenario_slug(name)`
+  when no source file is known. One deviation from the literal design: the sanitizer's replaced
+  character class is `[^\w.-]` (Unicode word characters), not the spec's ASCII-only
+  `[^A-Za-z0-9_.-]` — found in a self-review pass, since the ASCII-only class silently collapsed a
+  Japanese-named scenario file's stem to a run of underscores, defeating this item's own motivation
+  for exactly that file. Also corrected a "Not doing" bullet that named a `_matrix()` collision
+  already fixed independently by #1970 before this PR began.
 
 ## References
 

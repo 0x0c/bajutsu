@@ -225,12 +225,11 @@ colliding or regressing each other. Full guide: [`docs/ai-development.md`](docs/
   [`docs/ai-development.md`](docs/ai-development.md#responding-to-pr-review-comments)). An open
   conversation keeps the PR in Draft until `pr-followup` / the paced `/loop` has cleared it; the
   human still decides when it goes ready.
-- **A wording-only review finding arrives as a companion PR (BE-0343).** When the automated reviewer
-  marks a finding `(non-blocking, prose)`, a job applies that finding's own `suggestion` block to a
-  `prose-fix/pr-<N>` branch and opens a small PR **based on your branch**, so your PR pays no CI
-  cycle for a change with no behavioral risk. Review and merge it like any other small PR; the job
-  has already replied to and resolved the source thread, so don't answer those threads yourself.
-  Mechanism: [`docs/ai-development.md`](docs/ai-development.md#the-companion-pr-for-wording-only-findings-be-0343).
+- **A wording-only review finding is fixed like any other finding.** The automated reviewer's two
+  prose-quality lenses (Japanese; English `docs/*.md`/roadmap prose) carry the same plain
+  `(non-blocking)` decoration as every other finding, and a concrete `suggestion` block wherever the
+  fix is mechanical — push the rewrite to the same PR that raised it, then resolve the thread.
+  Mechanism: [`docs/ai-development.md`](docs/ai-development.md#responding-to-pr-review-comments).
 
 ## Conventions
 

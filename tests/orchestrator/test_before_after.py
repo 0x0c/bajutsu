@@ -332,6 +332,17 @@ def test_a_config_with_no_phases_leaves_the_scenarios_untouched() -> None:
     assert with_lifecycle_phases(eff, scenarios) is scenarios
 
 
+def test_source_stem_survives_the_before_after_merge_copy() -> None:
+    # BE-0417: whenever the target config declares before/after, this returns a `model_copy`, not
+    # the caller's own object — the evidence-dir naming must survive that copy, not just the
+    # no-op path `test_a_config_with_no_phases_leaves_the_scenarios_untouched` covers.
+    eff = resolve(load_config(_MERGE_CONFIG), "app")
+    scenario = _scenario({"name": "s", "steps": [{"tap": {"id": "a"}}]})
+    scenario.set_source_stem("login_flow")
+    merged = with_lifecycle_phases(eff, [scenario])[0]
+    assert merged.source_stem == "login_flow"
+
+
 def test_the_merged_phases_are_what_the_run_executes() -> None:
     merged = _merged({"steps": [{"tap": {"id": "a"}}], "before": [{"tap": {"id": "c"}}]})
     r = run_scenario(_driver(), merged, FakeClock())

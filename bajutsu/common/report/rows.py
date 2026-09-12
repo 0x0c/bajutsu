@@ -158,8 +158,13 @@ def _step_run_row(
     run_dir: Path | None,
     at: float,
     from_: str | None = None,
+    line: int | None = None,
 ) -> dict[str, Any]:
-    """One executed step's row. `at` is its already-derived seconds into the recording (BE-0348)."""
+    """One executed step's row. `at` is its already-derived seconds into the recording (BE-0348).
+
+    `line` is the step's original 1-based line number in the scenario file, when the caller could
+    recover one (`html.scenario_source_meta`) — None wherever it could not.
+    """
     at_text = f"{at:.1f}s"
     # The step's own end instant — its `before`/`after` moment in the recording, not the
     # scenario-level `before`/`after` phases this table sits beside. A second jump target only
@@ -168,6 +173,11 @@ def _step_run_row(
     # must agree, and a second copy of this arithmetic could drift from this one silently.
     end_s = at + max(0.0, out.duration_s)
     end_text = f"{end_s:.1f}s"
+    # The step's own elapsed time — how long the action itself took, shown at the end of the `at`
+    # cell so a slow step (a long `wait`, a sluggish gesture) is visible without opening the
+    # recording. Gated the same way as `at_end`: a near-instant step would otherwise show a noisy
+    # "(0.0s)" on every row.
+    elapsed = f"{end_s - at:.1f}s" if end_text != at_text else None
     return {
         "rowcls": f"srow {'ok' if out.ok else 'ng'}",
         "data_t": f"{at:.3f}",
@@ -175,10 +185,12 @@ def _step_run_row(
         "title": f"jump to {at:.1f}s in the recording",
         "num": str(i),
         "numcls": None,
+        "line": line,
         "result": {"cls": "ok" if out.ok else "ng", "text": "PASS" if out.ok else "FAIL"},
         "action": _action_data(step_def, out.action),
         "detail": _step_detail(step_def, from_),
         "at": at_text,
+        "elapsed": elapsed,
         "at_end": end_text if end_text != at_text else None,
         "view": _view_data(out, run_dir),
         "reason": out.reason if (not out.ok and out.reason) else None,
@@ -239,7 +251,7 @@ def _actuation_rows(actuations: list[Actuation]) -> list[dict[str, Any]]:
 
 
 def _step_skip_row(
-    i: int, step_def: dict[str, Any] | None, from_: str | None = None
+    i: int, step_def: dict[str, Any] | None, from_: str | None = None, line: int | None = None
 ) -> dict[str, Any]:
     return {
         "rowcls": "skip",
@@ -248,10 +260,12 @@ def _step_skip_row(
         "title": None,
         "num": str(i),
         "numcls": None,
+        "line": line,
         "result": {"cls": "", "text": "—"},
         "action": _action_data(step_def, None),
         "detail": _step_detail(step_def, from_),
         "at": "",
+        "elapsed": None,
         "at_end": None,
         "view": None,
         "reason": None,
@@ -366,11 +380,15 @@ def _merged_rows(
     plan: list[dict[str, Any]],
     exchanges: list[dict[str, Any]],
     run_dir: Path | None,
+    step_lines: list[int] | None = None,
 ) -> list[dict[str, Any]]:
     """Step rows plus the observed exchanges (split request/response) interleaved by time offset.
 
     Steps and exchanges both record absolute wall-clock instants, so the recording-relative seconds
     the timeline sorts and displays on are derived here, once, against `r.video_anchor_s` (BE-0348).
+
+    `step_lines[i]`, when given, is step *i*'s original line number in the scenario file; it is
+    looked up positionally, same as `plan[i]`.
 
     Not-run steps trail at the end in plan order.
     """
@@ -381,16 +399,22 @@ def _merged_rows(
     shown_from = grouped_provenance(
         [(plan[i].get("from") if i < len(plan) else None) for i in range(total)]
     )
+
+    def line(i: int) -> int | None:
+        return step_lines[i] if step_lines and i < len(step_lines) else None
+
     timed: list[tuple[float, int, dict[str, Any]]] = []
     skipped: list[dict[str, Any]] = []
     for i in range(total):
         step_def = plan[i] if i < len(plan) else None
         out = by_index.get(i)
         if out is None:
-            skipped.append(_step_skip_row(i, step_def, shown_from[i]))
+            skipped.append(_step_skip_row(i, step_def, shown_from[i], line(i)))
         else:
             at = video_seconds(out.started_at, video_anchor_s=r.video_anchor_s)
-            timed.append((at, 0, _step_run_row(i, step_def, out, run_dir, at, shown_from[i])))
+            timed.append(
+                (at, 0, _step_run_row(i, step_def, out, run_dir, at, shown_from[i], line(i)))
+            )
     for d in exchanges:
         t0 = video_seconds(_as_float(d.get("startedAt")), video_anchor_s=r.video_anchor_s)
         dur_s = _as_float(d.get("durationMs")) / 1000.0
