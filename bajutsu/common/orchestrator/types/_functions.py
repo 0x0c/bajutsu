@@ -202,33 +202,31 @@ def drain_actuations(driver: base.Driver) -> Drained:
     return Drained(records=[], dropped=0)
 
 
-# The budget both evidence-dir slugs share (BE-0420). Counted in UTF-8 bytes, since
-# `sanitize_source_stem` preserves multi-byte characters and a filesystem's own limit is a byte one.
-_MAX_SLUG_BYTES = 60
+# The budget both evidence-dir slugs share (BE-0420). Counted in characters, not bytes: a
+# fullwidth/Japanese scenario name should not be cut shorter than an equally long ASCII one just
+# because its characters encode to more bytes.
+_MAX_SLUG_CHARS = 60
 
 
-def _cap_bytes(slug: str) -> str:
-    """Cut `slug` to `_MAX_SLUG_BYTES`, dropping a character the cut would split (BE-0420).
+def _cap_chars(slug: str) -> str:
+    """Cut `slug` to `_MAX_SLUG_CHARS` characters (BE-0420).
 
-    `errors="ignore"` is what discards that partial trailing character rather than raising, so the
-    result is always valid UTF-8 and at or under the budget.
+    Python string slicing is always at a codepoint boundary, so this can never split a character
+    the way a byte-oriented cut could.
     """
-    encoded = slug.encode("utf-8")
-    if len(encoded) <= _MAX_SLUG_BYTES:
-        return slug
-    return encoded[:_MAX_SLUG_BYTES].decode("utf-8", errors="ignore")
+    return slug[:_MAX_SLUG_CHARS]
 
 
 def scenario_slug(name: str) -> str:
     """A filesystem-safe id derived from a scenario name (for its evidence dir).
 
-    Capped at `_MAX_SLUG_BYTES` (BE-0420): the output is pure ASCII, so the byte slice is exactly a
-    character slice. `rstrip` drops a hyphen the cut can leave dangling. Two long names can now
-    collide here; `_evidence_sid` still tells them apart by its own `NN-` prefix, and BE-0420's
-    *Not doing* accepts the collision for the two callers that build a bare slug without one.
+    Capped at `_MAX_SLUG_CHARS` (BE-0420). `rstrip` drops a hyphen the cut can leave dangling. Two
+    long names can now collide here; `_evidence_sid` still tells them apart by its own `NN-`
+    prefix, and BE-0420's *Not doing* accepts the collision for the two callers that build a bare
+    slug without one.
     """
     slug = re.sub(r"[^0-9a-zA-Z]+", "-", name).strip("-").lower()
-    return _cap_bytes(slug).rstrip("-") or "scenario"
+    return _cap_chars(slug).rstrip("-") or "scenario"
 
 
 def sanitize_source_stem(stem: str) -> str:
@@ -239,9 +237,9 @@ def sanitize_source_stem(stem: str) -> str:
     `login_flow` or `決済フロー` passes through unchanged; only a character unsafe in an unescaped
     HTML attribute / URL path segment (`#`, `?`, `/`, whitespace, …) is replaced.
 
-    Capped at `_MAX_SLUG_BYTES` (BE-0420), which keeps a long file name from producing an evidence
-    directory the filesystem refuses. An empty result needs no fallback: the longest UTF-8 character
-    is four bytes, well under the budget, so a non-empty stem always keeps at least its first
-    character.
+    Capped at `_MAX_SLUG_CHARS` (BE-0420), which keeps a long file name from producing an evidence
+    directory the filesystem refuses. No fallback is needed for an empty result: `re.sub` cannot
+    turn a non-empty `stem` into an empty string, and slicing a non-empty string to a positive
+    length always keeps at least its first character.
     """
-    return _cap_bytes(re.sub(r"[^\w.-]", "_", stem))
+    return _cap_chars(re.sub(r"[^\w.-]", "_", stem))

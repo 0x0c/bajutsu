@@ -36,12 +36,13 @@ the scenario's own source file (`login_flow.yaml` → `login_flow`), or a slug o
 ([BE-0417](../roadmaps/BE-0417-scenario-result-folder-naming/BE-0417-scenario-result-folder-naming.md)).
 `stepId` is `step.name` or `step<i>`.
 
-Bajutsu caps both of those slugs at 60 bytes
-([BE-0420](../roadmaps/BE-0420-scenario-slug-length-cap/BE-0420-scenario-slug-length-cap.md)).
-The cap counts bytes in the 8-bit Unicode Transformation Format (UTF-8), not characters. A
-source-file stem keeps its Unicode letters, and the
-filesystem limit is itself a byte limit. A scenario whose file name or `name:` field runs past the
-budget still runs to completion. Its evidence directory merely keeps the recognizable lead of the
+Bajutsu caps both of those slugs at 60 characters
+([BE-0420](../roadmaps/BE-0420-scenario-slug-length-cap/BE-0420-scenario-slug-length-cap.md)). A
+source-file stem keeps its Unicode letters, so the cap counts characters rather than bytes.
+American Standard Code for Information Interchange (ASCII) text takes one byte per character.
+Japanese text can take more. Counting characters, not bytes, keeps the two truncating to the same
+length. A scenario whose file name or `name:` field runs past the budget still runs to completion.
+Its evidence directory merely keeps the recognizable lead of the
 name. `Scenario.name` stays untouched, so `manifest.json` and `report.html` carry the full name.
 Truncation can make two long names produce the same slug. In `runs/<runId>/<sid>/` the run-order
 index in front of the slug still tells them apart.

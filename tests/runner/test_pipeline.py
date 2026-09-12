@@ -19,7 +19,7 @@ from bajutsu.common.drivers.fake import FakeDriver
 from bajutsu.common.evidence import NullSink
 from bajutsu.common.evidence.network import NetworkExchange, ScreenTransition
 from bajutsu.common.orchestrator import RunResult, sanitize_source_stem, scenario_slug
-from bajutsu.common.orchestrator.types._functions import _MAX_SLUG_BYTES
+from bajutsu.common.orchestrator.types._functions import _MAX_SLUG_CHARS
 from bajutsu.common.report.format import video_seconds
 from bajutsu.common.runner import Lease, run_all, run_and_report, run_matrix_and_report
 from bajutsu.common.scenario import Scenario
@@ -1274,43 +1274,41 @@ _LONG_GOAL = (
 
 def test_scenario_slug_caps_an_overlong_name_without_a_trailing_hyphen() -> None:
     slug = scenario_slug(_LONG_GOAL)
-    assert len(slug.encode("utf-8")) <= _MAX_SLUG_BYTES
+    assert len(slug) <= _MAX_SLUG_CHARS
     assert slug == "log-in-with-a-saved-card-confirm-the-checkout-total-matches"
     assert not slug.endswith("-")
 
 
 def test_scenario_slug_drops_a_hyphen_the_cut_leaves_dangling() -> None:
-    # 59 alphanumerics then a separator: the byte slice lands exactly on the hyphen.
+    # 59 alphanumerics then a separator: the character slice lands exactly on the hyphen.
     assert scenario_slug("a" * 59 + " tail") == "a" * 59
 
 
 def test_sanitize_source_stem_caps_an_overlong_ascii_stem() -> None:
     stem = "checkout_" * 20
     capped = sanitize_source_stem(stem)
-    assert len(capped.encode("utf-8")) == _MAX_SLUG_BYTES
-    assert capped == stem[:_MAX_SLUG_BYTES]
+    assert len(capped) == _MAX_SLUG_CHARS
+    assert capped == stem[:_MAX_SLUG_CHARS]
 
 
-def test_sanitize_source_stem_caps_a_multibyte_stem_without_splitting_a_character() -> None:
-    """An overlong Japanese stem comes back as valid UTF-8 at or under the byte budget (BE-0420).
+def test_sanitize_source_stem_caps_a_multibyte_stem_by_character_count_not_bytes() -> None:
+    """An overlong Japanese stem is capped by character count, not by its UTF-8 byte length (BE-0420).
 
-    The leading `ab` is what makes the budget land *inside* a character rather than neatly between
-    two: without it the repeated 15-byte `決済フロー` divides the 60 evenly, and the test would
-    pass just as well against a naive character slice.
+    `決済フロー` is 3 bytes per character, so a byte-oriented cap would give this stem far fewer
+    characters than an equally long ASCII one. This pins that the cap does not do that.
     """
-    capped = sanitize_source_stem("ab" + "決済フロー" * 10)
-    encoded = capped.encode("utf-8")
-    assert len(encoded) <= _MAX_SLUG_BYTES
-    assert encoded.decode("utf-8") == capped  # valid UTF-8, no partial trailing character
-    assert capped == "ab" + "決済フロー" * 3 + "決済フロ"
+    capped = sanitize_source_stem("ab" + "決済フロー" * 12)
+    assert len(capped) == _MAX_SLUG_CHARS
+    assert len(capped.encode("utf-8")) > _MAX_SLUG_CHARS
+    assert capped == "ab" + "決済フロー" * 11 + "決済フ"
 
 
-def test_sanitize_source_stem_always_keeps_at_least_one_character() -> None:
-    """The invariant that lets `sanitize_source_stem` skip an empty-result fallback (BE-0420).
+def test_sanitize_source_stem_never_returns_empty_for_a_non_empty_stem() -> None:
+    """A non-empty stem always keeps at least its first character (BE-0420).
 
-    The longest UTF-8 character is four bytes, well under the budget, so the cut can never land
-    before the first character. Dropping `_MAX_SLUG_BYTES` below four would break that, and this
-    test is what would say so.
+    A character-count cap makes this trivially true for any budget of at least one, unlike a
+    byte-oriented cap, which could drop a multi-byte character's every byte. Kept as a regression
+    guard on the no-fallback claim in `sanitize_source_stem`'s docstring.
     """
     assert sanitize_source_stem("決") == "決"
     assert sanitize_source_stem("決済フロー" * 10)
@@ -1330,7 +1328,7 @@ def test_recorded_scenario_with_no_out_flag_yields_a_sid_within_the_cap() -> Non
     scenario.set_source_stem(Path(scenario_out_name(_LONG_GOAL)).stem)
 
     sid = _evidence_sid(0, scenario)
-    assert len(sid.encode("utf-8")) <= len("00-") + _MAX_SLUG_BYTES
+    assert len(sid) <= len("00-") + _MAX_SLUG_CHARS
     assert sid == "00-log_in_with_a_saved_card__confirm_the_checkout_total_matches"
 
 
