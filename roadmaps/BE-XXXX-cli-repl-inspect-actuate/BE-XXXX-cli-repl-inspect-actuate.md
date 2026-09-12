@@ -66,9 +66,10 @@ resolution and backend selection reuse the same shared CLI helpers `record` alre
 (`bajutsu/cli/_shared.py`) — and device bring-up reuses `launch_driver`
 (`bajutsu/common/runner/launch.py`), the same combination `record` and `crawl` use to resolve a
 `udid` (skipped for the `playwright` actuator) and boot the device before handing off a driver.
-`--headed`/`--no-headed` and `--browser` are web-only, reusing the same shared
-`_with_headed` / `_resolve_browser` helpers `record`, `crawl`, and `run` already use
-(`bajutsu/cli/_shared.py`), and matter for this shell in particular: a headless browser leaves an
+`--headed`/`--no-headed` and `--browser` are web-only, reusing the shared `_with_headed` helper
+`record`, `crawl`, and `run` already call and the `_resolve_browser` helper `record` and `run`
+call (`bajutsu/cli/_shared.py`) — `crawl` exposes no `--browser` — and matter for this shell in
+particular: a headless browser leaves an
 operator with no screen to watch change. On launch, `repl` prints the resolved backend and target,
 then a `bajutsu>` prompt.
 
@@ -143,7 +144,7 @@ own handlers are tested, so the new module clears the per-file coverage floor
 - **Route `repl`'s `tap` through `run`'s `_tap_with_recovery`.** Rejected for v1: surfacing the
   `ElementNotTappable` that `base.raise_if_covered` raises, naming the covering element, is the
   more useful answer while diagnosing a selector; an operator who wants the recovery writes the
-  explicit `scroll` step and taps again. The cost is that `repl` reports a failure where `run` would
+  explicit `scroll` step in the scenario and taps there. The cost is that `repl` reports a failure where `run` would
   recover, so the two can disagree on a covered target — the gap *Detailed design* calls out.
 - **Add a "manual mode" flag to `record` instead of a new command.** Rejected: `record`'s loop is
   built around `ClaudeAgent` proposing actions from a screenshot, and it always ends by writing a

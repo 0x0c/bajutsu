@@ -64,8 +64,9 @@ Authorビューは、これより近いところまで来ています。`/api/ca
 します。デバイスの起動は、`record`と`crawl`が使っているのと同じ`launch_driver`
 (`bajutsu/common/runner/launch.py`)を再利用し、`udid`の解決(`playwright`アクチュエータでは省略)
 とデバイスの起動を済ませてからドライバを渡します。`--headed`/`--no-headed`と`--browser`はWebバック
-エンド専用で、`record`・`crawl`・`run`が共有する`_with_headed`・`_resolve_browser`ヘルパー
-(`bajutsu/cli/_shared.py`)を再利用します。この2つは、このシェルにとって特に重要です。headlessな
+エンド専用で、`record`・`crawl`・`run`が共有する`_with_headed`と、`record`・`run`が使う
+`_resolve_browser`(`bajutsu/cli/_shared.py`)を再利用します(`crawl`に`--browser`はありません)。
+この2つは、このシェルにとって特に重要です。headlessな
 ブラウザのままでは、操作者が変化を確かめる画面そのものがありません。起動すると、`repl`は解決した
 バックエンドとターゲットを表示し、続けて`bajutsu>`というプロンプトを出します。
 
@@ -143,7 +144,7 @@ v1ではそこまで届きません。ツリーに要素そのものが現れな
 - **`repl`の`tap`を、`run`の`_tap_with_recovery`経由にする。** v1では却下しました。
   `base.raise_if_covered`が送出する`ElementNotTappable`を、覆っている要素の名前ごとそのまま
   見せるほうが、セレクタを確かめている最中にはより役立つ答えになります。回復を望む操作者は、
-  明示的な`scroll`コマンドを打ってから、もう一度`tap`すればよいだけです。代償は、`repl`が
+  シナリオ側で明示的な`scroll`ステップを書き、そこで`tap`すればよいだけです。代償は、`repl`が
   `run`なら回復する場面で失敗を報告することです。覆われたターゲットに対して、両者の答えが
   食い違いうる、という点は、詳細設計で述べたとおりです。
 - **新しいコマンドの代わりに、`record`に「手動モード」フラグを足す。** 却下しました。`record`の
