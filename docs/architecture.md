@@ -866,7 +866,7 @@ Android; on iOS it rests on the fast suite's bookkeeping proof alone.
   never produced on a bare `"absent"` answer before. Its `"unhandled"` note changed three ways too:
   an alert a rule *did* identify, whose tap then found the label twice, is now named as a prompt the
   guard could not clear rather than as one no rule identifies; a co-present button no rule
-  identifies on that same read is credited the way the `raced` branch credits one, rather than the
+  identifies on that same read is named the way the `raced` branch names one, rather than the
   ambiguous rule's own diagnosis crowding it out and leaving that button unreported for a whole
   `poll_interval`; and the note is left alone entirely while an in-tree give-up is still standing —
   so a `wait` blocked by an undeclared SpringBoard alert sitting on top of a sheet the tree path
