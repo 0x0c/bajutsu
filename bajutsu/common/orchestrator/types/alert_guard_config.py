@@ -745,7 +745,14 @@ class AlertGuardConfig:
                 # alert this round tried to tap is gone, not that the rest of the surface — an
                 # earlier round's own still-fading dismissal included — is (BE-0418 review finding).
                 if not buttons:
-                    dismissed_native = frozenset()
+                    # And the shape `_bound_exhaustion_note` keys on, for the same reason: this read
+                    # is proof the tap that recorded it landed, so a later round must not name it as
+                    # one that never cleared (BE-0418 review finding).
+                    dismissed_native, native_dismiss_shape, native_dismiss_label = (
+                        frozenset(),
+                        None,
+                        None,
+                    )
                 # The one alert this round's own probe just proved gone (the race above) is not in
                 # `dismissed_native` either — nothing was actually dismissed — so a leftover
                 # computed against `dismissed_native` alone still lets that alert's own labels
@@ -767,7 +774,6 @@ class AlertGuardConfig:
                     tree_result, tree_buttons, tree_read_signature = self.dismiss_from_tree_once(
                         driver, exclude=dismissed_tree_shapes
                     )
-                    tree_read_round = round_index
                     if isinstance(tree_result, AlertEvent):
                         alerts.append(tree_result)  # excluded once cleared, never a repeat report
                         # Re-resolves which shape was just tapped, over the same `buttons` this
@@ -810,6 +816,12 @@ class AlertGuardConfig:
                             stuck_tree_label = stuck_tree_shape = None
                         settle()
                         continue
+                    # Reached only when `tree_result` was not a tap (the branch just above always
+                    # continues): only a read that went on to *test* the exhaustion evidence retires
+                    # the post-loop query below — a tap moved the screen and settled after this read,
+                    # so nothing has checked yet whether that sheet actually closed (BE-0418 review
+                    # finding).
+                    tree_read_round = round_index
                     if isinstance(tree_result, NotTappable):
                         note, stuck_tree_label, stuck_tree_shape = (
                             uncleared_prompt_note(tree_result.label),
@@ -987,16 +999,16 @@ class AlertGuardConfig:
         # `tree_dismiss_shape` set and reaches here without itself settling first also called
         # `settle()` on an *earlier* round on its way here, so a stale read would misreport a sheet
         # the call's own settling has since watched close (BE-0418 review finding). Read-only, so
-        # nothing here risks the unlicensed tap the loop's own gate above exists to prevent. Gated on
-        # `tree_read_round < round_index`: without an intervening settle, nothing can have moved the
-        # screen since the last tree read already tested this exact evidence and found it false, so a
-        # fresh query here would only reproduce that same false at the cost of another full
-        # accessibility-tree fetch on the ordinary single-sheet call's own most common exit (BE-0418
-        # review finding).
+        # nothing here risks the unlicensed tap the loop's own gate above exists to prevent. Skipped
+        # only when `tree_read_round == round_index`: a round whose own read already tested this
+        # exact evidence and found it false, with no settle since to have moved the screen, would
+        # have a fresh query here only reproduce that same false (BE-0418 review finding) — `None`
+        # (the shape came from a tap `dismiss_from_tree_once` recorded but no *later* read has yet
+        # tested, per that branch's own `if not isinstance(tree_result, AlertEvent)` guard above)
+        # still runs the check, the same as any round strictly before the final one.
         if (
             not note
-            and tree_read_round is not None
-            and tree_read_round < round_index
+            and (tree_read_round is None or tree_read_round < round_index)
             and tree_dismiss_shape is not None
             and tree_dismiss_label is not None
         ):

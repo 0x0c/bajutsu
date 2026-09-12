@@ -2005,6 +2005,56 @@ def test_the_end_of_step_guard_retaps_a_native_alert_that_genuinely_re_raises_af
     assert guard.blocked_note == ""
 
 
+def test_the_end_of_step_guard_does_not_blame_a_retracted_native_shape_after_a_later_race() -> None:
+    # The genuinely-empty-read retraction cleared `dismissed_native` but left `native_dismiss_shape`
+    # / `native_dismiss_label` standing, so the bound-exhaustion diagnosis could still fire on a
+    # shape this very call already watched go away -- an empty enumeration is equally proof the tap
+    # that recorded the shape landed (BE-0418 review finding). Round 0 taps "notifications" cleanly;
+    # round 1 reads "absent" and clears an in-tree sheet instead, retracting the record; round 2's
+    # app genuinely re-raises the identical prompt, but *this* occurrence races away -- the call
+    # must not blame round 0's own, already-cleared shape for it.
+    class _SucceedsOnceThenRaces(FakeDriver):
+        def __init__(self) -> None:
+            super().__init__([_button("Not Now")])
+            self.tap_calls = 0
+
+        def handle_system_alert(self, sel: base.Selector, timeout: float) -> None:
+            self.tap_calls += 1
+            if self.tap_calls == 1:
+                super().handle_system_alert(sel, timeout)
+            else:
+                raise base.ElementNotFound("the re-raised prompt raced away")
+
+    driver = _SucceedsOnceThenRaces()
+    driver.system_alert_buttons = [_button("Allow"), _button("Don't Allow")]
+    settle_calls = 0
+
+    def settle() -> None:
+        nonlocal settle_calls
+        settle_calls += 1
+        if settle_calls == 1:
+            driver.system_alert_buttons = []  # genuinely gone before round 1's own probe
+        elif settle_calls == 2:
+            driver.system_alert_buttons = [_button("Allow"), _button("Don't Allow")]  # re-raised
+            # Round 1's own tap genuinely closed "Not Now" -- isolates this test to the native-side
+            # retraction under review, not the tree side's own separate post-loop check.
+            driver.screen = []
+
+    guard = AlertGuardConfig(
+        rules=[
+            ResolvedAlertRule(
+                identifying_labels=frozenset({"Allow", "Don't Allow"}), tap_label="Allow"
+            ),
+            guard_rule("Not Now", native=False, in_tree=True),
+        ]
+    )
+    alerts: list[AlertEvent] = []
+    cleared = guard(driver, alerts, settle=settle)
+    assert cleared
+    assert alerts == [AlertEvent(label="Allow"), AlertEvent(label="Not Now")]
+    assert guard.blocked_note == ""
+
+
 def test_the_end_of_step_guard_does_not_retap_a_fading_alert_after_a_toctou_race_clears_a_second() -> (
     None
 ):
@@ -3074,6 +3124,43 @@ def test_the_end_of_step_guard_skips_the_post_loop_query_on_an_unsettled_termina
     assert guard.blocked_note == ""
     # Round 0's own tap-time read, round 1's own terminal read -- no third, post-loop query.
     assert driver.query_calls == 2
+
+
+def test_the_end_of_step_guard_still_checks_a_first_ever_tree_tap_on_the_final_round() -> None:
+    # Twin of the skip above, for the one case it must never fire: recording `tree_read_round`
+    # only on a read that goes on to *test* existing evidence (not the tap that just produced it,
+    # per that branch's own `if not isinstance(tree_result, AlertEvent)` guard) means a call whose
+    # first-ever tree interaction is a tap on its own final round leaves `tree_read_round` at `None`
+    # -- nothing has settled *since* a read that tested this tap, because no such read ever ran.
+    # `None` must still run the post-loop check, not be read as "nothing to verify" (BE-0418 review
+    # finding): rounds 0 and 1 dismiss two unrelated native alerts, never touching the tree at all;
+    # round 2 finally reads an empty SpringBoard surface and taps a sheet that accepts the tap and
+    # re-presents itself instead of closing.
+    rule_a = ResolvedAlertRule(identifying_labels=frozenset({"A1", "A2"}), tap_label="A1")
+    rule_b = ResolvedAlertRule(identifying_labels=frozenset({"B1", "B2"}), tap_label="B1")
+    tree_rule = ResolvedAlertRule(
+        identifying_labels=frozenset({"Sheet"}), tap_label="Sheet", native=False, in_tree=True
+    )
+    driver = FakeDriver([_button("Sheet")])
+    driver.system_alert_buttons = [_button("A1"), _button("A2")]
+    settle_calls = 0
+
+    def settle() -> None:
+        nonlocal settle_calls
+        settle_calls += 1
+        if settle_calls == 1:
+            driver.system_alert_buttons = [_button("B1"), _button("B2")]
+        elif settle_calls == 2:
+            driver.system_alert_buttons = []
+        # settle_calls == 3, after round 2's own tap: "Sheet" is deliberately left in place -- the
+        # sheet accepted the tap without closing.
+
+    guard = AlertGuardConfig(rules=[rule_a, rule_b, tree_rule])
+    alerts: list[AlertEvent] = []
+    cleared = guard(driver, alerts, settle=settle)
+    assert cleared
+    assert alerts == [AlertEvent(label="A1"), AlertEvent(label="B1"), AlertEvent(label="Sheet")]
+    assert guard.blocked_note == uncleared_prompt_note("Sheet")
 
 
 def test_dismiss_from_tree_once_declines_an_excluded_shape() -> None:

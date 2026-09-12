@@ -188,13 +188,20 @@ class _AlertGuardGate:
                 # Every shape a rule identifies on this read, not only the one that raced: a
                 # second, *declared* prompt co-present with it is one the next probe answers, so
                 # naming it here would report an alert a rule does identify as unhandled.
-                identified = {
-                    label
+                identified = [
+                    rule.identifying_labels
                     for rule in self.guard.native_rules
                     if rule.identifying_labels <= set(buttons)
-                    for label in rule.identifying_labels
-                }
-                leftover = [label for label in buttons if label not in identified]
+                    and not rule.excluded_labels & set(buttons)
+                ]
+                # Subtracted with multiplicity, not as a set, and skipping a rule an excluded label
+                # rules out -- the same two reasons `_leftover_after_answered` gives on the one-shot
+                # path, over the same whole-surface enumeration (BE-0418 review finding).
+                leftover = list(buttons)
+                for shape in identified:
+                    for label in shape:
+                        if label in leftover:
+                            leftover.remove(label)
                 if leftover:
                     self._native_unhandled = True
                     self.blocked_note = alert_block_note(leftover)

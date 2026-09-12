@@ -1119,6 +1119,113 @@ def test_wait_guard_reports_nothing_when_a_race_leaves_no_leftover() -> None:
     assert gate.blocked_note == ""
 
 
+def test_wait_guard_subtracts_the_leftover_with_multiplicity_not_as_a_set() -> None:
+    # The leftover computation above is exactly the defect `_leftover_after_answered` was added to
+    # fix on the one-shot path (BE-0418 review finding): a plain set subtraction would treat one
+    # declared rule's own shape as consuming *every* occurrence of its labels at once, so a second,
+    # genuinely live alert rendering the identical label pair would vanish from the leftover along
+    # with the one the rule actually identifies. `probe_native`'s own per-label uniqueness check
+    # never lets a real read reach this branch with a duplicate label (the match itself would fail
+    # first), so this exercises the computation directly via a stubbed `probe_native`, the same
+    # isolation this file's other race tests already use.
+    from bajutsu.common.orchestrator.types import AlertEvent, NativeAlertState
+
+    class _RacesWithDuplicateLabels(AlertGuardConfig):
+        def probe_native(
+            self,
+            driver: base.Driver,
+            reserved: base.Selector | None = None,
+            *,
+            dismissed: frozenset[frozenset[str]] = frozenset(),
+        ) -> tuple[NativeAlertState, AlertEvent | None, list[str]]:
+            return "absent", None, ["Allow", "Don't Allow", "Allow", "Don't Allow"]
+
+    from bajutsu.common.orchestrator.types import ResolvedAlertRule
+    from bajutsu.common.orchestrator.waits import _AlertGuardGate
+
+    guard = _RacesWithDuplicateLabels(
+        rules=[
+            ResolvedAlertRule(
+                identifying_labels=frozenset({"Allow", "Don't Allow"}), tap_label="Allow"
+            )
+        ]
+    )
+    driver = FakeDriver([])
+    gate = _AlertGuardGate(driver=driver, clock=_LogicalClock(), guard=guard, alerts=[])
+    gate.observe([])
+    # The raced rule's own single occurrence is subtracted; the second alert's own copy survives.
+    assert "Allow" in gate.blocked_note and "Don't Allow" in gate.blocked_note
+
+
+def test_wait_guard_does_not_double_count_a_label_two_declared_rules_share() -> None:
+    # Coverage for the multiplicity loop's own "already removed" path: two declared rules can share
+    # one label (the built-in `notifications` and `tracking` both grant "Allow"), so once the first
+    # shape's own processing consumes that occurrence, the second shape's identical label is already
+    # gone from `leftover` -- not a distinct button to remove a second time.
+    from bajutsu.common.orchestrator.types import AlertEvent, NativeAlertState, ResolvedAlertRule
+    from bajutsu.common.orchestrator.waits import _AlertGuardGate
+
+    class _RacesWithTwoRulesSharingAllow(AlertGuardConfig):
+        def probe_native(
+            self,
+            driver: base.Driver,
+            reserved: base.Selector | None = None,
+            *,
+            dismissed: frozenset[frozenset[str]] = frozenset(),
+        ) -> tuple[NativeAlertState, AlertEvent | None, list[str]]:
+            return "absent", None, ["Allow", "Don't Allow", "Ask App Not to Track"]
+
+    guard = _RacesWithTwoRulesSharingAllow(
+        rules=[
+            ResolvedAlertRule(
+                identifying_labels=frozenset({"Allow", "Don't Allow"}), tap_label="Allow"
+            ),
+            ResolvedAlertRule(
+                identifying_labels=frozenset({"Allow", "Ask App Not to Track"}), tap_label="Allow"
+            ),
+        ]
+    )
+    driver = FakeDriver([])
+    gate = _AlertGuardGate(driver=driver, clock=_LogicalClock(), guard=guard, alerts=[])
+    gate.observe([])
+    assert gate.blocked_note == ""
+
+
+def test_wait_guard_does_not_subtract_a_native_rule_an_excluded_label_rules_out() -> None:
+    # The second half of the same fix: a rule `matching_alert_rule` would refuse (an excluded label
+    # is present) must not have its labels subtracted here either -- the exact reason
+    # `_native_round_worth_another_try` grew its own `excluded_labels` check (BE-0418 review
+    # finding). Stubbed the same way, for the same reason.
+    from bajutsu.common.orchestrator.types import AlertEvent, NativeAlertState, ResolvedAlertRule
+    from bajutsu.common.orchestrator.waits import _AlertGuardGate
+
+    class _RacesWithAnExcludedRulePresent(AlertGuardConfig):
+        def probe_native(
+            self,
+            driver: base.Driver,
+            reserved: base.Selector | None = None,
+            *,
+            dismissed: frozenset[frozenset[str]] = frozenset(),
+        ) -> tuple[NativeAlertState, AlertEvent | None, list[str]]:
+            return "absent", None, ["Save", "Not Now", "Never for This Card"]
+
+    guard = _RacesWithAnExcludedRulePresent(
+        rules=[
+            ResolvedAlertRule(
+                identifying_labels=frozenset({"Save", "Not Now"}),
+                tap_label="Save",
+                excluded_labels=frozenset({"Never for This Card"}),
+            )
+        ]
+    )
+    driver = FakeDriver([])
+    gate = _AlertGuardGate(driver=driver, clock=_LogicalClock(), guard=guard, alerts=[])
+    gate.observe([])
+    assert "Save" in gate.blocked_note
+    assert "Not Now" in gate.blocked_note
+    assert "Never for This Card" in gate.blocked_note
+
+
 def test_wait_guard_clears_a_stale_unhandled_note_when_a_leftover_free_race_disproves_it() -> None:
     # `buttons` here is the whole SpringBoard enumeration, not one alert's own set: a race whose
     # own read holds nothing but the raced rule's own shape is positive evidence that any *other*
