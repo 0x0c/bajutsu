@@ -29,9 +29,12 @@ DEFAULT_ALERT_POLL_INTERVAL = 1.0
 _NATIVE_TAP_TIMEOUT = 0.0
 
 # The end-of-step / expect call's own round bound (BE-0418). Unlike the mid-wait gate, this call
-# gets no poll cycle of its own to loop on, so `__call__` loops internally instead. Matches
-# `_TREE_DISMISS_MAX_TAPS` (`_alert_guard_gate.py`), the mid-wait path's own tap ceiling for the
-# same landing-race retry (BE-0418 Unit 2).
+# gets no poll cycle of its own to loop on, so `__call__` loops internally instead. Numerically the
+# same 3 as `_TREE_DISMISS_MAX_TAPS` (`_alert_guard_gate.py`), but not the same bound: that one
+# ceilings retaps of a tap that *landed* and left the prompt showing, while the mid-wait path's own
+# landing-race retry — the `ElementNotTappable` branch of `_dismiss_from_tree`, which Unit 2 mirrors
+# here — gives up on time instead (`_decline_giveup(poll_interval)`), which a call with no poll
+# cycle of its own has no equivalent of (BE-0418 Unit 2).
 _GUARD_CALL_MAX_ROUNDS = 3
 
 # What a native probe found: "incapable" (backend has no native path), "absent" (no alert — a
