@@ -581,7 +581,16 @@ class AlertGuardConfig:
                 native_dismiss_label = rule.tap_label
                 cleared = True
                 if stuck_tree_label is None:
-                    note = ""
+                    # Not an unconditional clear: `buttons` is the whole SpringBoard enumeration, so
+                    # a co-present alert no rule identifies can sit right alongside the one this
+                    # round just dismissed, and dismissing one alert does not mean the rest of the
+                    # surface is clear. Computing the leftover here, exactly as `already_dismissed`
+                    # and `"unhandled"` below do, is what keeps that stranger from being silently
+                    # dropped when this round happens to be the one that exhausts the bound — a
+                    # later round re-probing fresh buttons would otherwise self-correct, but there is
+                    # no later round on the last one (BE-0418 review finding).
+                    leftover = _leftover_after_answered(buttons, dismissed_native)
+                    note = alert_block_note(leftover) if leftover else ""
                 settle()
                 continue
             if state == "already_dismissed":
@@ -608,9 +617,8 @@ class AlertGuardConfig:
                     # second, still-live alert no rule identifies can sit right alongside it. Only
                     # the labels of rules this call has already answered are accounted for;
                     # anything else on the surface gets the same diagnosis a fresh "unhandled"
-                    # probe would give it — the "dismissed" branch's own clear above self-corrects
-                    # on a later round that re-probes fresh buttons, but a round that keeps
-                    # declining the same rule never does, so it must check this itself. A leftover
+                    # probe would give it — exactly the check the "dismissed" branch above and the
+                    # "unhandled" branch below both make too, for the identical reason. A leftover
                     # takes precedence over the exhaustion note: something else is demonstrably
                     # still up regardless of whether this round's own tap ever landed.
                     leftover = _leftover_after_answered(buttons, dismissed_native)

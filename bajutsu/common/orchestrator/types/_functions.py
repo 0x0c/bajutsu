@@ -37,9 +37,10 @@ def alert_block_note(buttons: Sequence[str]) -> str:
     """What the guard saw blocking the screen, for a failure reason to name (BE-0402).
 
     *buttons* are the labels blocking the screen that no rule accounts for — `probe_native`'s
-    `"unhandled"` answer, or the leftover buttons an `already_dismissed` or `"unhandled"` round
-    (`_leftover_after_answered`) finds beyond every shape this call has already answered
-    (`AlertGuardConfig.__call__`, BE-0418). Empty means the
+    `"unhandled"` answer, or the leftover buttons a `"dismissed"`, `already_dismissed`, or
+    `"unhandled"` round (`_leftover_after_answered`) finds beyond every shape this call has already
+    answered (`AlertGuardConfig.__call__`, BE-0418) — a fresh dismissal computes it too, since the
+    alert it just tapped is never the only thing `buttons` enumerates. Empty means the
     block was inferred from the collapsed-tree proxy rather than enumerated — a surface
     `springboard.alerts` cannot see, or a backend with no native query at all — so the note hedges
     rather than naming buttons nobody read. A prompt the policy *did* name and a tap that did not

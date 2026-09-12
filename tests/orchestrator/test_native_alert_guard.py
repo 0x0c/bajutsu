@@ -1998,6 +1998,55 @@ def test_the_end_of_step_guard_still_names_a_co_present_alert_no_rule_identifies
     assert "Allow" not in guard.blocked_note
 
 
+def test_the_end_of_step_guard_names_a_co_present_alert_on_a_dismissing_final_round() -> None:
+    # The "dismissed" branch used to clear `note` unconditionally, the only round kind that
+    # touched `note` without computing the leftover first -- so a co-present alert no rule
+    # identifies was silently dropped whenever the call's *final* round happened to be a fresh
+    # dismissal, since no later round is left to self-correct into "unhandled" or
+    # "already_dismissed" (review finding). Round 0 dismisses notifications; round 1 collides with
+    # tracking on the shared "Allow" label (an existing, already-correct "unhandled" round); round
+    # 2, the last one, dismisses tracking cleanly -- with an undeclared "OK" / "Cancel" alert
+    # sitting right alongside it throughout.
+    notifications = ResolvedAlertRule(
+        identifying_labels=frozenset({"Allow", "Don't Allow"}), tap_label="Allow"
+    )
+    tracking = ResolvedAlertRule(
+        identifying_labels=frozenset({"Allow", "Ask App Not to Track"}), tap_label="Allow"
+    )
+    driver = _fake_with_alert(["Allow", "Don't Allow"])
+    settle_count = 0
+
+    def settle() -> None:
+        nonlocal settle_count
+        settle_count += 1
+        if settle_count == 1:
+            # notifications' fade collides with tracking's own alert on "Allow", and the undeclared
+            # pair is already up alongside both.
+            driver.system_alert_buttons = [
+                _button("Allow"),
+                _button("Don't Allow"),
+                _button("Allow"),
+                _button("Ask App Not to Track"),
+                _button("OK"),
+                _button("Cancel"),
+            ]
+        elif settle_count == 2:
+            # notifications' own fade is fully gone, so tracking now dismisses cleanly -- on the
+            # call's own final round.
+            driver.system_alert_buttons = [
+                _button("Allow"),
+                _button("Ask App Not to Track"),
+                _button("OK"),
+                _button("Cancel"),
+            ]
+
+    guard = AlertGuardConfig(rules=[notifications, tracking])
+    alerts: list[AlertEvent] = []
+    cleared = guard(driver, alerts, settle=settle)
+    assert cleared and alerts == [AlertEvent(label="Allow"), AlertEvent(label="Allow")]
+    assert "OK" in guard.blocked_note and "Cancel" in guard.blocked_note
+
+
 def test_the_end_of_step_guard_clears_a_native_leftover_note_once_the_surface_reads_absent() -> (
     None
 ):
