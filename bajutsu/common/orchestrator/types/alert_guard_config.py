@@ -60,28 +60,32 @@ def _widest_first(rules: Iterable[ResolvedAlertRule]) -> list[ResolvedAlertRule]
     declaration order without also inverting BE-0177's scenario-before-target precedence for a pair
     that does not nest — a plain width sort is a stable sort, and a stable sort only preserves that
     precedence *among same-shape rules* (review finding: sorting by width promoted a wider target
-    rule ahead of a narrower scenario rule the two do not otherwise relate). Implemented as a stable
-    bubble pass: two adjacent rules swap only when the earlier one's shape is a proper subset of the
-    later one's, repeated until no such adjacent pair remains — small enough lists (a handful of
-    rules per prompt at most) that a quadratic pass costs nothing, and simple enough to see that a
-    pair with no subset relation between them, in either direction, never moves.
+    rule ahead of a narrower scenario rule the two do not otherwise relate). Implemented as a
+    stable insertion pass: each rule is placed ahead of the first already-placed rule its own shape
+    strictly contains, and appended otherwise — so a pair with no subset relation between them, in
+    either direction, never moves, while a wider shape still overtakes a narrower one however many
+    unrelated rules declaration order put between the two. Swapping only *adjacent* pairs would not
+    manage that second part: subset is a partial order, so one non-nesting rule between a narrow
+    shape and its wider sibling blocks every swap and leaves the narrow shape matching first
+    (review finding — a savePassword-style catalogue declaring its three shapes narrower,
+    unrelated, widest would still double-tap the wide sheet under the adjacent-swap version).
 
     Without reordering `tree_rules` itself: `_AlertGuardGate._dismiss_from_tree`
     (`waits/_alert_guard_gate.py`) and `dismiss_from_tree_once` below both sort a *copy* of that
     property to match through, so it stays the shared, declaration-ordered base both derive from,
     rather than something either consumer's own call reorders in place.
     """
-    result = list(rules)
-    swapped = True
-    while swapped:
-        swapped = False
-        for i in range(len(result) - 1):
-            if result[i].identifying_labels < result[i + 1].identifying_labels:
-                # `result[i]` is a proper subset of `result[i + 1]` — the wider shape must be tried
-                # first, so the subset test above excludes the narrower one once the wider one is
-                # dismissed rather than the reverse.
-                result[i], result[i + 1] = result[i + 1], result[i]
-                swapped = True
+    result: list[ResolvedAlertRule] = []
+    for rule in rules:
+        for i, placed in enumerate(result):
+            if placed.identifying_labels < rule.identifying_labels:
+                # `placed` is a proper subset of `rule` — the wider shape must be tried first, so
+                # `_resolve_alert_rule`'s subset test excludes the narrower one once the wider one
+                # is dismissed rather than the reverse.
+                result.insert(i, rule)
+                break
+        else:
+            result.append(rule)
     return result
 
 

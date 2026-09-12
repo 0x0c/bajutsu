@@ -2272,6 +2272,43 @@ def test_tree_rules_tries_the_widest_nested_shape_first_regardless_of_declaratio
     assert sum(1 for a in driver.actions if a[0] == "tap") == 1
 
 
+def test_tree_rules_widest_first_survives_a_non_nesting_rule_in_between() -> None:
+    # Subset is a partial order, not a total one: an adjacent-swap pass only fixes a nested pair
+    # that is already next to each other, so a rule nesting with neither sibling sitting between
+    # them in declaration order blocks every swap and leaves the narrower shape matching first --
+    # exactly the repeat tap the test above already covers, but the above only ever declares the
+    # nested pair adjacent, so it cannot catch this gap on its own (review finding). Modeled on
+    # savePassword's real three shapes, declared narrower, unrelated, widest -- today's catalogue
+    # happens to declare the widest one first, so this is the one order that would misfire.
+    widest = ResolvedAlertRule(
+        identifying_labels=frozenset({"Save Password", "Never for This Website", "Not Now"}),
+        tap_label="Not Now",
+        native=False,
+        in_tree=True,
+    )
+    narrower = ResolvedAlertRule(
+        identifying_labels=frozenset({"Save Password", "Not Now"}),
+        tap_label="Not Now",
+        native=False,
+        in_tree=True,
+    )
+    unrelated = ResolvedAlertRule(
+        identifying_labels=frozenset({"Save", "Not Now"}),  # the 26.5 shape -- nests with neither
+        tap_label="Not Now",
+        native=False,
+        in_tree=True,
+    )
+    # Never removed: models the sheet's own dismiss animation outlasting `settle`.
+    driver = FakeDriver(
+        [_button("Save Password"), _button("Never for This Website"), _button("Not Now")]
+    )
+    guard = AlertGuardConfig(rules=[narrower, unrelated, widest])
+    cleared, alerts = _call(driver, guard)
+    assert cleared
+    assert alerts == [AlertEvent(label="Not Now")]  # tapped once, not once per nested shape
+    assert sum(1 for a in driver.actions if a[0] == "tap") == 1
+
+
 def test_the_end_of_step_guard_finds_a_stacked_alert_behind_a_fading_first_match() -> None:
     # `already_dismissed` must not end the round the instant the plain first match is one this
     # call already answered: a real, not-yet-answered alert can be enumerable right alongside that
