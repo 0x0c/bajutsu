@@ -638,8 +638,7 @@ class AlertGuardConfig:
         # `_bound_exhaustion_note` to check against the final round's own read (BE-0418 review
         # finding) — the label is carried alongside the shape so that check can name it without a
         # second lookup.
-        native_dismiss_shape: frozenset[str] | None = None
-        native_dismiss_label: str | None = None
+        native_dismiss_shape, native_dismiss_label = None, None
         # The tree-side twin of the two fields above, for the identical bound-exhaustion diagnosis on
         # a tapped-but-still-there in-tree sheet (BE-0418 review finding): the native branch already
         # treats "tapped, and still reading back on the final round" as evidence the tap never
@@ -953,20 +952,30 @@ class AlertGuardConfig:
                 # `leftover_dismissed_native`, keeps its labels from surviving into the leftover and
                 # being named as an alert no rule identifies, when the rule identified it and only
                 # the tap failed (BE-0418 review finding; see `uncleared_prompt_note`'s docstring).
+                # That same resolved rule is also this round's own exhaustion candidate, ahead of a
+                # possibly-stale `native_dismiss_shape` from an earlier tap: leftover empty here
+                # means nothing else is on the surface, so the fallback must not go silent on the
+                # final round just because this call never *tapped* anything (BE-0418 review
+                # finding).
                 if stuck_tree_label is None:
+                    resolved_rule = _resolve_alert_rule(
+                        self.native_rules, buttons, dismissed_native
+                    )
                     note = _leftover_note(
                         buttons,
                         dismissed_native
-                        | {
-                            rule.identifying_labels
-                            for rule in [
-                                _resolve_alert_rule(self.native_rules, buttons, dismissed_native)
-                            ]
-                            if rule is not None
-                        },
+                        | {rule.identifying_labels for rule in [resolved_rule] if rule is not None},
                         _bound_exhaustion_note(
-                            dismiss_shape=native_dismiss_shape,
-                            dismiss_label=native_dismiss_label,
+                            dismiss_shape=(
+                                resolved_rule.identifying_labels
+                                if resolved_rule is not None
+                                else native_dismiss_shape
+                            ),
+                            dismiss_label=(
+                                resolved_rule.tap_label
+                                if resolved_rule is not None
+                                else native_dismiss_label
+                            ),
                             buttons=buttons,
                             round_index=round_index,
                         ),

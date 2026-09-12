@@ -2154,7 +2154,12 @@ def test_the_end_of_step_guard_does_not_call_a_raced_ambiguous_alert_unhandled()
     # `dismissed_native`, so a raced-but-matched rule's own labels survived into the leftover and
     # were named as an alert no rule identifies -- exactly what `uncleared_prompt_note`'s docstring
     # says must not happen, since the rule did identify it and only the tap failed (BE-0418 review
-    # finding).
+    # finding). With nothing else on the surface, the bound-exhaustion fallback must also name that
+    # same rule on the final round rather than fall silent: the earlier fix folded the rule's own
+    # labels out of the leftover but left the fallback keyed on `native_dismiss_shape` alone, which
+    # is `None` here since this call never actually tapped anything -- the note went empty instead
+    # of `uncleared_prompt_note`, a silence worse than the "unhandled" framing it replaced (BE-0418
+    # review finding).
     class _AmbiguousEveryRound(FakeDriver):
         def handle_system_alert(self, sel: base.Selector, timeout: float) -> None:
             raise base.AmbiguousSelector("the alert offers this label twice")
@@ -2173,7 +2178,7 @@ def test_the_end_of_step_guard_does_not_call_a_raced_ambiguous_alert_unhandled()
     )
     cleared, alerts = _call(driver, guard)
     assert not cleared and alerts == []
-    assert guard.blocked_note == ""
+    assert guard.blocked_note == uncleared_prompt_note("Allow")
 
 
 def test_the_end_of_step_guard_never_taps_the_tree_while_a_native_alert_races() -> None:

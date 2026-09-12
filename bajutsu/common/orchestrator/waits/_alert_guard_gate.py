@@ -12,6 +12,7 @@ from bajutsu.common.orchestrator.types import (
     Clock,
     alert_block_note,
     match_alert_rule,
+    matching_alert_rule,
     uncleared_prompt_note,
 )
 
@@ -166,12 +167,19 @@ class _AlertGuardGate:
                 self._collapsed_polls = 0
                 return
             if state == "unhandled":
-                # An alert is up but no policy label resolves — an unknown button, or a query that
-                # could not name it. Nothing here can clear it (BE-0402 removed the vision fallback),
-                # so record the buttons the probe read and let the wait run to its own deadline: a
-                # timeout naming the alert beats a guessed tap (prime directive 2).
+                # `probe_native` reaches "unhandled" two ways: a genuinely unidentified alert, and
+                # a matched rule whose tap found the label twice (`AmbiguousSelector`, "the other
+                # half of that race"). Only the first is a prompt no rule identifies. Re-resolving
+                # tells them apart: a rule did identify the second, and only the tap failed to take,
+                # which is `uncleared_prompt_note`'s own case, not the hedged "unhandled" form
+                # (BE-0418 review finding; see `uncleared_prompt_note`'s docstring).
                 self._collapsed_polls = 0
-                self.blocked_note = alert_block_note(buttons)
+                ambiguous_rule = matching_alert_rule(self.guard.native_rules, buttons)
+                self.blocked_note = (
+                    uncleared_prompt_note(ambiguous_rule.tap_label)
+                    if ambiguous_rule is not None
+                    else alert_block_note(buttons)
+                )
                 return
             if raced:
                 # The same deference "unhandled" gets, just above: a live, enumerated surface is not
