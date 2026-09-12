@@ -196,6 +196,14 @@ class _AlertGuardGate:
                 if leftover:
                     self._native_unhandled = True
                     self.blocked_note = alert_block_note(leftover)
+                elif self._native_unhandled and not self._tree_gave_up:
+                    # Nothing but the raced rule's own shape is on the surface, and this read is the
+                    # whole SpringBoard enumeration -- so an earlier probe's "unhandled" note names a
+                    # button this very read proves gone. The proxy's hedged note, for a surface the
+                    # query cannot enumerate, is a different story and is preserved above (BE-0418
+                    # review finding).
+                    self._native_unhandled = False
+                    self.blocked_note = ""
                 self._collapsed_polls = 0
                 return
             # Only a genuinely empty "absent" falls through to the in-tree dismiss below; "reserved"

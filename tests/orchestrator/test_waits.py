@@ -976,7 +976,7 @@ def test_wait_guard_keeps_an_unhandled_note_when_a_matched_alert_races() -> None
     # further out: `_native_unhandled` is the only thing standing between this tick and the proxy
     # until the next native probe is due, so a race must not drop that latch either, only the
     # explicit clear a few lines above it (BE-0418 review finding).
-    from bajutsu.common.orchestrator.types import AlertEvent, NativeAlertState
+    from bajutsu.common.orchestrator.types import AlertEvent, NativeAlertState, ResolvedAlertRule
     from bajutsu.common.orchestrator.waits import _AlertGuardGate
 
     class _MatchedAlertRacesPastAnUnhandledOne(AlertGuardConfig):
@@ -994,7 +994,13 @@ def test_wait_guard_keeps_an_unhandled_note_when_a_matched_alert_races() -> None
                 return "unhandled", None, ["Weird Button"]
             return "absent", None, ["OK", "Cancel", "Weird Button"]
 
-    guard = _MatchedAlertRacesPastAnUnhandledOne()
+    # A rule for the raced shape makes the branch's own subtraction real: without one,
+    # `matching_alert_rule` finds nothing to subtract and the whole read -- "OK" and "Cancel"
+    # included -- becomes "leftover", so the note under test would be a freshly re-derived
+    # superset rather than the preserved one this test means to pin (BE-0418 review finding).
+    guard = _MatchedAlertRacesPastAnUnhandledOne(
+        rules=[ResolvedAlertRule(identifying_labels=frozenset({"OK", "Cancel"}), tap_label="OK")]
+    )
     driver = FakeDriver([])
     clock = _LogicalClock()
     gate = _AlertGuardGate(driver=driver, clock=clock, guard=guard, alerts=[])
@@ -1003,6 +1009,7 @@ def test_wait_guard_keeps_an_unhandled_note_when_a_matched_alert_races() -> None
     clock.sleep(guard.poll_interval)
     gate.observe([el("home", "Home", ["button"])])
     assert "Weird Button" in gate.blocked_note
+    assert "OK" not in gate.blocked_note and "Cancel" not in gate.blocked_note
     gate.observe([el("home", "Home", ["button"])])  # same poll_interval window: no native re-probe
     assert "Weird Button" in gate.blocked_note
 
@@ -1071,6 +1078,43 @@ def test_wait_guard_reports_nothing_when_a_race_leaves_no_leftover() -> None:
     )
     gate = _AlertGuardGate(driver=driver, clock=_LogicalClock(), guard=guard, alerts=[])
     gate.observe([])
+    assert gate.blocked_note == ""
+
+
+def test_wait_guard_clears_a_stale_unhandled_note_when_a_leftover_free_race_disproves_it() -> None:
+    # `buttons` here is the whole SpringBoard enumeration, not one alert's own set: a race whose
+    # own read holds nothing but the raced rule's own shape is positive evidence that any *other*
+    # button an earlier probe named is gone (BE-0418 review finding). Poll 1 names "Weird Button"
+    # as unhandled; poll 2's own matched rule ("Allow"/"Don't Allow") races away, but this read no
+    # longer holds "Weird Button" at all -- the stale note must clear, not survive on the strength
+    # of the earlier `raced` preservation guard, which exists for evidence the current read does
+    # *not* disprove.
+    from bajutsu.common.orchestrator.types import ResolvedAlertRule
+    from bajutsu.common.orchestrator.waits import _AlertGuardGate
+
+    class _RacesAwayOnNotifications(FakeDriver):
+        def handle_system_alert(self, sel: base.Selector, timeout: float) -> None:
+            raise base.ElementNotFound("the prompt raced away")
+
+    driver = _RacesAwayOnNotifications([])
+    driver.system_alert_buttons = [el(None, "Weird Button", ["button"])]
+    guard = AlertGuardConfig(
+        rules=[
+            ResolvedAlertRule(
+                identifying_labels=frozenset({"Allow", "Don't Allow"}), tap_label="Allow"
+            )
+        ]
+    )
+    clock = _LogicalClock()
+    gate = _AlertGuardGate(driver=driver, clock=clock, guard=guard, alerts=[])
+    gate.observe([])
+    assert "Weird Button" in gate.blocked_note
+    clock.sleep(guard.poll_interval)
+    driver.system_alert_buttons = [
+        el(None, "Allow", ["button"]),
+        el(None, "Don't Allow", ["button"]),
+    ]
+    gate.observe([el("home", "Home", ["button"])])
     assert gate.blocked_note == ""
 
 
